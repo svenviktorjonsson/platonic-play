@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Interactive Graph Drawer</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <div class="toolbar">
+        <label for="colorPicker">Color:</label>
+        <input type="color" id="colorPicker" value="#ffffff">
+        <div class="color-palette" id="colorPalette">
+            <!-- Palette colors will be populated by JavaScript -->
+        </div>
+    </div>
+
+    <div class="canvas-container">
+        <canvas id="drawingCanvas"></canvas>
+    </div>
+
+    <script src="script.js" defer></script>
+</body>
+</html>
