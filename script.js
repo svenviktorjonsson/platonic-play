@@ -1,10 +1,8 @@
-
 const canvas = document.getElementById('drawingCanvas');
 const ctx = canvas.getContext('2d');
 const colorPicker = document.getElementById('colorPicker');
 const colorPalette = document.getElementById('colorPalette');
 
-// --- Constants ---
 const POINT_RADIUS = 5;
 const CENTER_POINT_VISUAL_RADIUS = POINT_RADIUS * 2;
 const POINT_SELECT_RADIUS = 10;
@@ -16,22 +14,23 @@ const DRAG_THRESHOLD = 3;
 const EDGE_CLICK_THRESHOLD = 7;
 const dpr = window.devicePixelRatio || 1;
 
-
-// --- Graph Data Structure ---
 let allPoints = [];
 let allEdges = [];
-
 let selectedPointIds = [];
 let activeCenterId = null;
 let mousePos = { x: 0, y: 0 };
 let currentColor = '#ffffff';
 
-// Color palette state
+let viewTransform = {
+    scale: 100,
+    offsetX: 0,
+    offsetY: 0
+};
+
 let recentColors = ['#ffffff', '#ff4444', '#44ff44', '#4444ff', '#ffff44', '#ff44ff', '#44ffff', '#ffa544'];
 
 let isDrawingMode = false;
 let previewLineStartPointId = null;
-
 let currentMouseButton = -1;
 let isActionInProgress = false;
 let actionStartPos = { x: 0, y: 0 };
@@ -42,60 +41,47 @@ let initialCenterStateForTransform = null;
 let initialStatesForTransform = [];
 let initialMouseAngleToCenter = 0;
 let initialMouseDistanceToCenter = 0;
-
 let dragPreviewPoints = [];
-
 let isRectangleSelecting = false;
 let rectangleSelectStartPos = { x: 0, y: 0 };
-
 let shiftKeyAtActionStart = false;
 let ctrlKeyAtActionStart = false;
 let lastCanvasClickTime = 0;
-
 let clipboard = { points: [], edges: [], referencePoint: null };
 let clickData = { pointId: null, count: 0, timestamp: 0 };
-
 let undoStack = [];
 let redoStack = [];
+let isPanningBackground = false;
+let backgroundPanStartOffset = { x: 0, y: 0 };
+
 const MAX_HISTORY_SIZE = 50;
 
 function generateUniqueId() { return crypto.randomUUID(); }
 
-// Color palette functions
 function addToRecentColors(color) {
-    // Remove color if it already exists
     const index = recentColors.indexOf(color);
     if (index > -1) {
         recentColors.splice(index, 1);
     }
-    
-    // Add to beginning
     recentColors.unshift(color);
-    
-    // Keep only 8 colors
     if (recentColors.length > 8) {
         recentColors = recentColors.slice(0, 8);
     }
-    
     updateColorPalette();
 }
 
 function updateColorPalette() {
     colorPalette.innerHTML = '';
-    
     recentColors.forEach(color => {
         const paletteColor = document.createElement('div');
         paletteColor.className = 'palette-color';
         paletteColor.style.backgroundColor = color;
-        
         if (color === currentColor) {
             paletteColor.classList.add('active');
         }
-        
         paletteColor.addEventListener('click', () => {
             setCurrentColor(color);
         });
-        
         colorPalette.appendChild(paletteColor);
     });
 }
@@ -122,18 +108,15 @@ function setCurrentColor(newColor) {
     }
 
     if (changedPoints.length > 0) {
-        // Custom undo state for color change
         const undoState = JSON.parse(JSON.stringify({points: allPoints, edges: allEdges, selectedPointIds, activeCenterId, isDrawingMode, previewLineStartPointId}));
         const redoState = JSON.parse(JSON.stringify({points: allPoints, edges: allEdges, selectedPointIds, activeCenterId, isDrawingMode, previewLineStartPointId}));
 
-        // Temporarily apply new color for redo state
         changedPoints.forEach(cp => {
             const p = redoState.points.find(pt => pt.id === cp.id);
             if(p) p.color = newColor;
         });
-        redoStack = []; // Clear redo stack on new action
+        redoStack = [];
 
-        // Modify undo state to revert colors
         changedPoints.forEach(cp => {
              const p = undoState.points.find(pt => pt.id === cp.id);
              if(p) p.color = cp.oldColor;
@@ -177,6 +160,7 @@ function restoreState(state) {
     isDragConfirmed = false;
     isRectangleSelecting = false;
     isTransformDrag = false;
+    isPanningBackground = false;
     dragPreviewPoints = [];
     actionTargetPoint = null;
     currentMouseButton = -1;
@@ -215,6 +199,29 @@ function handleRedo() {
     restoreState(nextState);
 }
 
+function screenToData(screenPos) {
+    return {
+        x: (screenPos.x - viewTransform.offsetX) / viewTransform.scale,
+        y: (screenPos.y - viewTransform.offsetY) / viewTransform.scale
+    };
+}
+
+function dataToScreen(dataPos) {
+    return {
+        x: dataPos.x * viewTransform.scale + viewTransform.offsetX,
+        y: dataPos.y * viewTransform.scale + viewTransform.offsetY
+    };
+}
+
+function zoomAt(zoomCenter, scaleFactor) {
+    const dataPosBeforeZoom = screenToData(zoomCenter);
+    viewTransform.scale *= scaleFactor;
+    viewTransform.scale = Math.max(0.1, Math.min(1000, viewTransform.scale));
+    const screenPosAfterZoom = dataToScreen(dataPosBeforeZoom);
+    viewTransform.offsetX += zoomCenter.x - screenPosAfterZoom.x;
+    viewTransform.offsetY += zoomCenter.y - screenPosAfterZoom.y;
+}
+
 function resizeCanvas() {
     const canvasContainer = document.querySelector('.canvas-container');
     const cW = canvasContainer.offsetWidth;
@@ -238,13 +245,14 @@ function distance(p1, p2) { return Math.sqrt(Math.pow(p1.x - p2.x, 2) + Math.pow
 function findPointById(id) { return allPoints.find(p => p.id === id); }
 
 function findClickedPoint(clickPos) {
+    const dataPos = screenToData(clickPos);
     for (let i = allPoints.length - 1; i >= 0; i--) {
         const point = allPoints[i];
-        if (point.type !== 'regular' && distance(clickPos, point) < CENTER_POINT_VISUAL_RADIUS + POINT_SELECT_RADIUS / 2) { return point; }
+        if (point.type !== 'regular' && distance(dataPos, point) < (CENTER_POINT_VISUAL_RADIUS + POINT_SELECT_RADIUS / 2) / viewTransform.scale) { return point; }
     }
     for (let i = allPoints.length - 1; i >= 0; i--) {
         const point = allPoints[i];
-        if (point.type === 'regular' && distance(clickPos, point) < POINT_SELECT_RADIUS) { return point; }
+        if (point.type === 'regular' && distance(dataPos, point) < POINT_SELECT_RADIUS / viewTransform.scale) { return point; }
     }
     return null;
 }
@@ -266,19 +274,20 @@ function findAllPointsInSubgraph(startPointId) {
 }
 
 function drawCenterSymbol(point) {
+    const screenPos = dataToScreen(point);
     const radius = CENTER_POINT_VISUAL_RADIUS;
     ctx.strokeStyle = point.color || currentColor;
     ctx.fillStyle = point.color || currentColor;
     ctx.setLineDash([]);
     if (point.type === 'center_rotate_scale') {
-        ctx.beginPath(); ctx.arc(point.x, point.y, radius, 0, 2 * Math.PI); ctx.lineWidth = LINE_WIDTH; ctx.stroke();
-        ctx.beginPath(); ctx.moveTo(point.x - radius, point.y); ctx.lineTo(point.x + radius, point.y);
-        ctx.moveTo(point.x, point.y - radius); ctx.lineTo(point.x, point.y + radius); ctx.lineWidth = LINE_WIDTH; ctx.stroke();
+        ctx.beginPath(); ctx.arc(screenPos.x, screenPos.y, radius, 0, 2 * Math.PI); ctx.lineWidth = LINE_WIDTH; ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(screenPos.x - radius, screenPos.y); ctx.lineTo(screenPos.x + radius, screenPos.y);
+        ctx.moveTo(screenPos.x, screenPos.y - radius); ctx.lineTo(screenPos.x, screenPos.y + radius); ctx.lineWidth = LINE_WIDTH; ctx.stroke();
     } else if (point.type === 'center_rotate_only') {
-        ctx.beginPath(); ctx.arc(point.x, point.y, radius, 0, 2 * Math.PI); ctx.lineWidth = LINE_WIDTH; ctx.stroke();
+        ctx.beginPath(); ctx.arc(screenPos.x, screenPos.y, radius, 0, 2 * Math.PI); ctx.lineWidth = LINE_WIDTH; ctx.stroke();
     } else if (point.type === 'center_scale_only') {
-        ctx.beginPath(); ctx.moveTo(point.x - radius, point.y); ctx.lineTo(point.x + radius, point.y);
-        ctx.moveTo(point.x, point.y - radius); ctx.lineTo(point.x, point.y + radius); ctx.lineWidth = LINE_WIDTH; ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(screenPos.x - radius, screenPos.y); ctx.lineTo(screenPos.x + radius, screenPos.y);
+        ctx.moveTo(screenPos.x, screenPos.y - radius); ctx.lineTo(screenPos.x, screenPos.y + radius); ctx.lineWidth = LINE_WIDTH; ctx.stroke();
     }
     ctx.lineWidth = LINE_WIDTH;
 }
@@ -313,7 +322,7 @@ function handleCopy() {
     const pointsToCopyIds = [...selectedPointIds]; if (activeCenterId) { pointsToCopyIds.push(activeCenterId); } if (pointsToCopyIds.length === 0) { return; }
     clipboard.points = pointsToCopyIds.map(id => { const p = findPointById(id); return p ? { ...p } : null; }).filter(p => p !== null);
     clipboard.edges = allEdges.filter(edge => pointsToCopyIds.includes(edge.id1) && pointsToCopyIds.includes(edge.id2) && findPointById(edge.id1)?.type === 'regular' && findPointById(edge.id2)?.type === 'regular').map(edge => ({ ...edge }));
-    clipboard.referencePoint = { ...mousePos };
+    clipboard.referencePoint = screenToData(mousePos);
 }
 
 function handleCut() {
@@ -330,7 +339,7 @@ function handleCut() {
 function handlePaste() {
     if (clipboard.points.length === 0 || !clipboard.referencePoint) { return; }
     saveStateForUndo();
-    const pastePos = { ...mousePos }; const dX = pastePos.x - clipboard.referencePoint.x; const dY = pastePos.y - clipboard.referencePoint.y;
+    const pastePos = screenToData(mousePos); const dX = pastePos.x - clipboard.referencePoint.x; const dY = pastePos.y - clipboard.referencePoint.y;
     const otnIdMap = new Map(); const nPRegularPIds = []; let nPACId = null;
     performEscapeAction();
     clipboard.points.forEach(cbP => {
@@ -347,12 +356,13 @@ function handlePaste() {
 function drawPoint(point) {
     const isSelected = selectedPointIds.includes(point.id) || point.id === activeCenterId;
     const pointColor = point.color || currentColor;
+    const screenPos = dataToScreen(point);
 
     if (point.type !== 'regular') {
         drawCenterSymbol(point);
     } else {
         ctx.beginPath();
-        ctx.arc(point.x, point.y, POINT_RADIUS, 0, 2 * Math.PI);
+        ctx.arc(screenPos.x, screenPos.y, POINT_RADIUS, 0, 2 * Math.PI);
         ctx.fillStyle = pointColor;
         ctx.fill();
     }
@@ -360,7 +370,7 @@ function drawPoint(point) {
     if (isSelected) {
         ctx.beginPath();
         const selectionRadius = point.type !== 'regular' ? CENTER_POINT_VISUAL_RADIUS + SELECTED_INDICATOR_OFFSET : POINT_RADIUS + SELECTED_INDICATOR_OFFSET;
-        ctx.arc(point.x, point.y, selectionRadius, 0, 2 * Math.PI);
+        ctx.arc(screenPos.x, screenPos.y, selectionRadius, 0, 2 * Math.PI);
         ctx.strokeStyle = 'white'; ctx.lineWidth = 1; ctx.setLineDash(DASH_PATTERN);
         ctx.stroke(); ctx.setLineDash([]);
     }
@@ -381,12 +391,12 @@ function drawAllEdges() {
             }
 
             ctx.beginPath();
-            const p1x = p1IsBeingDragged ? p1IsBeingDragged.x : p1.x;
-            const p1y = p1IsBeingDragged ? p1IsBeingDragged.y : p1.y;
-            const p2x = p2IsBeingDragged ? p2IsBeingDragged.x : p2.x;
-            const p2y = p2IsBeingDragged ? p2IsBeingDragged.y : p2.y;
-            ctx.moveTo(p1x, p1y);
-            ctx.lineTo(p2x, p2y);
+            const p1Data = p1IsBeingDragged ? p1IsBeingDragged : p1;
+            const p2Data = p2IsBeingDragged ? p2IsBeingDragged : p2;
+            const p1Screen = dataToScreen(p1Data);
+            const p2Screen = dataToScreen(p2Data);
+            ctx.moveTo(p1Screen.x, p1Screen.y);
+            ctx.lineTo(p2Screen.x, p2Screen.y);
 
             const color1 = p1.color || currentColor;
             const color2 = p2.color || currentColor;
@@ -394,7 +404,7 @@ function drawAllEdges() {
             if (color1 === color2) {
                 ctx.strokeStyle = color1;
             } else {
-                const gradient = ctx.createLinearGradient(p1x, p1y, p2x, p2y);
+                const gradient = ctx.createLinearGradient(p1Screen.x, p1Screen.y, p2Screen.x, p2Screen.y);
                 gradient.addColorStop(0, color1);
                 gradient.addColorStop(1, color2);
                 ctx.strokeStyle = gradient;
@@ -435,7 +445,8 @@ function redrawAll() {
     if (isDrawingMode && previewLineStartPointId && !isDragConfirmed && !isRectangleSelecting) {
         const sP = findPointById(previewLineStartPointId);
         if (sP) {
-            ctx.beginPath(); ctx.moveTo(sP.x, sP.y); ctx.lineTo(mousePos.x, mousePos.y);
+            const startScreen = dataToScreen(sP);
+            ctx.beginPath(); ctx.moveTo(startScreen.x, startScreen.y); ctx.lineTo(mousePos.x, mousePos.y);
             ctx.setLineDash(DASH_PATTERN); ctx.strokeStyle = currentColor;
             ctx.stroke(); ctx.setLineDash([]);
         }
@@ -466,7 +477,7 @@ function deleteSelectedPoints() {
 function performEscapeAction() {
     selectedPointIds = []; activeCenterId = null;
     isDrawingMode = false; previewLineStartPointId = null;
-    isActionInProgress = false; isDragConfirmed = false; isRectangleSelecting = false; isTransformDrag = false;
+    isActionInProgress = false; isDragConfirmed = false; isRectangleSelecting = false; isTransformDrag = false; isPanningBackground = false;
     dragPreviewPoints = [];
     actionTargetPoint = null;
     currentMouseButton = -1; clickData = { pointId: null, count: 0, timestamp: 0 };
@@ -490,10 +501,18 @@ colorPicker.addEventListener('input', (event) => {
     setCurrentColor(event.target.value);
 });
 
+canvas.addEventListener('wheel', (event) => {
+    event.preventDefault();
+    const mouseScreen = getMousePosOnCanvas(event);
+    const scaleFactor = event.deltaY > 0 ? 0.9 : 1.1;
+    zoomAt(mouseScreen, scaleFactor);
+    redrawAll();
+});
+
 canvas.addEventListener('mousedown', (event) => {
     isActionInProgress = true; currentMouseButton = event.button;
     actionStartPos = getMousePosOnCanvas(event); mousePos = actionStartPos;
-    isDragConfirmed = false; isRectangleSelecting = false; isTransformDrag = false;
+    isDragConfirmed = false; isRectangleSelecting = false; isTransformDrag = false; isPanningBackground = false;
     dragPreviewPoints = [];
 
     shiftKeyAtActionStart = event.shiftKey; ctrlKeyAtActionStart = event.ctrlKey || event.metaKey;
@@ -515,8 +534,9 @@ canvas.addEventListener('mousedown', (event) => {
                         originalDistanceToCenter: distance(p, activeCenterPoint)
                     };
                 }).filter(p => p);
-                initialMouseAngleToCenter = Math.atan2(actionStartPos.y - activeCenterPoint.y, actionStartPos.x - activeCenterPoint.x);
-                initialMouseDistanceToCenter = distance(actionStartPos, activeCenterPoint);
+                const dataStartPos = screenToData(actionStartPos);
+                initialMouseAngleToCenter = Math.atan2(dataStartPos.y - activeCenterPoint.y, dataStartPos.x - activeCenterPoint.x);
+                initialMouseDistanceToCenter = distance(dataStartPos, activeCenterPoint);
                 dragPreviewPoints = initialStatesForTransform.map(p => ({ ...p, x: p.x, y: p.y }));
                  if (!dragPreviewPoints.find(p => p.id === activeCenterId) && activeCenterPoint) {
                     dragPreviewPoints.push({...activeCenterPoint, x: activeCenterPoint.x, y: activeCenterPoint.y});
@@ -535,7 +555,11 @@ canvas.addEventListener('mousedown', (event) => {
                 }
                 dragPreviewPoints = pointsToConsiderForDrag.map(p => ({ id: p.id, x: p.x, y: p.y, type: p.type, color: p.color }));
             }
-        } else { canvas.style.cursor = 'crosshair'; }
+        } else { 
+            canvas.style.cursor = 'move';
+            isPanningBackground = true;
+            backgroundPanStartOffset = { x: viewTransform.offsetX, y: viewTransform.offsetY };
+        }
     } else if (currentMouseButton === 2) {
         event.preventDefault(); actionTargetPoint = null; dragPreviewPoints = [];
         rectangleSelectStartPos = actionStartPos; canvas.style.cursor = 'default';
@@ -556,6 +580,7 @@ canvas.addEventListener('mousemove', (event) => {
         }
         return;
     }
+    
     if (!isDragConfirmed) {
         if (distance(mousePos, actionStartPos) > DRAG_THRESHOLD) {
             isDragConfirmed = true;
@@ -565,8 +590,19 @@ canvas.addEventListener('mousemove', (event) => {
             } else if (currentMouseButton === 0 && actionTargetPoint) {
                 isRectangleSelecting = false;
                 canvas.style.cursor = 'grabbing';
+            } else if (currentMouseButton === 0 && isPanningBackground) {
+                canvas.style.cursor = 'move';
             }
         }
+    }
+
+    if (isDragConfirmed && currentMouseButton === 0 && isPanningBackground) {
+        const deltaX = mousePos.x - actionStartPos.x;
+        const deltaY = mousePos.y - actionStartPos.y;
+        viewTransform.offsetX = backgroundPanStartOffset.x + deltaX;
+        viewTransform.offsetY = backgroundPanStartOffset.y + deltaY;
+        redrawAll();
+        return;
     }
 
     if (isDragConfirmed && currentMouseButton === 0 && actionTargetPoint) {
@@ -576,8 +612,10 @@ canvas.addEventListener('mousemove', (event) => {
 
             let currentCenterPosPreview = { x: initialCenterStateForTransform.x, y: initialCenterStateForTransform.y };
             if (actionTargetPoint.id === activeCenterId) {
-                currentCenterPosPreview.x = initialCenterStateForTransform.x + (mousePos.x - actionStartPos.x);
-                currentCenterPosPreview.y = initialCenterStateForTransform.y + (mousePos.y - actionStartPos.y);
+                const deltaData = screenToData(mousePos);
+                const startData = screenToData(actionStartPos);
+                currentCenterPosPreview.x = initialCenterStateForTransform.x + (deltaData.x - startData.x);
+                currentCenterPosPreview.y = initialCenterStateForTransform.y + (deltaData.y - startData.y);
                 activeCenterCurrentPreview.x = currentCenterPosPreview.x;
                 activeCenterCurrentPreview.y = currentCenterPosPreview.y;
             } else {
@@ -592,8 +630,9 @@ canvas.addEventListener('mousemove', (event) => {
             let overallDeltaAngle = 0;
             let overallScaleFactor = 1;
 
-            const mouseVecX = mousePos.x - currentCenterPosPreview.x;
-            const mouseVecY = mousePos.y - currentCenterPosPreview.y;
+            const mouseDataPos = screenToData(mousePos);
+            const mouseVecX = mouseDataPos.x - currentCenterPosPreview.x;
+            const mouseVecY = mouseDataPos.y - currentCenterPosPreview.y;
             const currentMouseAngleRelCenter = Math.atan2(mouseVecY, mouseVecX);
             const currentMouseDistRelCenter = Math.sqrt(mouseVecX * mouseVecX + mouseVecY * mouseVecY);
 
@@ -622,8 +661,10 @@ canvas.addEventListener('mousemove', (event) => {
             });
 
         } else if (dragPreviewPoints.length > 0 && !isTransformDrag) {
-            const deltaX = mousePos.x - actionStartPos.x;
-            const deltaY = mousePos.y - actionStartPos.y;
+            const deltaData = screenToData(mousePos);
+            const startData = screenToData(actionStartPos);
+            const deltaX = deltaData.x - startData.x;
+            const deltaY = deltaData.y - startData.y;
 
             dragPreviewPoints.forEach(dp => {
                 const originalPointState = allPoints.find(p => p.id === dp.id);
@@ -642,7 +683,9 @@ canvas.addEventListener('mouseup', (event) => {
     canvas.style.cursor = 'crosshair';
 
     if (isDragConfirmed) {
-        if (dragPreviewPoints.length > 0 && (currentMouseButton === 0 && actionTargetPoint)) {
+        if (isPanningBackground) {
+            isPanningBackground = false;
+        } else if (dragPreviewPoints.length > 0 && (currentMouseButton === 0 && actionTargetPoint)) {
             saveStateForUndo();
             dragPreviewPoints.forEach(dp => {
                 const actualPoint = findPointById(dp.id);
@@ -668,8 +711,15 @@ canvas.addEventListener('mouseup', (event) => {
         const rW = Math.abs(rectangleSelectStartPos.x - mousePos.x);
         const rH = Math.abs(rectangleSelectStartPos.y - mousePos.y);
 
+        const rectStartData = screenToData({ x: rX, y: rY });
+        const rectEndData = screenToData({ x: rX + rW, y: rY + rH });
+        const minX = Math.min(rectStartData.x, rectEndData.x);
+        const maxX = Math.max(rectStartData.x, rectEndData.x);
+        const minY = Math.min(rectStartData.y, rectEndData.y);
+        const maxY = Math.max(rectStartData.y, rectEndData.y);
+
         const pointsInRect = allPoints.filter(p => 
-            p.x >= rX && p.x <= rX + rW && p.y >= rY && p.y <= rY + rH
+            p.x >= minX && p.x <= maxX && p.y >= minY && p.y <= maxY
         );
         const regularPointIdsInRect = pointsInRect.filter(p => p.type === 'regular').map(p => p.id);
         const centerPointsInRect = pointsInRect.filter(p => p.type !== 'regular');
@@ -695,7 +745,7 @@ canvas.addEventListener('mouseup', (event) => {
             }
         } else {
             selectedPointIds = regularPointIdsInRect;
-            activeCenterId = null; // Only select regular points by default
+            activeCenterId = null;
         }
         isDrawingMode = false; 
         previewLineStartPointId = null;
@@ -739,14 +789,15 @@ canvas.addEventListener('mouseup', (event) => {
             else {
                 if (!shiftKeyAtActionStart && !ctrlKeyAtActionStart) {
                     if (isDrawingMode && previewLineStartPointId) {
+                        const mouseDataPos = screenToData(mousePos);
                         let edgeSplitOccurred = false;
                         for (let i = 0; i < allEdges.length; i++) {
                             const edge = allEdges[i];
                             const p1 = findPointById(edge.id1);
                             const p2 = findPointById(edge.id2);
                             if (p1 && p2 && p1.type === 'regular' && p2.type === 'regular') {
-                                const closest = getClosestPointOnLineSegment(mousePos, p1, p2);
-                                if (closest.distance < EDGE_CLICK_THRESHOLD && closest.onSegmentStrict) {
+                                const closest = getClosestPointOnLineSegment(mouseDataPos, p1, p2);
+                                if (closest.distance < EDGE_CLICK_THRESHOLD / viewTransform.scale && closest.onSegmentStrict) {
                                     saveStateForUndo();
                                     const newPointOnEdge = { id: generateUniqueId(), x: closest.x, y: closest.y, type: 'regular', color: currentColor };
                                     allPoints.push(newPointOnEdge);
@@ -762,7 +813,7 @@ canvas.addEventListener('mouseup', (event) => {
                         }
                         if (!edgeSplitOccurred) {
                             saveStateForUndo();
-                            const nP = { id: generateUniqueId(), x: mousePos.x, y: mousePos.y, type: 'regular', color: currentColor };
+                            const nP = { id: generateUniqueId(), x: mouseDataPos.x, y: mouseDataPos.y, type: 'regular', color: currentColor };
                             allPoints.push(nP); allEdges.push({ id1: previewLineStartPointId, id2: nP.id });
                             previewLineStartPointId = nP.id;
                         }
@@ -770,7 +821,8 @@ canvas.addEventListener('mouseup', (event) => {
                     else if (!isDrawingMode && selectedPointIds.length === 0 && !activeCenterId) {
                         saveStateForUndo();
                         selectedPointIds = []; activeCenterId = null;
-                        const nP = { id: generateUniqueId(), x: mousePos.x, y: mousePos.y, type: 'regular', color: currentColor };
+                        const mouseDataPos = screenToData(mousePos);
+                        const nP = { id: generateUniqueId(), x: mouseDataPos.x, y: mouseDataPos.y, type: 'regular', color: currentColor };
                         allPoints.push(nP); previewLineStartPointId = nP.id; isDrawingMode = true;
                     }
                 }
@@ -781,7 +833,7 @@ canvas.addEventListener('mouseup', (event) => {
         performEscapeAction();
     }
 
-    isActionInProgress = false; isDragConfirmed = false; isRectangleSelecting = false; isTransformDrag = false;
+    isActionInProgress = false; isDragConfirmed = false; isRectangleSelecting = false; isTransformDrag = false; isPanningBackground = false;
     actionTargetPoint = null; dragPreviewPoints = [];
     currentMouseButton = -1;
     redrawAll();
@@ -800,6 +852,18 @@ window.addEventListener('keydown', (event) => {
     else if (isCtrlOrCmd && event.key.toLowerCase() === 'v') { event.preventDefault(); handlePaste(); }
     else if (isCtrlOrCmd && event.key.toLowerCase() === 'z') { event.preventDefault(); handleUndo(); }
     else if (isCtrlOrCmd && event.key.toLowerCase() === 'y') { event.preventDefault(); handleRedo(); }
+    else if (isCtrlOrCmd && event.key === '=') {
+        event.preventDefault();
+        const centerScreen = { x: canvas.width / (2 * dpr), y: canvas.height / (2 * dpr) };
+        zoomAt(centerScreen, 1.1);
+        redrawAll();
+    }
+    else if (isCtrlOrCmd && event.key === '-') {
+        event.preventDefault();
+        const centerScreen = { x: canvas.width / (2 * dpr), y: canvas.height / (2 * dpr) };
+        zoomAt(centerScreen, 0.9);
+        redrawAll();
+    }
     else if (isCtrlOrCmd && event.key.toLowerCase() === 'a') {
         event.preventDefault();
         selectedPointIds = allPoints.filter(p => p.type === 'regular').map(p => p.id);
@@ -819,7 +883,8 @@ window.addEventListener('keydown', (event) => {
         else if (event.key.toLowerCase() === 'r') { type = 'center_rotate_only'; }
         else if (event.key.toLowerCase() === 's') { type = 'center_scale_only'; }
 
-        const newCenter = { id: generateUniqueId(), x: mousePos.x, y: mousePos.y, type: type, color: currentColor };
+        const mouseDataPos = screenToData(mousePos);
+        const newCenter = { id: generateUniqueId(), x: mouseDataPos.x, y: mouseDataPos.y, type: type, color: currentColor };
         allPoints.push(newCenter);
         activeCenterId = newCenter.id;
         redrawAll();
@@ -828,7 +893,6 @@ window.addEventListener('keydown', (event) => {
 
 window.addEventListener('resize', resizeCanvas);
 
-// Initialize
 resizeCanvas();
 updateColorPalette();
 saveStateForUndo();
