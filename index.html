@@ -3,19 +3,70 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Interactive Graph Drawer</title>
+    <title>Platonic Play</title>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
-
     <div class="toolbar">
-        <label for="colorPicker">Color:</label>
-        <input type="color" id="colorPicker" value="#ffffff">
-        <div class="color-palette" id="colorPalette">
-            <!-- Palette colors will be populated by JavaScript -->
+        <div class="color-section">
+            <h3>Color</h3>
+            <div class="color-picker-container">
+                <input type="color" id="colorPicker" value="#ffffff">
+            </div>
+            <div id="colorPalette" class="color-palette"></div>
+        </div>
+        
+        <div class="display-section">
+            <h3>Display</h3>
+            
+            <div class="checkbox-container">
+                <input type="checkbox" id="showAnglesCheckbox" checked>
+                <label for="showAnglesCheckbox">Angles</label>
+            </div>
+            
+            <div class="checkbox-container">
+                <input type="checkbox" id="showDistancesCheckbox" checked>
+                <label for="showDistancesCheckbox">Distances</label>
+            </div>
+            
+            <div class="sigfig-container">
+                <label for="angleSigFigs">Angle:</label>
+                <select id="angleSigFigs">
+                    <option value="1">1 digit</option>
+                    <option value="2">2 digits</option>
+                    <option value="3">3 digits</option>
+                    <option value="4" selected>4 digits</option>
+                    <option value="5">5 digits</option>
+                </select>
+            </div>
+            
+            <div class="sigfig-container">
+                <label for="distanceSigFigs">Distance:</label>
+                <select id="distanceSigFigs">
+                    <option value="1">1 digit</option>
+                    <option value="2">2 digits</option>
+                    <option value="3" selected>3 digits</option>
+                    <option value="4">4 digits</option>
+                    <option value="5">5 digits</option>
+                </select>
+            </div>
+            
+            <div class="sigfig-container">
+                <label for="unitsSelect">Units:</label>
+                <select id="unitsSelect">
+                    <option value="mm">mm</option>
+                    <option value="cm">cm</option>
+                    <option value="m" selected>m</option>
+                    <option value="km">km</option>
+                    <option value="in">in</option>
+                    <option value="ft">ft</option>
+                    <option value="yd">yd</option>
+                    <option value="mi">mi</option>
+                </select>
+            </div>
         </div>
     </div>
-
+    
     <div class="canvas-container">
         <canvas id="drawingCanvas"></canvas>
     </div>

@@ -1,86 +1,164 @@
 body {
-        font-family: 'Inter', sans-serif;
-        margin: 0;
-        overflow: hidden;
-        -webkit-user-select: none;
-        -ms-user-select: none;
-        user-select: none;
-        display: flex;
-        flex-direction: column;
-        height: 100vh;
-        background-color: #1a1a1a;
-    }
+    font-family: 'Inter', sans-serif;
+    margin: 0;
+    overflow: hidden;
+    -webkit-user-select: none;
+    -ms-user-select: none;
+    user-select: none;
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    background-color: #1a1a1a;
+}
 
-    .toolbar {
-        padding: 8px;
-        background-color: #2d3748;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-        z-index: 10;
-        gap: 12px;
-    }
+.toolbar {
+    padding: 8px 16px;
+    background-color: #2d3748;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+    z-index: 10;
+    gap: 24px;
+}
 
-    .color-controls {
-        display: flex;
-        align-items: center;
-        gap: 12px;
-    }
+.color-section {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
 
-    .toolbar label {
-        margin-right: 8px;
-        color: white;
-        font-size: 0.9rem;
-    }
+.color-section h3 {
+    margin: 0;
+    color: white;
+    font-size: 0.9rem;
+    font-weight: 500;
+}
 
-    .toolbar input[type="color"] {
-        width: 40px;
-        height: 30px;
-        border: 1px solid #4a5568;
-        border-radius: 4px;
-        cursor: pointer;
-        padding: 2px;
-        background-color: #1a1a1a;
-    }
+.color-picker-container {
+    display: flex;
+    align-items: center;
+}
 
-    .color-palette {
-        display: flex;
-        gap: 4px;
-        align-items: center;
-    }
+.display-section {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+}
 
-    .palette-color {
-        width: 24px;
-        height: 24px;
-        border: 1px solid #4a5568;
-        border-radius: 3px;
-        cursor: pointer;
-        transition: transform 0.1s ease;
-    }
+.display-section h3 {
+    margin: 0;
+    color: white;
+    font-size: 0.9rem;
+    font-weight: 500;
+}
 
-    .palette-color:hover {
-        transform: scale(1.1);
-        border-color: #68d391;
-    }
+.checkbox-container {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
 
-    .palette-color.active {
-        border-color: #68d391;
-        border-width: 2px;
-    }
+.checkbox-container input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    accent-color: #68d391;
+    cursor: pointer;
+}
 
-    .canvas-container {
-        flex-grow: 1;
-        width: 100%;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-    }
+.checkbox-container label {
+    color: white;
+    font-size: 0.85rem;
+    cursor: pointer;
+    white-space: nowrap;
+}
 
-    canvas {
-        background-color: #000000;
-        border: 1px solid #444;
-        cursor: crosshair;
-        display: block;
-        border-radius: 8px;
-    }
+.sigfig-container {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.sigfig-container label {
+    color: white;
+    font-size: 0.85rem;
+    white-space: nowrap;
+}
+
+.sigfig-container select {
+    padding: 4px 8px;
+    border-radius: 4px;
+    border: 1px solid #4a5568;
+    background-color: #1a1a1a;
+    color: white;
+    font-size: 0.8rem;
+    cursor: pointer;
+    min-width: 80px;
+}
+
+.sigfig-container select:focus {
+    outline: none;
+    border-color: #68d391;
+}
+
+.sigfig-container select option {
+    background-color: #1a1a1a;
+    color: white;
+}
+
+.color-controls {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.toolbar input[type="color"] {
+    width: 40px;
+    height: 30px;
+    border: 1px solid #4a5568;
+    border-radius: 4px;
+    cursor: pointer;
+    padding: 2px;
+    background-color: #1a1a1a;
+}
+
+.color-palette {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+}
+
+.palette-color {
+    width: 24px;
+    height: 24px;
+    border: 1px solid #4a5568;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: transform 0.1s ease;
+}
+
+.palette-color:hover {
+    transform: scale(1.1);
+    border-color: #68d391;
+}
+
+.palette-color.active {
+    border-color: #68d391;
+    border-width: 2px;
+}
+
+.canvas-container {
+    flex-grow: 1;
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+canvas {
+    background-color: #000000;
+    border: 1px solid #444;
+    cursor: crosshair;
+    display: block;
+    border-radius: 8px;
+}
