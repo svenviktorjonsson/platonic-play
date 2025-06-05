@@ -1,200 +1,644 @@
-let gridState = {
-    interval1: null,
-    interval2: null,
-    alpha1: 0,
-    alpha2: 0,
-    lastCalculatedScale: null
-};
+let selectedEdgeIds = [];
 
-function calculateGridIntervals(viewTransformScale) {
-    const targetScreenSpacing = 80;
-    const effectiveDataInterval = targetScreenSpacing / viewTransformScale;
+function findClickedEdge(clickPos) {
+    const dataPos = screenToData(clickPos);
+    const edgeClickThresholdData = EDGE_CLICK_THRESHOLD / viewTransform.scale;
     
-    const logInterval = Math.log10(effectiveDataInterval);
-    const lowerPowerOf10 = Math.pow(10, Math.floor(logInterval));
-    const higherPowerOf10 = Math.pow(10, Math.ceil(logInterval));
-    
-    let grid1Interval = lowerPowerOf10;
-    let grid2Interval = higherPowerOf10;
-    let alpha1 = 1;
-    let alpha2 = 0;
-    
-    if (Math.abs(higherPowerOf10 - lowerPowerOf10) > lowerPowerOf10 * 0.0001) {
-        const logInterpFactor = (logInterval - Math.log10(lowerPowerOf10)) / (Math.log10(higherPowerOf10) - Math.log10(lowerPowerOf10));
-        
-        const transitionZoneStart = 0.2;
-        const transitionZoneEnd = 0.8;
-        
-        let interpValue = (logInterpFactor - transitionZoneStart) / (transitionZoneEnd - transitionZoneStart);
-        interpValue = Math.max(0, Math.min(1, interpValue));
-        interpValue = interpValue * interpValue * (3 - 2 * interpValue);
-        
-        alpha1 = 1 - interpValue;
-        alpha2 = interpValue;
+    for (let i = allEdges.length - 1; i >= 0; i--) {
+        const edge = allEdges[i];
+        const p1 = findPointById(edge.id1);
+        const p2 = findPointById(edge.id2);
+        if (p1 && p2 && p1.type === 'regular' && p2.type === 'regular') {
+            const closest = getClosestPointOnLineSegment(dataPos, p1, p2);
+            if (closest.distance < edgeClickThresholdData && closest.onSegmentStrict) {
+                return edge;
+            }
+        }
+    }
+    return null;
+}
+
+function getEdgeId(edge) {
+    return edge.id1 < edge.id2 ? `${edge.id1}-${edge.id2}` : `${edge.id2}-${edge.id1}`;
+}
+
+function findNeighborEdges(pointId) {
+    return allEdges.filter(e => e.id1 === pointId || e.id2 === pointId);
+}
+
+function applySelectionLogic(pointIdsToSelect, edgeIdsToSelect, wantsShift, wantsCtrl, targetIsCenter = false) {
+    if (targetIsCenter) {
+        const centerId = pointIdsToSelect[0];
+        if (wantsCtrl) {
+            activeCenterId = (activeCenterId === centerId) ? null : centerId;
+        } else {
+            activeCenterId = centerId;
+            if (!wantsShift) {
+                selectedPointIds = [];
+                selectedEdgeIds = [];
+            }
+        }
     } else {
-        grid2Interval = null;
+        if (wantsShift) {
+            selectedPointIds = [...new Set([...selectedPointIds, ...pointIdsToSelect])];
+            selectedEdgeIds = [...new Set([...selectedEdgeIds, ...edgeIdsToSelect])];
+        } else if (wantsCtrl) {
+            pointIdsToSelect.forEach(id => {
+                const index = selectedPointIds.indexOf(id);
+                if (index > -1) selectedPointIds.splice(index, 1);
+                else selectedPointIds.push(id);
+            });
+            edgeIdsToSelect.forEach(id => {
+                const index = selectedEdgeIds.indexOf(id);
+                if (index > -1) selectedEdgeIds.splice(index, 1);
+                else selectedEdgeIds.push(id);
+            });
+        } else {
+            selectedPointIds = [...pointIdsToSelect];
+            selectedEdgeIds = [...edgeIdsToSelect];
+        }
+    }
+}
+
+function drawPoint(point) {
+    const isSelected = selectedPointIds.includes(point.id) || point.id === activeCenterId;
+    const pointColor = point.color || currentColor;
+    const screenPos = dataToScreen(point);
+    
+    if (point.type !== 'regular') {
+        drawCenterSymbol(point);
+    } else {
+        ctx.beginPath();
+        ctx.arc(screenPos.x, screenPos.y, POINT_RADIUS, 0, 2 * Math.PI);
+        ctx.fillStyle = pointColor;
+        ctx.fill();
     }
     
-    return { grid1Interval, grid2Interval, alpha1, alpha2 };
+    if (isSelected) {
+        ctx.save();
+        ctx.shadowColor = '#4da6ff';
+        ctx.shadowBlur = 15;
+        ctx.globalAlpha = 0.8;
+        
+        ctx.beginPath();
+        const glowRadius = point.type !== 'regular' ? CENTER_POINT_VISUAL_RADIUS + 3 : POINT_RADIUS + 3;
+        ctx.arc(screenPos.x, screenPos.y, glowRadius, 0, 2 * Math.PI);
+        ctx.strokeStyle = '#4da6ff';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        
+        ctx.restore();
+    }
 }
 
-function updateGridStateOnZoom() {
-    const gridCalculation = calculateGridIntervals(viewTransform.scale);
-    gridState = {
-        interval1: gridCalculation.grid1Interval,
-        interval2: gridCalculation.grid2Interval,
-        alpha1: gridCalculation.alpha1,
-        alpha2: gridCalculation.alpha2,
-        lastCalculatedScale: viewTransform.scale
-    };
-}
-
-function redrawAll() {
-    labelsToKeepThisFrame.clear();
-    const actualCanvasWidth = canvas.width / dpr;
-    const actualCanvasHeight = canvas.height / dpr;
-    ctx.resetTransform();
-    ctx.scale(dpr, dpr);
-    ctx.fillStyle = '#1a1a1a';
-    ctx.fillRect(0, 0, actualCanvasWidth, actualCanvasHeight);
-
-    if (showGrid) {
-        if (gridState.lastCalculatedScale === null) {
-            updateGridStateOnZoom();
+function drawAllEdges() {
+    ctx.lineWidth = LINE_WIDTH;
+    
+    allEdges.forEach(edge => {
+        const p1_orig = findPointById(edge.id1);
+        const p2_orig = findPointById(edge.id2);
+        if (!p1_orig || !p2_orig || p1_orig.type !== 'regular' || p2_orig.type !== 'regular') return;
+        
+        let p1_render = p1_orig;
+        let p2_render = p2_orig;
+        let lineShouldBeDashed = false;
+        
+        if (isDragConfirmed && dragPreviewPoints.length > 0) {
+            const p1Preview = dragPreviewPoints.find(dp => dp.id === p1_orig.id);
+            const p2Preview = dragPreviewPoints.find(dp => dp.id === p2_orig.id);
+            if (p1Preview) p1_render = p1Preview;
+            if (p2Preview) p2_render = p2Preview;
+            if (p1Preview || p2Preview) lineShouldBeDashed = true;
         }
+        
+        const p1Screen = dataToScreen(p1_render);
+        const p2Screen = dataToScreen(p2_render);
+        
+        const edgeId = getEdgeId(edge);
+        const isSelected = selectedEdgeIds.includes(edgeId);
+        
+        if (isSelected) {
+            ctx.save();
+            ctx.shadowColor = '#4da6ff';
+            ctx.shadowBlur = 10;
+            ctx.globalAlpha = 0.6;
+            
+            ctx.beginPath();
+            ctx.moveTo(p1Screen.x, p1Screen.y);
+            ctx.lineTo(p2Screen.x, p2Screen.y);
+            ctx.strokeStyle = '#4da6ff';
+            ctx.lineWidth = LINE_WIDTH + 4;
+            ctx.stroke();
+            
+            ctx.restore();
+        }
+        
+        ctx.beginPath();
+        ctx.moveTo(p1Screen.x, p1Screen.y);
+        ctx.lineTo(p2Screen.x, p2Screen.y);
+        
+        const color1 = p1_orig.color || currentColor;
+        const color2 = p2_orig.color || currentColor;
+        if (color1 === color2) {
+            ctx.strokeStyle = color1;
+        } else {
+            const gradient = ctx.createLinearGradient(p1Screen.x, p1Screen.y, p2Screen.x, p2Screen.y);
+            gradient.addColorStop(0, color1);
+            gradient.addColorStop(1, color2);
+            ctx.strokeStyle = gradient;
+        }
+        
+        ctx.setLineDash(lineShouldBeDashed ? DASH_PATTERN : []);
+        ctx.stroke();
+    });
+    
+    ctx.setLineDash([]);
+    ctx.strokeStyle = 'white';
+}
 
-        const r = parseInt(gridColor.slice(1, 3), 16);
-        const g = parseInt(gridColor.slice(3, 5), 16);
-        const b = parseInt(gridColor.slice(5, 7), 16);
+function deleteSelectedItems() {
+    if (selectedPointIds.length === 0 && selectedEdgeIds.length === 0 && !activeCenterId) return;
+    
+    saveStateForUndo();
+    
+    selectedEdgeIds.forEach(edgeId => {
+        const [id1, id2] = edgeId.split('-');
+        allEdges = allEdges.filter(edge => getEdgeId(edge) !== edgeId);
+    });
+    
+    selectedPointIds.forEach(pointId => {
+        const neighborEdges = findNeighborEdges(pointId);
+        
+        if (neighborEdges.length === 2) {
+            const edge1 = neighborEdges[0];
+            const edge2 = neighborEdges[1];
+            
+            const otherPoint1 = edge1.id1 === pointId ? edge1.id2 : edge1.id1;
+            const otherPoint2 = edge2.id1 === pointId ? edge2.id2 : edge2.id1;
+            
+            if (otherPoint1 !== otherPoint2) {
+                allEdges.push({ id1: otherPoint1, id2: otherPoint2 });
+            }
+        }
+        
+        allEdges = allEdges.filter(edge => edge.id1 !== pointId && edge.id2 !== pointId);
+    });
+    
+    const idsToDelete = new Set(selectedPointIds);
+    if (activeCenterId) idsToDelete.add(activeCenterId);
+    
+    allPoints = allPoints.filter(point => !idsToDelete.has(point.id));
+    
+    selectedPointIds = [];
+    selectedEdgeIds = [];
+    activeCenterId = null;
+    
+    if (previewLineStartPointId && !findPointById(previewLineStartPointId)) {
+        isDrawingMode = false;
+        previewLineStartPointId = null;
+        frozenReference_A_rad = null;
+        frozenReference_A_baseRad = null;
+        frozenReference_D_du = null;
+        frozenReference_Origin_Data = null;
+    }
+    
+    redrawAll();
+}
 
-        const topLeftData = screenToData({ x: 0, y: 0 });
-        const bottomRightData = screenToData({ x: actualCanvasWidth, y: actualCanvasHeight });
+function handleCopy() {
+    const pointsToCopyIds = new Set(selectedPointIds);
+    if (activeCenterId) pointsToCopyIds.add(activeCenterId);
+    
+    if (pointsToCopyIds.size === 0 && selectedEdgeIds.length === 0) return;
+    
+    selectedEdgeIds.forEach(edgeId => {
+        const [id1, id2] = edgeId.split('-');
+        pointsToCopyIds.add(id1);
+        pointsToCopyIds.add(id2);
+    });
+    
+    clipboard.points = Array.from(pointsToCopyIds).map(id => {
+        const p = findPointById(id);
+        return p ? { ...p } : null;
+    }).filter(p => p);
+    
+    clipboard.edges = [];
+    selectedEdgeIds.forEach(edgeId => {
+        const [id1, id2] = edgeId.split('-');
+        const edge = allEdges.find(e => getEdgeId(e) === edgeId);
+        if (edge) clipboard.edges.push({ ...edge });
+    });
+    
+    allEdges.forEach(edge => {
+        if (pointsToCopyIds.has(edge.id1) && pointsToCopyIds.has(edge.id2) && 
+            findPointById(edge.id1)?.type === 'regular' && findPointById(edge.id2)?.type === 'regular') {
+            const edgeId = getEdgeId(edge);
+            if (!clipboard.edges.find(e => getEdgeId(e) === edgeId)) {
+                clipboard.edges.push({ ...edge });
+            }
+        }
+    });
+    
+    clipboard.referencePoint = screenToData(mousePos);
+}
 
-        const viewMinX = Math.min(topLeftData.x, bottomRightData.x);
-        const viewMaxX = Math.max(topLeftData.x, bottomRightData.x);
-        const viewMinY = Math.min(topLeftData.y, bottomRightData.y);
-        const viewMaxY = Math.max(topLeftData.y, bottomRightData.y);
+function handleCut() {
+    const pointsToCutIds = new Set(selectedPointIds);
+    if (activeCenterId) pointsToCutIds.add(activeCenterId);
+    
+    if (pointsToCutIds.size === 0 && selectedEdgeIds.length === 0) return;
+    
+    saveStateForUndo();
+    handleCopy();
+    deleteSelectedItems();
+}
 
-        const drawGridLayer = (interval, alpha) => {
-            if (interval === null || alpha <= 0.001) return;
-            ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, ${gridAlpha * alpha})`;
-            ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${gridAlpha * alpha})`;
-            const startGridX = Math.floor(viewMinX / interval) * interval;
-            const endGridX = Math.ceil(viewMaxX / interval) * interval;
-            const startGridY = Math.floor(viewMinY / interval) * interval;
-            const endGridY = Math.ceil(viewMaxY / interval) * interval;
-            if (gridType === 'lines') {
-                ctx.beginPath();
-                for (let x_data = startGridX; x_data <= endGridX; x_data += interval) {
-                    const screenX = dataToScreen({ x: x_data, y: 0 }).x;
-                    ctx.moveTo(screenX, 0);
-                    ctx.lineTo(screenX, actualCanvasHeight);
+function performEscapeAction() {
+    selectedPointIds = [];
+    selectedEdgeIds = [];
+    activeCenterId = null;
+    isDrawingMode = false;
+    previewLineStartPointId = null;
+    frozenReference_A_rad = null;
+    frozenReference_A_baseRad = null;
+    frozenReference_D_du = null;
+    frozenReference_Origin_Data = null;
+    currentDrawingFirstSegmentAbsoluteAngleRad = null;
+    isActionInProgress = false;
+    isDragConfirmed = false;
+    isRectangleSelecting = false;
+    isTransformDrag = false;
+    isPanningBackground = false;
+    dragPreviewPoints = [];
+    actionTargetPoint = null;
+    currentMouseButton = -1;
+    clickData = { pointId: null, count: 0, timestamp: 0 };
+    canvas.style.cursor = 'crosshair';
+    redrawAll();
+}
+
+function restoreState(state) {
+    allPoints = JSON.parse(JSON.stringify(state.points));
+    allEdges = JSON.parse(JSON.stringify(state.edges));
+    selectedPointIds = JSON.parse(JSON.stringify(state.selectedPointIds || []));
+    selectedEdgeIds = JSON.parse(JSON.stringify(state.selectedEdgeIds || []));
+    activeCenterId = state.activeCenterId !== undefined ? state.activeCenterId : null;
+    isDrawingMode = state.isDrawingMode !== undefined ? state.isDrawingMode : false;
+    previewLineStartPointId = state.previewLineStartPointId !== undefined ? state.previewLineStartPointId : null;
+    frozenReference_A_rad = state.frozenReference_A_rad !== undefined ? state.frozenReference_A_rad : null;
+    frozenReference_A_baseRad = state.frozenReference_A_baseRad !== undefined ? state.frozenReference_A_baseRad : null;
+    frozenReference_D_du = state.frozenReference_D_du !== undefined ? state.frozenReference_D_du : null;
+    frozenReference_Origin_Data = state.frozenReference_Origin_Data !== undefined ? state.frozenReference_Origin_Data : null;
+    isActionInProgress = false;
+    isDragConfirmed = false;
+    isRectangleSelecting = false;
+    isTransformDrag = false;
+    isPanningBackground = false;
+    dragPreviewPoints = [];
+    actionTargetPoint = null;
+    currentMouseButton = -1;
+    clickData = { pointId: null, count: 0, timestamp: 0 };
+    canvas.style.cursor = 'crosshair';
+    redrawAll();
+}
+
+function saveStateForUndo() {
+    const state = {
+        points: JSON.parse(JSON.stringify(allPoints)),
+        edges: JSON.parse(JSON.stringify(allEdges)),
+        selectedPointIds: JSON.parse(JSON.stringify(selectedPointIds)),
+        selectedEdgeIds: JSON.parse(JSON.stringify(selectedEdgeIds)),
+        activeCenterId: activeCenterId,
+        isDrawingMode: isDrawingMode,
+        previewLineStartPointId: previewLineStartPointId,
+        frozenReference_A_rad, frozenReference_A_baseRad, frozenReference_D_du, frozenReference_Origin_Data
+    };
+    undoStack.push(state);
+    if (undoStack.length > MAX_HISTORY_SIZE) undoStack.shift();
+    redoStack = [];
+}
+
+canvas.addEventListener('mouseup', (event) => {
+    if (!isActionInProgress || event.button !== currentMouseButton) return;
+    
+    if (isDragConfirmed) {
+        if (isPanningBackground) {
+            isPanningBackground = false;
+        } else if (dragPreviewPoints.length > 0 && currentMouseButton === 0 && actionTargetPoint) {
+            saveStateForUndo();
+            dragPreviewPoints.forEach(dp => {
+                const actualPoint = findPointById(dp.id);
+                if (actualPoint) {
+                    actualPoint.x = dp.x;
+                    actualPoint.y = dp.y;
                 }
-                for (let y_data = startGridY; y_data <= endGridY; y_data += interval) {
-                    const screenY = dataToScreen({ x: 0, y: y_data }).y;
-                    ctx.moveTo(0, screenY);
-                    ctx.lineTo(actualCanvasWidth, screenY);
-                }
-                ctx.stroke();
-            } else if (gridType === 'points') {
-                for (let x_data = startGridX; x_data <= endGridX; x_data += interval) {
-                    for (let y_data = startGridY; y_data <= endGridY; y_data += interval) {
-                        const screenPos = dataToScreen({ x: x_data, y: y_data });
-                        ctx.beginPath();
-                        ctx.arc(screenPos.x, screenPos.y, 1, 0, 2 * Math.PI);
-                        ctx.fill();
+            });
+            
+            if (!isTransformDrag && !selectedPointIds.includes(actionTargetPoint.id) && actionTargetPoint.id !== activeCenterId) {
+                if (!shiftKeyAtActionStart && !ctrlKeyAtActionStart) {
+                    selectedPointIds = (actionTargetPoint.type === 'regular') ? [actionTargetPoint.id] : [];
+                    selectedEdgeIds = [];
+                    activeCenterId = (actionTargetPoint.type !== 'regular') ? actionTargetPoint.id : null;
+                    if (selectedPointIds.length > 0 || activeCenterId) {
+                        isDrawingMode = false;
+                        previewLineStartPointId = null;
+                        frozenReference_A_rad = null;
+                        frozenReference_A_baseRad = null;
+                        frozenReference_D_du = null;
+                        frozenReference_Origin_Data = null;
                     }
                 }
             }
-        };
-
-        drawGridLayer(gridState.interval1, gridState.alpha1);
-        drawGridLayer(gridState.interval2, gridState.alpha2);
-    }
-
-    const drawingContextForReferences = previewLineStartPointId ? getDrawingContext(previewLineStartPointId) : null;
-    if (currentShiftPressed && drawingContextForReferences && (drawingContextForReferences.frozen_Origin_Data_to_display || !drawingContextForReferences.isFirstSegmentBeingDrawn)) {
-        if (drawingContextForReferences.frozen_Origin_Data_to_display) {
-            drawReferenceElementsGeometry(drawingContextForReferences, currentShiftPressed);
-            prepareReferenceElementsTexts(drawingContextForReferences, currentShiftPressed);
-        } else if (!drawingContextForReferences.isFirstSegmentBeingDrawn) {
-            prepareReferenceElementsTexts(drawingContextForReferences, currentShiftPressed);
-        }
-    }
-
-    drawAllEdges();
-    const pointsToDraw = allPoints.map(p => {
-        if (isDragConfirmed && dragPreviewPoints.length > 0) {
-            const preview = dragPreviewPoints.find(dp => dp.id === p.id);
-            return preview || p;
-        }
-        return p;
-    });
-    pointsToDraw.forEach(point => drawPoint(point));
-
-    if (isDrawingMode && previewLineStartPointId && !isDragConfirmed && !isRectangleSelecting && !isActionInProgress) {
-        const startPoint = findPointById(previewLineStartPointId);
-        if (startPoint) {
-            const drawingContext = getDrawingContext(startPoint.id);
-            const snappedData = getSnappedPosition(startPoint, mousePos, currentShiftPressed);
-            const targetPosData = { x: snappedData.x, y: snappedData.y };
-            const startScreen = dataToScreen(startPoint);
-            const targetScreen = dataToScreen(targetPosData);
-            ctx.beginPath();
-            ctx.moveTo(startScreen.x, startScreen.y);
-            ctx.lineTo(targetScreen.x, targetScreen.y);
-            ctx.setLineDash(DASH_PATTERN);
-            ctx.strokeStyle = currentColor;
-            ctx.lineWidth = LINE_WIDTH;
-            ctx.stroke();
-            ctx.setLineDash([]);
-            if (showAngles) {
-                const angleBaseForArcRad = drawingContext.offsetAngleRad;
-                const currentLineAbsoluteAngleRad = snappedData.angle * (Math.PI / 180);
-                const signedTurningAngleRad = snappedData.angleTurn !== null ? snappedData.angleTurn : normalizeAngleToPi(currentLineAbsoluteAngleRad - angleBaseForArcRad);
-                const arcEndAngleForSweepRad = angleBaseForArcRad + signedTurningAngleRad;
-                const arcRadius = 30;
-                let currentArcColor = currentShiftPressed ? 'rgba(230, 230, 100, 0.8)' : 'rgba(200, 200, 200, 0.7)';
-                drawAngleArc(startScreen, angleBaseForArcRad, arcEndAngleForSweepRad, arcRadius, currentArcColor, false);
-                ctx.save();
-                ctx.beginPath();
-                const baseExtDataX = startPoint.x + Math.cos(angleBaseForArcRad) * 30 / viewTransform.scale;
-                const baseExtDataY = startPoint.y + Math.sin(angleBaseForArcRad) * 30 / viewTransform.scale;
-                const baseExtScreen = dataToScreen({ x: baseExtDataX, y: baseExtDataY });
-                ctx.moveTo(startScreen.x, startScreen.y);
-                ctx.lineTo(baseExtScreen.x, baseExtScreen.y);
-                ctx.strokeStyle = 'rgba(180, 180, 180, 0.6)';
-                ctx.setLineDash([2, 3]);
-                ctx.lineWidth = 1;
-                ctx.stroke();
-                ctx.restore();
+        } else if (currentMouseButton === 2 && isRectangleSelecting) {
+            const rX1 = rectangleSelectStartPos.x;
+            const rY1 = rectangleSelectStartPos.y;
+            const rX2 = mousePos.x;
+            const rY2 = mousePos.y;
+            const dataP1 = screenToData({ x: Math.min(rX1, rX2), y: Math.min(rY1, rY2) });
+            const dataP2 = screenToData({ x: Math.max(rX1, rX2), y: Math.max(rY1, rY2) });
+            const minX = Math.min(dataP1.x, dataP2.x);
+            const maxX = Math.max(dataP1.x, dataP2.x);
+            const minY = Math.min(dataP1.y, dataP2.y);
+            const maxY = Math.max(dataP1.y, dataP2.y);
+            
+            const pointsInRect = allPoints.filter(p => p.x >= minX && p.x <= maxX && p.y >= minY && p.y <= maxY);
+            const regularPointIdsInRect = pointsInRect.filter(p => p.type === 'regular').map(p => p.id);
+            const centerPointsInRect = pointsInRect.filter(p => p.type !== 'regular');
+            
+            const edgesInRect = allEdges.filter(edge => {
+                const p1 = findPointById(edge.id1);
+                const p2 = findPointById(edge.id2);
+                return p1 && p2 && 
+                       p1.x >= minX && p1.x <= maxX && p1.y >= minY && p1.y <= maxY &&
+                       p2.x >= minX && p2.x <= maxX && p2.y >= minY && p2.y <= maxY;
+            }).map(edge => getEdgeId(edge));
+            
+            applySelectionLogic(regularPointIdsInRect, edgesInRect, shiftKeyAtActionStart, ctrlKeyAtActionStart, false);
+            
+            if (centerPointsInRect.length > 0) {
+                applySelectionLogic([centerPointsInRect[centerPointsInRect.length-1].id], [], shiftKeyAtActionStart, ctrlKeyAtActionStart, true);
             }
-            prepareSnapInfoTexts(startPoint, targetPosData, snappedData, currentShiftPressed, drawingContext);
+            
+            isDrawingMode = false;
+            previewLineStartPointId = null;
+            frozenReference_A_rad = null;
+            frozenReference_A_baseRad = null;
+            frozenReference_D_du = null;
+            frozenReference_Origin_Data = null;
+        }
+    } else {
+        if (currentMouseButton === 0) {
+            if (actionTargetPoint) {
+                if (isDrawingMode && previewLineStartPointId) {
+                    const p_start_of_committed_segment = findPointById(previewLineStartPointId);
+                    const p_end_of_committed_segment = actionTargetPoint;
+                    if (previewLineStartPointId !== actionTargetPoint.id && actionTargetPoint.type === 'regular') {
+                        saveStateForUndo();
+                        if (p_start_of_committed_segment) {
+                            const contextBeforeCommit = getDrawingContext(p_start_of_committed_segment.id);
+                            const committedSegmentAbsoluteAngle = Math.atan2(p_end_of_committed_segment.y - p_start_of_committed_segment.y, p_end_of_committed_segment.x - p_start_of_committed_segment.x);
+                            const committedSegmentLength = distance(p_start_of_committed_segment, p_end_of_committed_segment);
+                            frozenReference_Origin_Data = { x: p_start_of_committed_segment.x, y: p_start_of_committed_segment.y };
+                            frozenReference_D_du = committedSegmentLength;
+                            if (contextBeforeCommit.isFirstSegmentBeingDrawn) {
+                                frozenReference_A_baseRad = 0;
+                                frozenReference_A_rad = normalizeAngle(committedSegmentAbsoluteAngle);
+                            } else {
+                                frozenReference_A_baseRad = contextBeforeCommit.offsetAngleRad;
+                                frozenReference_A_rad = normalizeAngleToPi(committedSegmentAbsoluteAngle - contextBeforeCommit.offsetAngleRad);
+                            }
+                        }
+                        allEdges.push({ id1: previewLineStartPointId, id2: actionTargetPoint.id });
+                        previewLineStartPointId = actionTargetPoint.id;
+                    } else if (actionTargetPoint.type !== 'regular') {
+                        applySelectionLogic([actionTargetPoint.id], [], shiftKeyAtActionStart, ctrlKeyAtActionStart, true);
+                        performEscapeAction();
+                    }
+                } else {
+                    const now = Date.now();
+                    let pointsForSelection = [actionTargetPoint.id];
+                    let edgesForSelection = [];
+                    const isCenterTarget = actionTargetPoint.type !== 'regular';
+                    
+                    if (actionTargetPoint.id === clickData.pointId && (now - clickData.timestamp < DOUBLE_CLICK_MS)) {
+                        clickData.count++;
+                    } else {
+                        clickData.count = 1;
+                        clickData.pointId = actionTargetPoint.id;
+                    }
+                    clickData.timestamp = now;
+                    
+                    if (!isCenterTarget) {
+                        if (clickData.count === 3) {
+                            pointsForSelection = findAllPointsInSubgraph(actionTargetPoint.id);
+                            edgesForSelection = allEdges.filter(edge => 
+                                pointsForSelection.includes(edge.id1) && pointsForSelection.includes(edge.id2)
+                            ).map(edge => getEdgeId(edge));
+                            clickData.count = 0;
+                        } else if (clickData.count === 2) {
+                            const neighbors = findNeighbors(actionTargetPoint.id);
+                            pointsForSelection = [actionTargetPoint.id, ...neighbors];
+                            edgesForSelection = findNeighborEdges(actionTargetPoint.id).map(edge => getEdgeId(edge));
+                        }
+                    }
+                    
+                    applySelectionLogic(pointsForSelection, edgesForSelection, shiftKeyAtActionStart, ctrlKeyAtActionStart, isCenterTarget);
+                    
+                    if (selectedPointIds.length > 0 || selectedEdgeIds.length > 0 || activeCenterId) {
+                        isDrawingMode = false;
+                        previewLineStartPointId = null;
+                        frozenReference_A_rad = null;
+                        frozenReference_A_baseRad = null;
+                        frozenReference_D_du = null;
+                        frozenReference_Origin_Data = null;
+                    }
+                }
+            } else {
+                const clickedEdge = findClickedEdge(actionStartPos);
+                if (clickedEdge) {
+                    const now = Date.now();
+                    const edgeId = getEdgeId(clickedEdge);
+                    let pointsForSelection = [];
+                    let edgesForSelection = [edgeId];
+                    
+                    if (clickData.pointId === edgeId && (now - clickData.timestamp < DOUBLE_CLICK_MS)) {
+                        clickData.count++;
+                    } else {
+                        clickData.count = 1;
+                        clickData.pointId = edgeId;
+                    }
+                    clickData.timestamp = now;
+                    
+                    if (clickData.count === 3) {
+                        const p1 = findPointById(clickedEdge.id1);
+                        const p2 = findPointById(clickedEdge.id2);
+                        if (p1 && p2) {
+                            pointsForSelection = findAllPointsInSubgraph(p1.id);
+                            edgesForSelection = allEdges.filter(edge => 
+                                pointsForSelection.includes(edge.id1) && pointsForSelection.includes(edge.id2)
+                            ).map(edge => getEdgeId(edge));
+                        }
+                        clickData.count = 0;
+                    } else if (clickData.count === 2) {
+                        const p1 = findPointById(clickedEdge.id1);
+                        const p2 = findPointById(clickedEdge.id2);
+                        if (p1 && p2) {
+                            const neighbors1 = findNeighbors(p1.id);
+                            const neighbors2 = findNeighbors(p2.id);
+                            pointsForSelection = [p1.id, p2.id, ...neighbors1, ...neighbors2];
+                            edgesForSelection = [
+                                ...findNeighborEdges(p1.id).map(edge => getEdgeId(edge)),
+                                ...findNeighborEdges(p2.id).map(edge => getEdgeId(edge))
+                            ];
+                            edgesForSelection = [...new Set(edgesForSelection)];
+                        }
+                    }
+                    
+                    applySelectionLogic(pointsForSelection, edgesForSelection, shiftKeyAtActionStart, ctrlKeyAtActionStart, false);
+                    
+                    if (selectedPointIds.length > 0 || selectedEdgeIds.length > 0) {
+                        isDrawingMode = false;
+                        previewLineStartPointId = null;
+                        frozenReference_A_rad = null;
+                        frozenReference_A_baseRad = null;
+                        frozenReference_D_du = null;
+                        frozenReference_Origin_Data = null;
+                    }
+                } else {
+                    const now = Date.now();
+                    if (now - lastCanvasClickTime < DOUBLE_CLICK_MS && !shiftKeyAtActionStart && !ctrlKeyAtActionStart) {
+                        performEscapeAction();
+                    } else {
+                        if (isDrawingMode && previewLineStartPointId) {
+                            saveStateForUndo();
+                            const startPoint = findPointById(previewLineStartPointId);
+                            const drawingContext = getDrawingContext(startPoint.id);
+                            const snappedData = getSnappedPosition(startPoint, mousePos, currentShiftPressed);
+                            const newPoint = { id: generateUniqueId(), x: snappedData.x, y: snappedData.y, type: 'regular', color: currentColor };
+                            allPoints.push(newPoint);
+                            
+                            if (startPoint) {
+                                const committedSegmentAbsoluteAngle = Math.atan2(newPoint.y - startPoint.y, newPoint.x - startPoint.x);
+                                const committedSegmentLength = distance(startPoint, newPoint);
+                                frozenReference_Origin_Data = { x: startPoint.x, y: startPoint.y };
+                                frozenReference_D_du = committedSegmentLength;
+                                if (drawingContext.isFirstSegmentBeingDrawn) {
+                                    frozenReference_A_baseRad = 0;
+                                    frozenReference_A_rad = normalizeAngle(committedSegmentAbsoluteAngle);
+                                } else {
+                                    frozenReference_A_baseRad = drawingContext.offsetAngleRad;
+                                    frozenReference_A_rad = normalizeAngleToPi(committedSegmentAbsoluteAngle - drawingContext.offsetAngleRad);
+                                }
+                            }
+                            
+                            allEdges.push({ id1: previewLineStartPointId, id2: newPoint.id });
+                            previewLineStartPointId = newPoint.id;
+                        } else if (!isDrawingMode && !ctrlKeyAtActionStart) {
+                            if (!shiftKeyAtActionStart && (selectedPointIds.length > 0 || selectedEdgeIds.length > 0 || activeCenterId)) {
+                                performEscapeAction();
+                            } else {
+                                saveStateForUndo();
+                                const mouseDataPos = screenToData(mousePos);
+                                const newPoint = { id: generateUniqueId(), x: mouseDataPos.x, y: mouseDataPos.y, type: 'regular', color: currentColor };
+                                allPoints.push(newPoint);
+                                previewLineStartPointId = newPoint.id;
+                                isDrawingMode = true;
+                                selectedPointIds = [];
+                                selectedEdgeIds = [];
+                                activeCenterId = null;
+                                frozenReference_A_rad = null;
+                                frozenReference_A_baseRad = null;
+                                frozenReference_D_du = null;
+                                frozenReference_Origin_Data = null;
+                            }
+                        }
+                    }
+                    lastCanvasClickTime = now;
+                }
+            }
+        } else if (currentMouseButton === 2) {
+            performEscapeAction();
         }
     }
+    
+    isActionInProgress = false;
+    isDragConfirmed = false;
+    isRectangleSelecting = false;
+    isTransformDrag = false;
+    isPanningBackground = false;
+    actionTargetPoint = null;
+    dragPreviewPoints = [];
+    currentMouseButton = -1;
+    redrawAll();
+});
 
-    if (previewAltSnapOnEdge && previewAltSnapOnEdge.pointData) {
-        const snapMarkerPosScreen = dataToScreen(previewAltSnapOnEdge.pointData);
-        ctx.beginPath();
-        ctx.arc(snapMarkerPosScreen.x, snapMarkerPosScreen.y, POINT_RADIUS * 0.8, 0, 2 * Math.PI);
-        ctx.fillStyle = 'rgba(255, 255, 0, 0.7)';
-        ctx.fill();
-        ctx.strokeStyle = 'rgba(200, 200, 0, 0.9)';
-        ctx.lineWidth = 1;
-        ctx.stroke();
+window.addEventListener('keydown', (event) => {
+    const isCtrlOrCmd = event.ctrlKey || event.metaKey;
+    if (event.key === 'Shift') {
+        currentShiftPressed = true;
+        if (isDrawingMode && previewLineStartPointId) redrawAll();
     }
-
-    if (isRectangleSelecting && isDragConfirmed && currentMouseButton === 2) {
-        ctx.strokeStyle = 'rgba(255,255,255,0.7)';
-        ctx.lineWidth = 1;
-        ctx.setLineDash(DASH_PATTERN);
-        const rX = Math.min(rectangleSelectStartPos.x, mousePos.x);
-        const rY = Math.min(rectangleSelectStartPos.y, mousePos.y);
-        const rW = Math.abs(rectangleSelectStartPos.x - mousePos.x);
-        const rH = Math.abs(rectangleSelectStartPos.y - mousePos.y);
-        ctx.strokeRect(rX, rY, rW, rH);
-        ctx.setLineDash([]);
-        ctx.lineWidth = LINE_WIDTH;
+    
+    const allowedDuringAction = ['Shift', 'Control', 'Meta', 'Alt', 'Escape', 'Delete', 'Backspace'];
+    if (isActionInProgress && !allowedDuringAction.includes(event.key) && !(isCtrlOrCmd && ['c','x','v','z','y','a','=','-'].includes(event.key.toLowerCase()))) return;
+    
+    if (event.key === 'Escape') {
+        performEscapeAction();
+    } else if (event.key === 'Delete' || event.key === 'Backspace') {
+        deleteSelectedItems();
+    } else if (isCtrlOrCmd && event.key.toLowerCase() === 'c') {
+        event.preventDefault();
+        handleCopy();
+    } else if (isCtrlOrCmd && event.key.toLowerCase() === 'x') {
+        event.preventDefault();
+        handleCut();
+    } else if (isCtrlOrCmd && event.key.toLowerCase() === 'v') {
+        event.preventDefault();
+        handlePaste();
+    } else if (isCtrlOrCmd && event.key.toLowerCase() === 'z' && !event.shiftKey) {
+        event.preventDefault();
+        handleUndo();
+    } else if (isCtrlOrCmd && (event.key.toLowerCase() === 'y' || (event.shiftKey && event.key.toLowerCase() === 'z'))) {
+        event.preventDefault();
+        handleRedo();
+    } else if (isCtrlOrCmd && event.key === '=') {
+        event.preventDefault();
+        const centerScreen = { x: (canvas.width/dpr)/2, y: (canvas.height/dpr)/2 };
+        zoomAt(centerScreen, 1.2);
+        redrawAll();
+    } else if (isCtrlOrCmd && event.key === '-') {
+        event.preventDefault();
+        const centerScreen = { x: (canvas.width/dpr)/2, y: (canvas.height/dpr)/2 };
+        zoomAt(centerScreen, 1/1.2);
+        redrawAll();
+    } else if (isCtrlOrCmd && event.key.toLowerCase() === 'a') {
+        event.preventDefault();
+        selectedPointIds = allPoints.filter(p => p.type === 'regular').map(p => p.id);
+        selectedEdgeIds = allEdges.map(edge => getEdgeId(edge));
+        if (!activeCenterId && allPoints.some(p => p.type !== 'regular')) {
+            activeCenterId = allPoints.find(p => p.type !== 'regular').id;
+        }
+        isDrawingMode = false;
+        previewLineStartPointId = null;
+        frozenReference_A_rad = null;
+        frozenReference_A_baseRad = null;
+        frozenReference_D_du = null;
+        frozenReference_Origin_Data = null;
+        redrawAll();
+    } else if (['c', 'r', 's'].includes(event.key.toLowerCase()) && !isCtrlOrCmd && !isActionInProgress) {
+        event.preventDefault();
+        saveStateForUndo();
+        performEscapeAction();
+        
+        let type;
+        if (event.key.toLowerCase() === 'c') type = 'center_rotate_scale';
+        else if (event.key.toLowerCase() === 'r') type = 'center_rotate_only';
+        else if (event.key.toLowerCase() === 's') type = 'center_scale_only';
+        
+        const mouseDataPos = screenToData(mousePos);
+        const newCenter = { id: generateUniqueId(), x: mouseDataPos.x, y: mouseDataPos.y, type: type, color: currentColor };
+        allPoints.push(newCenter);
+        activeCenterId = newCenter.id;
+        redrawAll();
     }
-    cleanupHtmlLabels();
-}
+});
