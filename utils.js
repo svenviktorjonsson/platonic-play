@@ -2,14 +2,18 @@ export function formatNumber(value, sigFigs) {
     if (value === 0) return "0";
     const absValue = Math.abs(value);
     const sign = value < 0 ? "-" : "";
-
+    let formattedString;
     if (absValue >= 1000 || (absValue !== 0 && absValue < 0.001)) {
-        return sign + absValue.toExponential(Math.max(0, sigFigs - 1));
+        const expStr = absValue.toExponential(Math.max(0, sigFigs - 1));
+        const parts = expStr.split('e');
+        let coefficient = parseFloat(parts[0]).toString();
+        let exponent = parseInt(parts[1], 10);
+        formattedString = `${coefficient} \\cdot 10^{${exponent}}`;
     } else {
         const integerDigits = absValue < 1 ? 0 : Math.floor(Math.log10(absValue)) + 1;
         let decimalPlacesToDisplay;
         if (absValue === 0) {
-            decimalPlacesToDisplay = sigFigs -1;
+            decimalPlacesToDisplay = sigFigs - 1;
         } else if (absValue < 1) {
             let k = 0;
             let temp = absValue;
@@ -17,18 +21,19 @@ export function formatNumber(value, sigFigs) {
                 temp *= 10;
                 k++;
             }
-            decimalPlacesToDisplay = Math.max(0, (k -1) + sigFigs);
+            decimalPlacesToDisplay = Math.max(0, (k - 1) + sigFigs);
         } else {
             decimalPlacesToDisplay = Math.max(0, sigFigs - integerDigits);
         }
         decimalPlacesToDisplay = Math.min(decimalPlacesToDisplay, 10);
         let fixedStr = absValue.toFixed(decimalPlacesToDisplay);
         let num = parseFloat(fixedStr);
-        if (Math.abs(num) === 0 && value !==0) { 
-             return "0";
+        if (Math.abs(num) === 0 && value !== 0) {
+            return "0";
         }
-        return sign + Math.abs(num).toString(); 
+        formattedString = Math.abs(num).toString();
     }
+    return sign + formattedString;
 }
 
 export function gcd(a, b) {

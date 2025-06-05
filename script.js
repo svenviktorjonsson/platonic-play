@@ -19,11 +19,18 @@ const ctx = canvas.getContext('2d');
 const colorPicker = document.getElementById('colorPicker');
 const colorPalette = document.getElementById('colorPalette');
 const htmlOverlay = document.getElementById('html-overlay');
+const mouseCoordXElement = document.getElementById('mouseCoordX');
+const mouseCoordYElement = document.getElementById('mouseCoordY');
+const toggleGridCheckbox = document.getElementById('toggleGridCheckbox');
+const gridTypeSelect = document.getElementById('gridTypeSelect');
+const gridColorPicker = document.getElementById('gridColorPicker');
+const gridAlphaInput = document.getElementById('gridAlphaInput');
 
 const POINT_RADIUS = 5;
 const CENTER_POINT_VISUAL_RADIUS = POINT_RADIUS * 2;
 const POINT_SELECT_RADIUS = 10;
 const LINE_WIDTH = 2;
+const GRID_LINEWIDTH = 1;
 const DASH_PATTERN = [6, 6];
 const SELECTED_INDICATOR_OFFSET = 3;
 const DOUBLE_CLICK_MS = 300;
@@ -87,6 +94,18 @@ let angleSigFigs = 4;
 let distanceSigFigs = 3;
 let currentUnit = 'm';
 let previewAltSnapOnEdge = null;
+let showGrid = false;
+let gridType = 'points';
+let gridColor = '#888888';
+let gridAlpha = 0.5;
+
+let lastGridState = {
+    interval1: null,
+    interval2: null,
+    alpha1: 0,
+    alpha2: 0,
+    scale: null
+};
 
 const unitConversions = {
     'mm': 0.001, 'cm': 0.01, 'm': 1, 'km': 1000,
@@ -128,6 +147,38 @@ const SEGMENT_SNAP_FRACTIONS = [...new Set([0, ...tempSegmentSnapFactorsForAlt, 
 
 const activeHtmlLabels = new Map();
 let labelsToKeepThisFrame = new Set();
+
+function calculateGridIntervals(viewTransformScale) {
+    const targetScreenSpacing = 80;
+    const effectiveDataInterval = targetScreenSpacing / viewTransformScale;
+    
+    const logInterval = Math.log10(effectiveDataInterval);
+    const lowerPowerOf10 = Math.pow(10, Math.floor(logInterval));
+    const higherPowerOf10 = Math.pow(10, Math.ceil(logInterval));
+    
+    let grid1Interval = lowerPowerOf10;
+    let grid2Interval = higherPowerOf10;
+    let alpha1 = 1;
+    let alpha2 = 0;
+    
+    if (Math.abs(higherPowerOf10 - lowerPowerOf10) > lowerPowerOf10 * 0.0001) {
+        const logInterpFactor = (logInterval - Math.log10(lowerPowerOf10)) / (Math.log10(higherPowerOf10) - Math.log10(lowerPowerOf10));
+        
+        const transitionZoneStart = 0.2;
+        const transitionZoneEnd = 0.8;
+        
+        let interpValue = (logInterpFactor - transitionZoneStart) / (transitionZoneEnd - transitionZoneStart);
+        interpValue = Math.max(0, Math.min(1, interpValue));
+        interpValue = interpValue * interpValue * (3 - 2 * interpValue);
+        
+        alpha1 = 1 - interpValue;
+        alpha2 = interpValue;
+    } else {
+        grid2Interval = null;
+    }
+    
+    return { grid1Interval, grid2Interval, alpha1, alpha2 };
+}
 
 function updateHtmlLabel({ id, content, x, y, color, fontSize, options = {} }) {
     labelsToKeepThisFrame.add(id);
@@ -480,32 +531,26 @@ function handleRedo() {
     restoreState(nextState);
 }
 
-function screenToData(screenPos) {
-    const canvasHeight = canvas.height / dpr;
+function screenToData(screenPos_css_pixels) {
+    const screenX_physical = screenPos_css_pixels.x * dpr;
+    const screenY_physical = screenPos_css_pixels.y * dpr;
+    const canvasHeight_physical = canvas.height;
     return {
-        x: (screenPos.x - viewTransform.offsetX) / viewTransform.scale,
-        y: (canvasHeight - screenPos.y - viewTransform.offsetY) / viewTransform.scale
+        x: (screenX_physical - viewTransform.offsetX) / viewTransform.scale,
+        y: (canvasHeight_physical - screenY_physical - viewTransform.offsetY) / viewTransform.scale
     };
 }
 
 function dataToScreen(dataPos) {
-    const canvasHeight = canvas.height / dpr;
+    const canvasHeight_physical = canvas.height;
+    const screenX_physical = dataPos.x * viewTransform.scale + viewTransform.offsetX;
+    const screenY_physical = canvasHeight_physical - (dataPos.y * viewTransform.scale + viewTransform.offsetY);
     return {
-        x: dataPos.x * viewTransform.scale + viewTransform.offsetX,
-        y: canvasHeight - (dataPos.y * viewTransform.scale + viewTransform.offsetY)
+        x: screenX_physical / dpr,
+        y: screenY_physical / dpr
     };
 }
 
-function zoomAt(zoomCenter, scaleFactor) {
-    const dataPosBeforeZoom = screenToData(zoomCenter);
-    const oldScale = viewTransform.scale;
-    viewTransform.scale *= scaleFactor;
-    viewTransform.scale = Math.max(0.01, Math.min(viewTransform.scale, 20000));
-    if (Math.abs(viewTransform.scale - oldScale) < 0.00001) return;
-    const screenPosAfterZoom = dataToScreen(dataPosBeforeZoom);
-    viewTransform.offsetX += zoomCenter.x - screenPosAfterZoom.x;
-    viewTransform.offsetY += zoomCenter.y - screenPosAfterZoom.y;
-}
 
 function resizeCanvas() {
     const canvasContainer = document.querySelector('.canvas-container');
@@ -879,6 +924,22 @@ function prepareReferenceElementsTexts(context, shiftPressed) {
     }
 }
 
+function zoomAt(zoomCenterScreen_css_pixels, scaleFactor) {
+    const mouseX_physical = zoomCenterScreen_css_pixels.x * dpr;
+    const mouseY_physical = zoomCenterScreen_css_pixels.y * dpr;
+    const canvasHeight_physical = canvas.height;
+    const dataX_at_mouse = (mouseX_physical - viewTransform.offsetX) / viewTransform.scale;
+    const dataY_at_mouse = (canvasHeight_physical - mouseY_physical - viewTransform.offsetY) / viewTransform.scale;
+    const oldScale = viewTransform.scale;
+    viewTransform.scale *= scaleFactor;
+    viewTransform.scale = Math.max(0.01, Math.min(viewTransform.scale, 20000));
+    if (Math.abs(viewTransform.scale - oldScale) < 1e-9) {
+        return;
+    }
+    viewTransform.offsetX = mouseX_physical - dataX_at_mouse * viewTransform.scale;
+    viewTransform.offsetY = canvasHeight_physical - dataY_at_mouse * viewTransform.scale - mouseY_physical;
+}
+
 function prepareSnapInfoTexts(startPointData, targetDataPos, snappedOutput, shiftPressed, drawingContext) {
     if (!shiftPressed && (!showAngles && !showDistances)) return;
 
@@ -951,22 +1012,110 @@ function prepareSnapInfoTexts(startPointData, targetDataPos, snappedOutput, shif
     }
 }
 
-
 function redrawAll() {
     labelsToKeepThisFrame.clear();
     const actualCanvasWidth = canvas.width / dpr;
     const actualCanvasHeight = canvas.height / dpr;
-    ctx.resetTransform(); ctx.scale(dpr, dpr);
-    ctx.fillStyle = '#1a1a1a'; ctx.fillRect(0, 0, actualCanvasWidth, actualCanvasHeight);
+    ctx.resetTransform();
+    ctx.scale(dpr, dpr);
+    ctx.fillStyle = '#1a1a1a';
+    ctx.fillRect(0, 0, actualCanvasWidth, actualCanvasHeight);
+
+    if (showGrid) {
+        const r = parseInt(gridColor.slice(1, 3), 16);
+        const g = parseInt(gridColor.slice(3, 5), 16);
+        const b = parseInt(gridColor.slice(5, 7), 16);
+
+        const topLeftData = screenToData({ x: 0, y: 0 });
+        const bottomRightData = screenToData({ x: actualCanvasWidth, y: actualCanvasHeight });
+
+        const viewMinX = Math.min(topLeftData.x, bottomRightData.x);
+        const viewMaxX = Math.max(topLeftData.x, bottomRightData.x);
+        const viewMinY = Math.min(topLeftData.y, bottomRightData.y);
+        const viewMaxY = Math.max(topLeftData.y, bottomRightData.y);
+
+        const targetScreenSpacing = 80;
+        const effectiveDataInterval = targetScreenSpacing / viewTransform.scale;
+
+        const lowerPowerOf10 = Math.pow(10, Math.floor(Math.log10(effectiveDataInterval)));
+        const higherPowerOf10 = Math.pow(10, Math.ceil(Math.log10(effectiveDataInterval)));
+
+        let grid1Interval, grid2Interval;
+        let alpha1, alpha2;
+
+        let logInterpFactor = 0;
+        if (higherPowerOf10 > lowerPowerOf10 * 1.0001) {
+             logInterpFactor = (Math.log10(effectiveDataInterval) - Math.log10(lowerPowerOf10)) / (Math.log10(higherPowerOf10) - Math.log10(lowerPowerOf10));
+        }
+        
+        const smoothstep = (x) => x * x * (3 - 2 * x);
+
+        const transitionZoneStart = 0.2;
+        const transitionZoneEnd = 0.8;
+
+        let interpValue = (logInterpFactor - transitionZoneStart) / (transitionZoneEnd - transitionZoneStart);
+        interpValue = Math.max(0, Math.min(1, interpValue));
+        interpValue = smoothstep(interpValue);
+        
+        grid1Interval = lowerPowerOf10;
+        grid2Interval = higherPowerOf10;
+        
+        alpha1 = 1 - interpValue;
+        alpha2 = interpValue;
+
+        if (grid1Interval === grid2Interval) {
+            grid2Interval = null;
+            alpha1 = 1;
+            alpha2 = 0;
+        }
+
+        const drawGridLayer = (interval, alpha) => {
+            if (interval === null || alpha <= 0.001) return;
+            ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, ${gridAlpha * alpha})`;
+            ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${gridAlpha * alpha})`;
+            const startGridX = Math.floor(viewMinX / interval) * interval;
+            const endGridX = Math.ceil(viewMaxX / interval) * interval;
+            const startGridY = Math.floor(viewMinY / interval) * interval;
+            const endGridY = Math.ceil(viewMaxY / interval) * interval;
+            if (gridType === 'lines') {
+                
+                ctx.beginPath();
+                ctx.lineWidth = GRID_LINEWIDTH;
+                for (let x_data = startGridX; x_data <= endGridX; x_data += interval) {
+                    const screenX = dataToScreen({ x: x_data, y: 0 }).x;
+                    ctx.moveTo(screenX, 0);
+                    ctx.lineTo(screenX, actualCanvasHeight);
+                }
+                for (let y_data = startGridY; y_data <= endGridY; y_data += interval) {
+                    const screenY = dataToScreen({ x: 0, y: y_data }).y;
+                    ctx.moveTo(0, screenY);
+                    ctx.lineTo(actualCanvasWidth, screenY);
+                }
+                ctx.stroke();
+            } else if (gridType === 'points') {
+                for (let x_data = startGridX; x_data <= endGridX; x_data += interval) {
+                    for (let y_data = startGridY; y_data <= endGridY; y_data += interval) {
+                        const screenPos = dataToScreen({ x: x_data, y: y_data });
+                        ctx.beginPath();
+                        ctx.arc(screenPos.x, screenPos.y, 1, 0, 2 * Math.PI);
+                        ctx.fill();
+                    }
+                }
+            }
+        };
+
+        drawGridLayer(grid1Interval, alpha1);
+        drawGridLayer(grid2Interval, alpha2);
+    }
 
     const drawingContextForReferences = previewLineStartPointId ? getDrawingContext(previewLineStartPointId) : null;
     if (currentShiftPressed && drawingContextForReferences && (drawingContextForReferences.frozen_Origin_Data_to_display || !drawingContextForReferences.isFirstSegmentBeingDrawn)) {
-         if (drawingContextForReferences.frozen_Origin_Data_to_display) {
+        if (drawingContextForReferences.frozen_Origin_Data_to_display) {
             drawReferenceElementsGeometry(drawingContextForReferences, currentShiftPressed);
             prepareReferenceElementsTexts(drawingContextForReferences, currentShiftPressed);
-         } else if (!drawingContextForReferences.isFirstSegmentBeingDrawn){
-              prepareReferenceElementsTexts(drawingContextForReferences, currentShiftPressed);
-         }
+        } else if (!drawingContextForReferences.isFirstSegmentBeingDrawn) {
+            prepareReferenceElementsTexts(drawingContextForReferences, currentShiftPressed);
+        }
     }
 
     drawAllEdges();
@@ -987,8 +1136,14 @@ function redrawAll() {
             const targetPosData = { x: snappedData.x, y: snappedData.y };
             const startScreen = dataToScreen(startPoint);
             const targetScreen = dataToScreen(targetPosData);
-            ctx.beginPath(); ctx.moveTo(startScreen.x, startScreen.y); ctx.lineTo(targetScreen.x, targetScreen.y);
-            ctx.setLineDash(DASH_PATTERN); ctx.strokeStyle = currentColor; ctx.lineWidth = LINE_WIDTH; ctx.stroke(); ctx.setLineDash([]);
+            ctx.beginPath();
+            ctx.moveTo(startScreen.x, startScreen.y);
+            ctx.lineTo(targetScreen.x, targetScreen.y);
+            ctx.setLineDash(DASH_PATTERN);
+            ctx.strokeStyle = currentColor;
+            ctx.lineWidth = LINE_WIDTH;
+            ctx.stroke();
+            ctx.setLineDash([]);
             if (showAngles) {
                 const angleBaseForArcRad = drawingContext.offsetAngleRad;
                 const currentLineAbsoluteAngleRad = snappedData.angle * (Math.PI / 180);
@@ -997,12 +1152,17 @@ function redrawAll() {
                 const arcRadius = 30;
                 let currentArcColor = currentShiftPressed ? 'rgba(230, 230, 100, 0.8)' : 'rgba(200, 200, 200, 0.7)';
                 drawAngleArc(startScreen, angleBaseForArcRad, arcEndAngleForSweepRad, arcRadius, currentArcColor, false);
-                ctx.save(); ctx.beginPath();
+                ctx.save();
+                ctx.beginPath();
                 const baseExtDataX = startPoint.x + Math.cos(angleBaseForArcRad) * 30 / viewTransform.scale;
                 const baseExtDataY = startPoint.y + Math.sin(angleBaseForArcRad) * 30 / viewTransform.scale;
                 const baseExtScreen = dataToScreen({ x: baseExtDataX, y: baseExtDataY });
-                ctx.moveTo(startScreen.x, startScreen.y); ctx.lineTo(baseExtScreen.x, baseExtScreen.y);
-                ctx.strokeStyle = 'rgba(180, 180, 180, 0.6)'; ctx.setLineDash([2, 3]); ctx.lineWidth = 1; ctx.stroke();
+                ctx.moveTo(startScreen.x, startScreen.y);
+                ctx.lineTo(baseExtScreen.x, baseExtScreen.y);
+                ctx.strokeStyle = 'rgba(180, 180, 180, 0.6)';
+                ctx.setLineDash([2, 3]);
+                ctx.lineWidth = 1;
+                ctx.stroke();
                 ctx.restore();
             }
             prepareSnapInfoTexts(startPoint, targetPosData, snappedData, currentShiftPressed, drawingContext);
@@ -1011,19 +1171,38 @@ function redrawAll() {
 
     if (previewAltSnapOnEdge && previewAltSnapOnEdge.pointData) {
         const snapMarkerPosScreen = dataToScreen(previewAltSnapOnEdge.pointData);
-        ctx.beginPath(); ctx.arc(snapMarkerPosScreen.x, snapMarkerPosScreen.y, POINT_RADIUS * 0.8, 0, 2 * Math.PI);
-        ctx.fillStyle = 'rgba(255, 255, 0, 0.7)'; ctx.fill();
-        ctx.strokeStyle = 'rgba(200, 200, 0, 0.9)'; ctx.lineWidth = 1; ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(snapMarkerPosScreen.x, snapMarkerPosScreen.y, POINT_RADIUS * 0.8, 0, 2 * Math.PI);
+        ctx.fillStyle = 'rgba(255, 255, 0, 0.7)';
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(200, 200, 0, 0.9)';
+        ctx.lineWidth = 1;
+        ctx.stroke();
     }
 
     if (isRectangleSelecting && isDragConfirmed && currentMouseButton === 2) {
-        ctx.strokeStyle = 'rgba(255,255,255,0.7)'; ctx.lineWidth = 1; ctx.setLineDash(DASH_PATTERN);
-        const rX = Math.min(rectangleSelectStartPos.x, mousePos.x); const rY = Math.min(rectangleSelectStartPos.y, mousePos.y);
-        const rW = Math.abs(rectangleSelectStartPos.x - mousePos.x); const rH = Math.abs(rectangleSelectStartPos.y - mousePos.y);
-        ctx.strokeRect(rX, rY, rW, rH); ctx.setLineDash([]); ctx.lineWidth = LINE_WIDTH;
+        ctx.strokeStyle = 'rgba(255,255,255,0.7)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash(DASH_PATTERN);
+        const rX = Math.min(rectangleSelectStartPos.x, mousePos.x);
+        const rY = Math.min(rectangleSelectStartPos.y, mousePos.y);
+        const rW = Math.abs(rectangleSelectStartPos.x - mousePos.x);
+        const rH = Math.abs(rectangleSelectStartPos.y - mousePos.y);
+        ctx.strokeRect(rX, rY, rW, rH);
+        ctx.setLineDash([]);
+        ctx.lineWidth = LINE_WIDTH;
     }
     cleanupHtmlLabels();
 }
+
+canvas.addEventListener('wheel', (event) => {
+    event.preventDefault();
+    const mouseScreen = getMousePosOnCanvas(event, canvas);
+    const scaleFactor = event.deltaY > 0 ? 1/1.15 : 1.15;
+    zoomAt(mouseScreen, scaleFactor);
+    redrawAll();
+});
+
 
 colorPicker.addEventListener('input', (event) => setCurrentColor(event.target.value));
 canvas.addEventListener('wheel', (event) => {
@@ -1116,87 +1295,216 @@ canvas.addEventListener('mousedown', (event) => {
     } else if (currentMouseButton === 2) { event.preventDefault(); actionTargetPoint = null; dragPreviewPoints = []; rectangleSelectStartPos = actionStartPos; canvas.style.cursor = 'default'; }
 });
 
+toggleGridCheckbox.addEventListener('change', (e) => {
+    showGrid = e.target.checked;
+    redrawAll();
+});
+
+gridTypeSelect.addEventListener('change', (e) => {
+    gridType = e.target.value;
+    redrawAll();
+});
+
+gridColorPicker.addEventListener('input', (e) => {
+    gridColor = e.target.value;
+    redrawAll();
+});
+
+gridAlphaInput.addEventListener('input', (e) => {
+    gridAlpha = parseFloat(e.target.value) || 0;
+    redrawAll();
+});
+
 canvas.addEventListener('mousemove', (event) => {
     mousePos = getMousePosOnCanvas(event, canvas);
-    const oldShiftPressed = currentShiftPressed; currentShiftPressed = event.shiftKey;
-    const currentAltPressed = event.altKey; let needsRedraw = false;
+    const oldShiftPressed = currentShiftPressed;
+    currentShiftPressed = event.shiftKey;
+    const currentAltPressed = event.altKey;
+    let needsRedraw = false;
+
+    const mouseData = screenToData(mousePos);
+    const displayX = convertToDisplayUnits(mouseData.x);
+    const displayY = convertToDisplayUnits(mouseData.y);
+
+    if (typeof window.katex !== 'undefined') {
+        let xValueForDisplay = displayX;
+        let yValueForDisplay = displayY;
+
+        if (typeof displayX === 'string') {
+            xValueForDisplay = parseFloat(displayX) || 0;
+            yValueForDisplay = parseFloat(displayY) || 0;
+        }
+
+        katex.render(formatNumber(xValueForDisplay, distanceSigFigs), mouseCoordXElement, { throwOnError: false, displayMode: false });
+        katex.render(formatNumber(yValueForDisplay, distanceSigFigs), mouseCoordYElement, { throwOnError: false, displayMode: false });
+    } else {
+        mouseCoordXElement.textContent = typeof displayX === 'string' ? displayX : formatNumber(displayX, distanceSigFigs);
+        mouseCoordYElement.textContent = typeof displayY === 'string' ? displayY : formatNumber(displayY, distanceSigFigs);
+    }
+
     if (currentAltPressed && !isActionInProgress) {
-        const mouseDataPos = screenToData(mousePos); const edgeHoverThresholdData = EDGE_CLICK_THRESHOLD / viewTransform.scale;
+        const mouseDataPos = screenToData(mousePos);
+        const edgeHoverThresholdData = EDGE_CLICK_THRESHOLD / viewTransform.scale;
         const hoveredEdgeInfo = findClosestEdgeInfo(mouseDataPos, edgeHoverThresholdData);
+
         if (hoveredEdgeInfo && hoveredEdgeInfo.edge) {
-            const edge = hoveredEdgeInfo.edge; const p1 = findPointById(edge.id1); const p2 = findPointById(edge.id2);
+            const edge = hoveredEdgeInfo.edge;
+            const p1 = findPointById(edge.id1);
+            const p2 = findPointById(edge.id2);
+
             if (p1 && p2) {
-                const dx = p2.x - p1.x; const dy = p2.y - p1.y; const lenSq = dx * dx + dy * dy; let t = 0;
+                const dx = p2.x - p1.x;
+                const dy = p2.y - p1.y;
+                const lenSq = dx * dx + dy * dy;
+                let t = 0;
                 if (lenSq > 1e-9) t = ((mouseDataPos.x - p1.x) * dx + (mouseDataPos.y - p1.y) * dy) / lenSq;
-                t = Math.max(0, Math.min(1, t)); const snappedT = snapTValue(t, SEGMENT_SNAP_FRACTIONS);
+                t = Math.max(0, Math.min(1, t));
+                const snappedT = snapTValue(t, SEGMENT_SNAP_FRACTIONS);
                 const snappedPointData = { x: p1.x + snappedT * dx, y: p1.y + snappedT * dy };
                 const currentEdgeIdentifier = edge.id1 < edge.id2 ? edge.id1 + edge.id2 : edge.id2 + edge.id1;
                 let previewEdgeIdentifier = null;
-                if (previewAltSnapOnEdge && previewAltSnapOnEdge.edge) { const prevEdge = previewAltSnapOnEdge.edge; previewEdgeIdentifier = prevEdge.id1 < prevEdge.id2 ? prevEdge.id1 + prevEdge.id2 : prevEdge.id2 + prevEdge.id1; }
-                if (!previewAltSnapOnEdge || previewEdgeIdentifier !== currentEdgeIdentifier || previewAltSnapOnEdge.pointData.x !== snappedPointData.x || previewAltSnapOnEdge.pointData.y !== snappedPointData.y) {
-                    previewAltSnapOnEdge = { edge: edge, pointData: snappedPointData, t_snapped: snappedT }; needsRedraw = true;
+                if (previewAltSnapOnEdge && previewAltSnapOnEdge.edge) {
+                    const prevEdge = previewAltSnapOnEdge.edge;
+                    previewEdgeIdentifier = prevEdge.id1 < prevEdge.id2 ? prevEdge.id1 + prevEdge.id2 : prevEdge.id2 + prevEdge.id1;
                 }
-            } else { if (previewAltSnapOnEdge !== null) { previewAltSnapOnEdge = null; needsRedraw = true; } }
-        } else { if (previewAltSnapOnEdge !== null) { previewAltSnapOnEdge = null; needsRedraw = true; } }
-    } else { if (previewAltSnapOnEdge !== null) { previewAltSnapOnEdge = null; needsRedraw = true; } }
+                if (!previewAltSnapOnEdge || previewEdgeIdentifier !== currentEdgeIdentifier || previewAltSnapOnEdge.pointData.x !== snappedPointData.x || previewAltSnapOnEdge.pointData.y !== snappedPointData.y) {
+                    previewAltSnapOnEdge = { edge: edge, pointData: snappedPointData, t_snapped: snappedT };
+                    needsRedraw = true;
+                }
+            } else {
+                if (previewAltSnapOnEdge !== null) {
+                    previewAltSnapOnEdge = null;
+                    needsRedraw = true;
+                }
+            }
+        } else {
+            if (previewAltSnapOnEdge !== null) {
+                previewAltSnapOnEdge = null;
+                needsRedraw = true;
+            }
+        }
+    } else {
+        if (previewAltSnapOnEdge !== null) {
+            previewAltSnapOnEdge = null;
+            needsRedraw = true;
+        }
+    }
+
     if (!isActionInProgress) {
         const hoveredPoint = findClickedPoint(mousePos);
         if (hoveredPoint) canvas.style.cursor = 'grab';
         else if (currentAltPressed && previewAltSnapOnEdge) canvas.style.cursor = 'crosshair';
         else if (!currentAltPressed) {
-            const mouseDataPos = screenToData(mousePos); const edgeHoverThresholdData = EDGE_CLICK_THRESHOLD / viewTransform.scale;
+            const mouseDataPos = screenToData(mousePos);
+            const edgeHoverThresholdData = EDGE_CLICK_THRESHOLD / viewTransform.scale;
             const hoveredEdgeForSelect = findClosestEdgeInfo(mouseDataPos, edgeHoverThresholdData);
-            if (hoveredEdgeForSelect) canvas.style.cursor = 'grab'; else canvas.style.cursor = 'crosshair';
+            if (hoveredEdgeForSelect) canvas.style.cursor = 'grab';
+            else canvas.style.cursor = 'crosshair';
         } else canvas.style.cursor = 'crosshair';
         if (isDrawingMode && previewLineStartPointId) needsRedraw = true;
         if (oldShiftPressed !== currentShiftPressed && isDrawingMode && previewLineStartPointId) needsRedraw = true;
-        if (needsRedraw) redrawAll(); return;
+        if (needsRedraw) redrawAll();
+        return;
     }
+
     if (!isDragConfirmed && distance(mousePos, actionStartPos) > DRAG_THRESHOLD) {
         isDragConfirmed = true;
-        if (currentMouseButton === 2 && !actionTargetPoint) { isRectangleSelecting = true; isDrawingMode = false; previewLineStartPointId = null; frozenReference_A_rad = null; frozenReference_A_baseRad = null; frozenReference_D_du = null; frozenReference_Origin_Data = null; canvas.style.cursor = 'default'; }
-        else if (currentMouseButton === 0 && actionTargetPoint) { isRectangleSelecting = false; canvas.style.cursor = 'grabbing'; }
-        else if (currentMouseButton === 0 && isPanningBackground) canvas.style.cursor = 'move';
+        if (currentMouseButton === 2 && !actionTargetPoint) {
+            isRectangleSelecting = true;
+            isDrawingMode = false;
+            previewLineStartPointId = null;
+            frozenReference_A_rad = null;
+            frozenReference_A_baseRad = null;
+            frozenReference_D_du = null;
+            frozenReference_Origin_Data = null;
+            canvas.style.cursor = 'default';
+        } else if (currentMouseButton === 0 && actionTargetPoint) {
+            isRectangleSelecting = false;
+            canvas.style.cursor = 'grabbing';
+        } else if (currentMouseButton === 0 && isPanningBackground) {
+            canvas.style.cursor = 'move';
+        }
         needsRedraw = true;
     }
+
     if (isDragConfirmed) {
         if (currentMouseButton === 0) {
             if (isPanningBackground) {
-                const deltaX = mousePos.x - actionStartPos.x; const deltaY = mousePos.y - actionStartPos.y;
-                viewTransform.offsetX = backgroundPanStartOffset.x + deltaX; viewTransform.offsetY = backgroundPanStartOffset.y - deltaY;
+                const deltaX_css = mousePos.x - actionStartPos.x;
+                const deltaY_css = mousePos.y - actionStartPos.y;
+                viewTransform.offsetX = backgroundPanStartOffset.x + (deltaX_css * dpr);
+                viewTransform.offsetY = backgroundPanStartOffset.y - (deltaY_css * dpr);
             } else if (actionTargetPoint) {
                 if (isTransformDrag && initialCenterStateForTransform && activeCenterId) {
                     const activeCenterCurrentPreview = dragPreviewPoints.find(p => p.id === activeCenterId);
-                    if (!activeCenterCurrentPreview) { isTransformDrag = false; redrawAll(); return; }
+                    if (!activeCenterCurrentPreview) {
+                        isTransformDrag = false;
+                        redrawAll();
+                        return;
+                    }
                     let currentCenterPosData = { x: initialCenterStateForTransform.x, y: initialCenterStateForTransform.y };
                     if (actionTargetPoint.id === activeCenterId) {
-                        const mouseData = screenToData(mousePos); const actionStartData = screenToData(actionStartPos);
-                        currentCenterPosData.x = initialCenterStateForTransform.x + (mouseData.x - actionStartData.x); currentCenterPosData.y = initialCenterStateForTransform.y + (mouseData.y - actionStartData.y);
-                        activeCenterCurrentPreview.x = currentCenterPosData.x; activeCenterCurrentPreview.y = currentCenterPosData.y;
-                    } else { currentCenterPosData = { x: activeCenterCurrentPreview.x, y: activeCenterCurrentPreview.y }; }
-                    const centerDef = findPointById(activeCenterId); if (!centerDef) { isTransformDrag = false; redrawAll(); return; }
+                        const mouseData = screenToData(mousePos);
+                        const actionStartData = screenToData(actionStartPos);
+                        currentCenterPosData.x = initialCenterStateForTransform.x + (mouseData.x - actionStartData.x);
+                        currentCenterPosData.y = initialCenterStateForTransform.y + (mouseData.y - actionStartData.y);
+                        activeCenterCurrentPreview.x = currentCenterPosData.x;
+                        activeCenterCurrentPreview.y = currentCenterPosData.y;
+                    } else {
+                        currentCenterPosData = { x: activeCenterCurrentPreview.x, y: activeCenterCurrentPreview.y };
+                    }
+                    const centerDef = findPointById(activeCenterId);
+                    if (!centerDef) {
+                        isTransformDrag = false;
+                        redrawAll();
+                        return;
+                    }
                     const doRotation = centerDef.type === 'center_rotate_scale' || centerDef.type === 'center_rotate_only';
                     const doScaling = centerDef.type === 'center_rotate_scale' || centerDef.type === 'center_scale_only';
-                    let overallDeltaAngle = 0; let overallScaleFactor = 1;
+                    let overallDeltaAngle = 0;
+                    let overallScaleFactor = 1;
                     const mouseDataCurrent = screenToData(mousePos);
-                    const mouseVecX = mouseDataCurrent.x - currentCenterPosData.x; const mouseVecY = mouseDataCurrent.y - currentCenterPosData.y;
-                    if (doRotation) { const currentMouseAngleRelCenter = Math.atan2(mouseVecY, mouseVecX); overallDeltaAngle = currentMouseAngleRelCenter - initialMouseAngleToCenter; }
-                    if (doScaling) { const currentMouseDistRelCenter = Math.sqrt(mouseVecX*mouseVecX + mouseVecY*mouseVecY); if (initialMouseDistanceToCenter > 0.001) overallScaleFactor = currentMouseDistRelCenter / initialMouseDistanceToCenter; }
+                    const mouseVecX = mouseDataCurrent.x - currentCenterPosData.x;
+                    const mouseVecY = mouseDataCurrent.y - currentCenterPosData.y;
+                    if (doRotation) {
+                        const currentMouseAngleRelCenter = Math.atan2(mouseVecY, mouseVecX);
+                        overallDeltaAngle = currentMouseAngleRelCenter - initialMouseAngleToCenter;
+                    }
+                    if (doScaling) {
+                        const currentMouseDistRelCenter = Math.sqrt(mouseVecX * mouseVecX + mouseVecY * mouseVecY);
+                        if (initialMouseDistanceToCenter > 0.001) overallScaleFactor = currentMouseDistRelCenter / initialMouseDistanceToCenter;
+                    }
                     initialStatesForTransform.forEach(initialPtState => {
-                        const pointToUpdateInPreview = dragPreviewPoints.find(dp => dp.id === initialPtState.id); if (!pointToUpdateInPreview) return;
-                        let relX = initialPtState.x - initialCenterStateForTransform.x; let relY = initialPtState.y - initialCenterStateForTransform.y;
-                        if (doScaling) { relX *= overallScaleFactor; relY *= overallScaleFactor; }
-                        if (doRotation) { const rX = relX*Math.cos(overallDeltaAngle) - relY*Math.sin(overallDeltaAngle); const rY = relX*Math.sin(overallDeltaAngle) + relY*Math.cos(overallDeltaAngle); relX=rX; relY=rY; }
-                        pointToUpdateInPreview.x = currentCenterPosData.x + relX; pointToUpdateInPreview.y = currentCenterPosData.y + relY;
+                        const pointToUpdateInPreview = dragPreviewPoints.find(dp => dp.id === initialPtState.id);
+                        if (!pointToUpdateInPreview) return;
+                        let relX = initialPtState.x - initialCenterStateForTransform.x;
+                        let relY = initialPtState.y - initialCenterStateForTransform.y;
+                        if (doScaling) {
+                            relX *= overallScaleFactor;
+                            relY *= overallScaleFactor;
+                        }
+                        if (doRotation) {
+                            const rX = relX * Math.cos(overallDeltaAngle) - relY * Math.sin(overallDeltaAngle);
+                            const rY = relX * Math.sin(overallDeltaAngle) + relY * Math.cos(overallDeltaAngle);
+                            relX = rX;
+                            relY = rY;
+                        }
+                        pointToUpdateInPreview.x = currentCenterPosData.x + relX;
+                        pointToUpdateInPreview.y = currentCenterPosData.y + relY;
                     });
                 } else {
-                    const mouseData = screenToData(mousePos); const actionStartData = screenToData(actionStartPos);
-                    const deltaX = mouseData.x - actionStartData.x; const deltaY = mouseData.y - actionStartData.y;
+                    const mouseData = screenToData(mousePos);
+                    const actionStartData = screenToData(actionStartPos);
+                    const deltaX = mouseData.x - actionStartData.x;
+                    const deltaY = mouseData.y - actionStartData.y;
                     dragPreviewPoints.forEach(previewPointRef => {
                         const originalPointFromAllPoints = allPoints.find(ap => ap.id === previewPointRef.id);
                         if (originalPointFromAllPoints) {
                             const previewPointToUpdate = dragPreviewPoints.find(dp => dp.id === previewPointRef.id);
-                            if(previewPointToUpdate) { previewPointToUpdate.x = originalPointFromAllPoints.x + deltaX; previewPointToUpdate.y = originalPointFromAllPoints.y + deltaY; }
+                            if (previewPointToUpdate) {
+                                previewPointToUpdate.x = originalPointFromAllPoints.x + deltaX;
+                                previewPointToUpdate.y = originalPointFromAllPoints.y + deltaY;
+                            }
                         }
                     });
                 }

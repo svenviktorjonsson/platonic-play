@@ -5,31 +5,50 @@ body {
     -webkit-user-select: none;
     -ms-user-select: none;
     user-select: none;
-    display: flex;
-    flex-direction: column;
-    height: 100vh;
+    display: flex; /* Make body a flex container */
+    flex-direction: column; /* Stack children (toolbar, canvas-container) vertically */
+    height: 100vh; /* Make body take full viewport height */
     background-color: #1a1a1a;
 }
 
 .toolbar {
+    display: flex; /* Make toolbar a flex container */
+    flex-direction: row; /* Arrange toolbar children horizontally */
+    align-items: center; /* Vertically align items in the middle of the toolbar */
+    justify-content: flex-start; /* Align items to the left (start) of the toolbar */
+    width: 100%; /* Ensure toolbar spans full width */
+    flex-shrink: 0; /* Prevent toolbar from shrinking vertically if content doesn't fit */
     padding: 8px 16px;
     background-color: #2d3748;
-    display: flex;
-    align-items: center;
-    justify-content: center;
     box-shadow: 0 2px 4px rgba(0,0,0,0.2);
     z-index: 10;
-    gap: 24px;
-    flex-shrink: 0; /* Prevent toolbar from shrinking */
+    gap: 24px; /* Space between the main sections (color, display, mouse coords, grid) */
+    box-sizing: border-box; /* Include padding in the width calculation */
+    flex-wrap: wrap; /* Allow items to wrap to the next line if space is too narrow */
 }
 
-.color-section {
-    display: flex;
-    align-items: center;
-    gap: 12px;
+/* Common styling for sections within the toolbar */
+.color-section,
+.display-section,
+.mouse-coords-toolbar,
+.grid-section {
+    display: flex; /* Make each section a flex container */
+    align-items: center; /* Vertically align content within the section */
+    gap: 12px; /* Default gap for elements within these sections */
+    flex-wrap: nowrap; /* Prevent individual sections from wrapping internally by default */
 }
 
-.color-section h3 {
+/* Specific adjustments for section alignment and spacing */
+.display-section,
+.mouse-coords-toolbar,
+.grid-section {
+    border-left: 1px solid #4a5568; /* Visual separator */
+    padding-left: 24px;
+    margin-left: 16px; /* Adjust margin to control spacing from previous section */
+}
+
+/* Headings within toolbar sections */
+.toolbar h3 {
     margin: 0;
     color: white;
     font-size: 0.9rem;
@@ -39,19 +58,6 @@ body {
 .color-picker-container {
     display: flex;
     align-items: center;
-}
-
-.display-section {
-    display: flex;
-    align-items: center;
-    gap: 16px;
-}
-
-.display-section h3 {
-    margin: 0;
-    color: white;
-    font-size: 0.9rem;
-    font-weight: 500;
 }
 
 .checkbox-container {
@@ -107,12 +113,6 @@ body {
     color: white;
 }
 
-.color-controls {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-}
-
 .toolbar input[type="color"] {
     width: 40px;
     height: 30px;
@@ -149,11 +149,11 @@ body {
 }
 
 .canvas-container {
-    flex-grow: 1;
-    width: 100%;
+    flex-grow: 1; /* Allow canvas container to take up remaining vertical space */
+    width: 100%; /* Ensure canvas container spans full width */
     display: flex;
-    align-items: stretch; 
-    justify-content: stretch; 
+    align-items: stretch; /* Stretch children (wrapper) */
+    justify-content: stretch; /* Stretch children (wrapper) */
     overflow: hidden; 
     padding: 0;
     margin: 0;
@@ -180,6 +180,48 @@ canvas#drawingCanvas {
     left: 0;
     pointer-events: none;
     overflow: visible; 
-    width: 100%; /* Will be synced by JS */
-    height: 100%; /* Will be synced by JS */
+    width: 100%;
+    height: 100%;
+}
+
+.mouse-coords-toolbar {
+    flex-direction: column; /* Stack X and Y labels/values vertically */
+    align-items: flex-start; /* Align X and Y to the left within their section */
+    gap: 4px; /* Space between X and Y lines */
+}
+
+.mouse-coords-toolbar .coord-display {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.85rem;
+    color: white;
+    white-space: nowrap;
+}
+
+.mouse-coords-toolbar .coord-label {
+    color: #cbd5e0;
+    font-weight: 600;
+}
+
+.mouse-coords-toolbar #mouseCoordX,
+.mouse-coords-toolbar #mouseCoordY {
+    font-family: 'KaTeX_Main', Times New Roman, serif;
+}
+
+.grid-section input[type="number"] {
+    width: 50px;
+    padding: 4px 8px;
+    border-radius: 4px;
+    border: 1px solid #4a5568;
+    background-color: #1a1a1a;
+    color: white;
+    font-size: 0.8rem;
+}
+
+/* Hide spinner for Chrome, Safari, Edge */
+.grid-section input[type=number]::-webkit-inner-spin-button,
+.grid-section input[type=number]::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
 }
