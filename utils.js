@@ -51,7 +51,29 @@ export function generateAngleSnapFractions(maxDenominator, maxResultingMultipleO
     return Array.from(fractionsSet).sort((a, b) => a - b);
 }
 
+export function generateDistanceSnapFactors() {
+    const fractionsSet = new Set();
+    fractionsSet.add(0);
+    // Denominators up to 6 for factors <= 1
+    for (let q = 1; q <= 6; q++) {
+        for (let p = 1; p <= q; p++) {
+            fractionsSet.add(p / q);
+        }
+    }
+    // Denominators 1 and 2 for factors > 1
+    for (let i = 1; i <= 10; i++) {
+        fractionsSet.add(i);
+        if (i > 1) {
+            fractionsSet.add(i - 0.5);
+        }
+    }
+    return Array.from(fractionsSet).sort((a, b) => a - b);
+}
+
+
 export function generateUniqueId() { return crypto.randomUUID(); }
+
+
 
 export function normalizeAngle(angleRad) {
     while (angleRad < 0) angleRad += 2 * Math.PI;
@@ -213,13 +235,15 @@ export function snapToAngle(targetAngleRad, offsetAngleRad, angleSnapFractionsAr
 }
 
 export function formatSnapFactor(factor, symbol) {
-    const fractionStr = formatFraction(factor, 0.001); 
-    if (fractionStr === "0") return `0${symbol}`;
-    if (fractionStr === "1") return symbol;
-    if (fractionStr === "-1") return `-${symbol}`;
+    const fractionStr = formatFraction(factor, 0.001);
+    const newSymbol = symbol === 'A' ? '\\theta' : (symbol === 'D' ? '\\delta' : symbol);
+    
+    if (fractionStr === "0") return `0${newSymbol}`;
+    if (fractionStr === "1") return newSymbol;
+    if (fractionStr === "-1") return `-${newSymbol}`;
 
     if (fractionStr.endsWith("/1")) {
-        return `${fractionStr.slice(0, -2)}${symbol}`;
+        return `${fractionStr.slice(0, -2)}${newSymbol}`;
     }
 
     if (fractionStr.includes('/')) {
@@ -234,8 +258,8 @@ export function formatSnapFactor(factor, symbol) {
         const num = parts[0];
         const den = parts[1];
         
-        if (num === "1") return `${sign}\\frac{1}{${den}}${symbol}`;
-        return `${sign}\\frac{${num}}{${den}}${symbol}`;
+        if (num === "1") return `${sign}\\frac{1}{${den}}${newSymbol}`;
+        return `${sign}\\frac{${num}}{${den}}${newSymbol}`;
     }
-    return `${fractionStr}${symbol}`;
+    return `${fractionStr}${newSymbol}`;
 }
