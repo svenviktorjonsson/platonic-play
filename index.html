@@ -31,40 +31,14 @@
                 <label for="showDistancesCheckbox">Distances</label>
             </div>
             
-            <div class="sigfig-container">
-                <label for="angleSigFigs">Angle:</label>
-                <select id="angleSigFigs">
-                    <option value="1">1 digit</option>
-                    <option value="2">2 digits</option>
-                    <option value="3">3 digits</option>
-                    <option value="4" selected>4 digits</option>
-                    <option value="5">5 digits</option>
-                </select>
+            <div class="control-group">
+                <label for="angleSigFigs">Angle Precision:</label>
+                <input type="number" id="angleSigFigs" value="4" min="1" max="10">
             </div>
             
-            <div class="sigfig-container">
-                <label for="distanceSigFigs">Distance:</label>
-                <select id="distanceSigFigs">
-                    <option value="1">1 digit</option>
-                    <option value="2">2 digits</option>
-                    <option value="3" selected>3 digits</option>
-                    <option value="4">4 digits</option>
-                    <option value="5">5 digits</option>
-                </select>
-            </div>
-            
-            <div class="sigfig-container">
-                <label for="unitsSelect">Units:</label>
-                <select id="unitsSelect">
-                    <option value="mm">mm</option>
-                    <option value="cm">cm</option>
-                    <option value="m" selected>m</option>
-                    <option value="km">km</option>
-                    <option value="in">in</option>
-                    <option value="ft">ft</option>
-                    <option value="yd">yd</option>
-                    <option value="mi">mi</option>
-                </select>
+            <div class="control-group">
+                <label for="distanceSigFigs">Distance Precision:</label>
+                <input type="number" id="distanceSigFigs" value="3" min="1" max="10">
             </div>
         </div>
 
@@ -87,7 +61,7 @@
                 <label for="gridTypeSelect">Type:</label>
                 <select id="gridTypeSelect">
                     <option value="points">Points</option>
-                    <option value="lines">Lines</option>
+                    <option value="lines" selected>Lines</option>
                 </select>
             </div>
             <div class="color-picker-container">

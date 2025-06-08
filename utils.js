@@ -95,6 +95,39 @@ export function normalizeAngleDegrees(angleDeg) {
     return angleDeg;
 }
 
+export function simplifySquareRoot(n) {
+    if (n < 0 || !Number.isInteger(n)) return [null, null];
+    if (n === 0) return [0, 1];
+    
+    let coefficient = 1;
+    let radicand = n;
+
+    for (let i = 2; i * i <= radicand; i++) {
+        while (radicand % (i * i) === 0) {
+            radicand /= (i * i);
+            coefficient *= i;
+        }
+    }
+
+    return [coefficient, radicand];
+}
+
+export function formatSimplifiedRoot(coeff, radicand, symbol = '') {
+    const symString = symbol ? `\\${symbol}` : '';
+
+    if (radicand === 1) {
+        // It's a perfect square, no root symbol needed.
+        if (coeff === 1 && symbol) return symString;
+        return `${coeff}${symString}`;
+    }
+    if (coeff === 1) {
+        // No coefficient needed.
+        return `\\sqrt{${radicand}}${symString}`;
+    }
+    // Default case
+    return `${coeff}\\sqrt{${radicand}}${symString}`;
+}
+
 export function snapTValue(t, fractions, snapThreshold = 0.05) {
     let bestSnappedT = t;
     let minDiff = snapThreshold;
