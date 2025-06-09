@@ -192,6 +192,12 @@ export function formatFraction(decimal, tolerance = 0.015, maxDisplayDenominator
     return originalSign + absDecimal.toFixed(fixedPrecision);
 }
 
+export function normalize(v) {
+    const mag = Math.hypot(v.x, v.y);
+    if (mag === 0) return { x: 0, y: 0 };
+    return { x: v.x / mag, y: v.y / mag };
+}
+
 export function getClosestPointOnLineSegment(p, a, b) {
     const abx = b.x - a.x;
     const aby = b.y - a.y;
