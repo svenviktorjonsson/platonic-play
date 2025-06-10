@@ -2,81 +2,24 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <title>Platonic Play</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css" integrity="sha384-n8MVd4RsNIU0tAv4ct0nTaAbDJwPJzDEaqSD1odI+WdtXRGWt2kTvGFasHpSy3SV" crossorigin="anonymous">
     <link rel="stylesheet" href="style.css">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css" integrity="sha384-wcIxkf4k558AjM3Yz3BBFQUbk/zgIYC2R0QpeeYb+TwlBVMrlgLqwRjRtGZiK7ww" crossorigin="anonymous">
-<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js" integrity="sha384-hIoBPJpTUs74ddyc4bFZSM1TVlQDA60VBbJS0oA934VSz82sBx1X7kSx2ATBDIyd" crossorigin="anonymous"></script>
 </head>
 <body>
-    <div class="toolbar">
-        <div class="color-section">
-            <h3>Color</h3>
-            <div class="color-picker-container">
-                <input type="color" id="colorPicker" value="#ffffff">
-            </div>
-            <div id="colorPalette" class="color-palette"></div>
-        </div>
-        
-        <div class="display-section">
-            <h3>Display</h3>
-            
-            <div class="checkbox-container">
-                <input type="checkbox" id="showAnglesCheckbox" checked>
-                <label for="showAnglesCheckbox">Angles</label>
-            </div>
-            
-            <div class="checkbox-container">
-                <input type="checkbox" id="showDistancesCheckbox" checked>
-                <label for="showDistancesCheckbox">Distances</label>
-            </div>
-            
-            <div class="control-group">
-                <label for="angleSigFigs">Angle Precision:</label>
-                <input type="number" id="angleSigFigs" value="4" min="1" max="10">
-            </div>
-            
-            <div class="control-group">
-                <label for="distanceSigFigs">Distance Precision:</label>
-                <input type="number" id="distanceSigFigs" value="3" min="1" max="10">
-            </div>
-        </div>
-
-        <div class="mouse-coords-toolbar">
-            <div class="coord-display" id="mouseCoordX"></div>
-            <div class="coord-display" id="mouseCoordY"></div>
-        </div>
-
-        <div class="grid-section">
-            <h3>Grid</h3>
-            <div class="checkbox-container">
-                <input type="checkbox" id="toggleGridCheckbox">
-                <label for="toggleGridCheckbox">Show Grid</label>
-            </div>
-            <div class="sigfig-container">
-                <label for="gridTypeSelect">Type:</label>
-                <select id="gridTypeSelect">
-                    <option value="points">Points</option>
-                    <option value="lines" selected>Lines</option>
-                </select>
-            </div>
-            <div class="color-picker-container">
-                <input type="color" id="gridColorPicker" value="#888888">
-            </div>
-            <div class="sigfig-container">
-                <label for="gridAlphaInput">Alpha:</label>
-                <input type="number" id="gridAlphaInput" min="0" max="1" step="0.05" value="0.5">
+    <div class="container">
+        <div class="canvas-container">
+            <div class="canvas-wrapper-relative">
+                <canvas id="drawingCanvas"></canvas>
+                <div id="html-overlay"></div>
             </div>
         </div>
     </div>
-    
-    <div class="canvas-container">
-       <div class="canvas-wrapper-relative">
-            <canvas id="drawingCanvas"></canvas>
-            <div id="html-overlay"></div>
-       </div>
-    </div>
 
+    <input type="color" id="colorPicker" value="#ffffff">
+
+    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js" integrity="sha384-XjKyOOlGwcjNTAIQHIpgOno0Hl1YQqzUOEleOLALmuqehneUG+vnGctmUb0ZY0l8" crossorigin="anonymous"></script>
     <script type="module" src="script.js"></script>
 </body>
 </html>

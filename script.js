@@ -8,6 +8,7 @@ import {
     generateDistanceSnapFactors,
     distance,
     formatFraction,
+    hslToRgb,
     getClosestPointOnLineSegment,
     getMousePosOnCanvas,
     snapToAngle,
@@ -18,15 +19,8 @@ import {
 
 const canvas = document.getElementById('drawingCanvas');
 const ctx = canvas.getContext('2d');
-const colorPicker = document.getElementById('colorPicker');
-const colorPalette = document.getElementById('colorPalette');
 const htmlOverlay = document.getElementById('html-overlay');
-const mouseCoordXElement = document.getElementById('mouseCoordX');
-const mouseCoordYElement = document.getElementById('mouseCoordY');
-const toggleGridCheckbox = document.getElementById('toggleGridCheckbox');
-const gridTypeSelect = document.getElementById('gridTypeSelect');
-const gridColorPicker = document.getElementById('gridColorPicker');
-const gridAlphaInput = document.getElementById('gridAlphaInput');
+const colorPicker = document.getElementById('colorPicker');
 
 const POINT_RADIUS = 5;
 const CENTER_POINT_VISUAL_RADIUS = POINT_RADIUS * 2;
@@ -45,6 +39,10 @@ const DEFAULT_CALIBRATION_VIEW_SCALE = 80.0;
 const DEFAULT_REFERENCE_DISTANCE = 1.0;
 const DEFAULT_REFERENCE_ANGLE_RAD = Math.PI / 2;
 
+const UI_BUTTON_PADDING = 10;
+const UI_TOOLBAR_WIDTH = 56;
+const UI_SWATCH_SIZE = 30;
+
 let frozenReference_A_rad = null;
 let frozenReference_A_baseRad = null;
 let frozenReference_D_du = null;
@@ -52,6 +50,7 @@ let frozenReference_Origin_Data = null;
 let currentDrawingFirstSegmentAbsoluteAngleRad = null;
 let dragBoundaryContext = null;
 let isMouseOverCanvas = false;
+let placingSnapPos = null;
 
 let allPoints = [];
 let allEdges = [];
@@ -61,6 +60,25 @@ let activeCenterId = null;
 let mousePos = { x: 0, y: 0 };
 let currentColor = '#ffffff';
 let frozenReference_D_g2g = null; // Will store { g2gSquaredSum, interval }
+let isToolbarExpanded = false;
+let isColorPaletteExpanded = false;
+let selectedSwatchIndex = null;
+// Add these new state variables at the top of your script
+let isTransformPanelExpanded = false;
+let isPlacingTransform = false;
+let placingTransformType = null;
+
+// Default states for UI controls that were in HTML
+let showAngles = true;
+let showDistances = true;
+let angleSigFigs = 4;
+let distanceSigFigs = 3;
+let showGrid = true;
+let gridType = 'points';
+let gridColor = '#888888';
+let gridAlpha = 0.5;
+let colorWheelIcon = null
+let transformIndicatorData = null;
 
 let viewTransform = {
     scale: DEFAULT_CALIBRATION_VIEW_SCALE,
@@ -85,31 +103,14 @@ let isDrawingMode = false;
 let previewLineStartPointId = null;
 let actionTargetPoint = null;
 let isTransformDrag = false;
-let initialCenterStateForTransform = null;
-let initialStatesForTransform = [];
-let initialMouseAngleToCenter = 0;
-let initialMouseDistanceToCenter = 0;
 let dragPreviewPoints = [];
-let shiftKeyAtActionStart = false;
 let currentShiftPressed = false;
-let ctrlKeyAtActionStart = false;
-let lastCanvasClickTime = 0;
 let clipboard = { points: [], edges: [], referencePoint: null };
 let clickData = { targetId: null, type: null, count: 0, timestamp: 0 };
 let undoStack = [];
 let redoStack = [];
-let showAngles = true;
-let showDistances = true;
-let angleSigFigs = 4;
-let distanceSigFigs = 3;
-let previewAltSnapOnEdge = null;
-let showGrid = false;
-let gridType = 'points';
-let gridColor = '#888888';
-let gridAlpha = 0.5;
 let ghostPointPosition = null;
-let isPlacingTransformationObject = false;
-let transformationObjectType = null;
+let selectedCenterIds = []; // ADD THIS NEW STATE VARIABLE
 
 let lastGridState = {
     interval1: null,
@@ -207,6 +208,197 @@ function solveForPoint(N1, N2, d1, alpha) {
 const activeHtmlLabels = new Map();
 let labelsToKeepThisFrame = new Set();
 
+function handleCenterSelection(centerId, shiftKey, ctrlKey) {
+    if (ctrlKey) {
+        const index = selectedCenterIds.indexOf(centerId);
+        if (index > -1) {
+            selectedCenterIds.splice(index, 1);
+        } else {
+            selectedCenterIds.push(centerId);
+        }
+    } else if (shiftKey) {
+        if (!selectedCenterIds.includes(centerId)) {
+            selectedCenterIds.push(centerId);
+        }
+    } else {
+        selectedPointIds = [];
+        selectedEdgeIds = [];
+        if (selectedCenterIds.length === 1 && selectedCenterIds[0] === centerId) {
+            return;
+        }
+        selectedCenterIds = [centerId];
+    }
+    activeCenterId = selectedCenterIds.length > 0 ? selectedCenterIds[selectedCenterIds.length - 1] : null;
+}
+
+function getTransformSnap(center, mouseDataPos, startReferencePoint, transformType) {
+    const allCandidates = [];
+    const startVector = { x: startReferencePoint.x - center.x, y: startReferencePoint.y - center.y };
+    const startDist = Math.hypot(startVector.x, startVector.y);
+    const startAngle = Math.atan2(startVector.y, startVector.x);
+
+    const gridInterval = (lastGridState.alpha2 > lastGridState.alpha1 && lastGridState.interval2) ? lastGridState.interval2 : lastGridState.interval1;
+    if (gridInterval > 0) {
+        const baseGridX = Math.round(mouseDataPos.x / gridInterval) * gridInterval;
+        const baseGridY = Math.round(mouseDataPos.y / gridInterval) * gridInterval;
+        for (let dx = -2; dx <= 2; dx++) {
+            for (let dy = -2; dy <= 2; dy++) {
+                allCandidates.push({
+                    pos: { x: baseGridX + dx * gridInterval, y: baseGridY + dy * gridInterval },
+                    type: 'grid', pureRotation: null, pureScale: null
+                });
+            }
+        }
+    }
+
+    if (startDist > 1e-9) {
+        const scaleSnapFactors = SNAP_FACTORS.filter(f => f > 0);
+        const angleSnapFractions = NINETY_DEG_ANGLE_SNAP_FRACTIONS;
+        const useAngleSnaps = transformType !== 'center_scale_only';
+        const useScaleSnaps = transformType !== 'center_rotate_only';
+
+        const rotationSnaps = useAngleSnaps ? angleSnapFractions.flatMap(f => (f === 0 ? [0] : [f * Math.PI / 2, -f * Math.PI / 2])) : [0];
+        const scaleSnaps = useScaleSnaps ? scaleSnapFactors : [1];
+
+        for (const rot of rotationSnaps) {
+            for (const factor of scaleSnaps) {
+                const dist = startDist * factor;
+                allCandidates.push({
+                    pos: { x: center.x + dist * Math.cos(startAngle + rot), y: center.y + dist * Math.sin(startAngle + rot) },
+                    type: 'transform', pureRotation: rot, pureScale: factor
+                });
+            }
+        }
+    }
+
+    if (allCandidates.length === 0) return { snapped: false };
+
+    let bestCandidate = allCandidates.reduce((best, current) => {
+        const distSq = (p, c) => (p.x - c.pos.x) ** 2 + (p.y - c.pos.y) ** 2;
+        return distSq(mouseDataPos, current) < distSq(mouseDataPos, best) ? current : best;
+    });
+
+    const finalVec = { x: bestCandidate.pos.x - center.x, y: bestCandidate.pos.y - center.y };
+    const finalRotation = normalizeAngleToPi(Math.atan2(finalVec.y, finalVec.x) - startAngle);
+    const finalScale = (startDist > 1e-9) ? Math.hypot(finalVec.x, finalVec.y) / startDist : 1;
+
+    return {
+        snapped: true,
+        pos: bestCandidate.pos,
+        rotation: bestCandidate.pureRotation ?? finalRotation,
+        scale: bestCandidate.pureScale ?? finalScale,
+        pureScaleForDisplay: bestCandidate.pureScale
+    };
+}
+
+function drawTransformIndicators(ctx) {
+    if (!transformIndicatorData) return;
+
+    const { center, startPos, currentPos, rotation, scale, isSnapping, snappedScaleValue, transformType } = transformIndicatorData;
+
+    const centerScreen = dataToScreen(center);
+    const startScreen = dataToScreen(startPos);
+    const currentScreen = dataToScreen(currentPos);
+
+    const color = isSnapping ? 'rgba(240, 240, 130, 0.95)' : 'rgba(230, 230, 230, 0.95)';
+    const katexFontSize = 12;
+
+    const startVecScreen = { x: startScreen.x - centerScreen.x, y: startScreen.y - centerScreen.y };
+    const currentVecScreen = { x: currentScreen.x - centerScreen.x, y: currentScreen.y - centerScreen.y };
+
+    const startAngleScreen = Math.atan2(startVecScreen.y, startVecScreen.x);
+    const currentAngleScreen = Math.atan2(currentVecScreen.y, currentVecScreen.x);
+    const arcRadius = Math.hypot(startVecScreen.x, startVecScreen.y);
+
+    ctx.save();
+    ctx.setLineDash(DASH_PATTERN);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1;
+
+    ctx.beginPath();
+    ctx.moveTo(centerScreen.x, centerScreen.y);
+    ctx.lineTo(startScreen.x, startScreen.y);
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.moveTo(centerScreen.x, centerScreen.y);
+    ctx.lineTo(currentScreen.x, currentScreen.y);
+    ctx.stroke();
+
+    ctx.setLineDash([]);
+
+    if (transformType !== 'center_scale_only' && Math.abs(rotation) > 0.001) {
+        const screenRotation = -rotation;
+        const anticlockwise = screenRotation < 0;
+        ctx.beginPath();
+        ctx.arc(centerScreen.x, centerScreen.y, arcRadius, startAngleScreen, startAngleScreen + screenRotation, anticlockwise);
+        ctx.stroke();
+    }
+    ctx.restore();
+
+    if (transformType !== 'center_scale_only' && Math.abs(rotation) > 0.001) {
+        const angleDeg = rotation * (180 / Math.PI);
+        const angleText = `${formatNumber(angleDeg, angleSigFigs)}^{\\circ}`;
+        const angleDiff = normalizeAngleToPi(currentAngleScreen - startAngleScreen);
+        const bisectorAngle = startAngleScreen + angleDiff / 2;
+        const labelRadius = arcRadius + 20;
+        const angleTextX = centerScreen.x + labelRadius * Math.cos(bisectorAngle);
+        const angleTextY = centerScreen.y + labelRadius * Math.sin(bisectorAngle);
+
+        updateHtmlLabel({
+            id: 'transform-angle-indicator',
+            content: angleText,
+            x: angleTextX,
+            y: angleTextY,
+            color: color,
+            fontSize: katexFontSize,
+            options: { textAlign: 'center', textBaseline: 'middle' }
+        });
+    }
+
+    if (transformType !== 'center_rotate_only' && Math.abs(scale - 1) > 0.001) {
+        let scaleText;
+        if (isSnapping && snappedScaleValue !== null) {
+            scaleText = `\\times ${formatFraction(snappedScaleValue, 0.001, 10)}`;
+        } else {
+            scaleText = `\\times ${formatNumber(scale, distanceSigFigs)}`;
+        }
+
+        const midX = (centerScreen.x + currentScreen.x) / 2;
+        const midY = (centerScreen.y + currentScreen.y) / 2;
+        let textPerpAngle = currentAngleScreen - Math.PI / 2;
+        const textOffset = 18;
+        const scaleTextX = midX + Math.cos(textPerpAngle) * textOffset;
+        const scaleTextY = midY + Math.sin(textPerpAngle) * textOffset;
+
+        let rotationDeg = currentAngleScreen * (180 / Math.PI);
+        if (rotationDeg > 90 || rotationDeg < -90) {
+            rotationDeg += 180;
+        }
+
+        updateHtmlLabel({
+            id: 'transform-scale-indicator',
+            content: scaleText,
+            x: scaleTextX,
+            y: scaleTextY,
+            color: color,
+            fontSize: katexFontSize,
+            options: { textAlign: 'center', textBaseline: 'bottom', rotation: rotationDeg }
+        });
+    }
+}
+
+function initializeCanvasUI() {
+    canvasUI.toolbarButton = {
+        id: "toolbar-button",
+        x: UI_BUTTON_PADDING,
+        y: UI_BUTTON_PADDING,
+        width: 36,
+        height: 30,
+        type: "menuButton"
+    };
+}
+
 function calculateGridIntervals(viewTransformScale) {
     const targetScreenSpacing = 80;
     const effectiveDataInterval = targetScreenSpacing / viewTransformScale;
@@ -239,57 +431,436 @@ function calculateGridIntervals(viewTransformScale) {
     return { grid1Interval, grid2Interval, alpha1, alpha2 };
 }
 
+const canvasUI = {
+    toolbarButton: null,
+    mainToolbar: null,
+    colorToolButton: null,
+    colorSwatches: [],
+    addColorButton: null
+};
+
+function buildMainToolbarUI() {
+    const canvasHeight = canvas.height / dpr;
+    canvasUI.mainToolbar = {
+        id: "main-toolbar-bg",
+        x: 0,
+        y: 0,
+        width: UI_TOOLBAR_WIDTH,
+        height: canvasHeight,
+        type: "toolbar"
+    };
+
+    canvasUI.colorToolButton = {
+        id: "color-tool-button",
+        type: "toolButton",
+        x: UI_BUTTON_PADDING,
+        y: canvasUI.toolbarButton.y + canvasUI.toolbarButton.height + 20,
+        width: UI_TOOLBAR_WIDTH - (2 * UI_BUTTON_PADDING),
+        height: 40,
+    };
+    
+    // Add the new Transform Tool button below the color button
+    canvasUI.transformToolButton = {
+        id: "transform-tool-button",
+        type: "toolButton",
+        x: UI_BUTTON_PADDING,
+        y: canvasUI.colorToolButton.y + canvasUI.colorToolButton.height + UI_BUTTON_PADDING,
+        width: UI_TOOLBAR_WIDTH - (2 * UI_BUTTON_PADDING),
+        height: 40,
+    };
+}
+
+function buildTransformPanelUI() {
+    canvasUI.transformIcons = [];
+    const panelX = UI_TOOLBAR_WIDTH + UI_BUTTON_PADDING;
+    const iconY = canvasUI.transformToolButton.y;
+    const iconSize = 30;
+    const iconPadding = 15;
+    const transformTypes = ['center_rotate_scale', 'center_rotate_only', 'center_scale_only'];
+
+    transformTypes.forEach((type, index) => {
+        canvasUI.transformIcons.push({
+            id: `transform-icon-${type}`,
+            type: type,
+            x: panelX + index * (iconSize + iconPadding),
+            y: iconY + 5, // Align vertically with the T button
+            width: iconSize,
+            height: iconSize
+        });
+    });
+}
+
+function buildColorPaletteUI() {
+    canvasUI.colorSwatches = [];
+    // This is the corrected line: The Y position is now based on the color tool button
+    const paletteY = canvasUI.colorToolButton.y;
+
+    const removeBtnX = UI_TOOLBAR_WIDTH + UI_BUTTON_PADDING;
+    canvasUI.removeColorButton = {
+        id: "remove-color-button",
+        type: "button",
+        x: removeBtnX,
+        y: paletteY + 5, // Add a small offset to center it with the button
+        width: UI_SWATCH_SIZE,
+        height: UI_SWATCH_SIZE,
+    };
+
+    const swatchesX = removeBtnX + UI_SWATCH_SIZE + UI_BUTTON_PADDING;
+    recentColors.forEach((color, index) => {
+        canvasUI.colorSwatches.push({
+            id: `swatch-${color}-${index}`,
+            type: "colorSwatch",
+            x: swatchesX + index * (UI_SWATCH_SIZE + UI_BUTTON_PADDING),
+            y: paletteY + 5, // Add a small offset to center it with the button
+            width: UI_SWATCH_SIZE,
+            height: UI_SWATCH_SIZE,
+            index: index,
+            color: color
+        });
+    });
+
+    const addButtonX = swatchesX + recentColors.length * (UI_SWATCH_SIZE + UI_BUTTON_PADDING);
+    canvasUI.addColorButton = {
+        id: "add-color-button",
+        type: "button",
+        x: addButtonX,
+        y: paletteY + 5, // Add a small offset to center it with the button
+        width: UI_SWATCH_SIZE,
+        height: UI_SWATCH_SIZE,
+    };
+}
+
+// Replace your existing createColorWheelIcon function with this one
+function createColorWheelIcon(size) {
+    const tempCanvas = document.createElement('canvas');
+    tempCanvas.width = size * dpr;
+    tempCanvas.height = size * dpr;
+    const tempCtx = tempCanvas.getContext('2d');
+    const imageData = tempCtx.createImageData(tempCanvas.width, tempCanvas.height);
+    const pixels = imageData.data;
+
+    const centerX = tempCanvas.width / 2;
+    const centerY = tempCanvas.height / 2;
+    const radius = tempCanvas.width / 2;
+
+    for (let y = 0; y < tempCanvas.height; y++) {
+        for (let x = 0; x < tempCanvas.width; x++) {
+            const i = (y * tempCanvas.width + x) * 4;
+            const dx = x - centerX;
+            const dy = y - centerY;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+
+            if (dist > radius) continue;
+
+            const hue = (Math.atan2(dy, dx) * 180 / Math.PI + 360) % 360;
+            const saturation = 100; // Saturation is now always 100%
+            const lightness = 50;
+
+            let alpha;
+            const fadeStartRadius = radius * 0.75;
+
+            if (dist < fadeStartRadius) {
+                alpha = 1.0; // Opaque inside 75% of the radius
+            } else {
+                // Smoothly fade from opaque to transparent on the outer edge
+                const fadeDistance = radius - fadeStartRadius;
+                alpha = 1.0 - ((dist - fadeStartRadius) / fadeDistance);
+            }
+
+            const [R, G, B] = hslToRgb(hue / 360, saturation / 100, lightness / 100);
+
+            pixels[i] = R;
+            pixels[i + 1] = G;
+            pixels[i + 2] = B;
+            pixels[i + 3] = Math.round(Math.max(0, alpha) * 255);
+        }
+    }
+
+    tempCtx.putImageData(imageData, 0, 0);
+    return tempCanvas;
+}
+
+function drawCanvasUI(ctx) {
+    ctx.save();
+    ctx.resetTransform();
+    ctx.scale(dpr, dpr);
+
+    const btn = canvasUI.toolbarButton;
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.8)";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    for (let i = 0; i < 3; i++) {
+        const lineY = btn.y + 5 + i * 10;
+        ctx.moveTo(btn.x + 4, lineY);
+        ctx.lineTo(btn.x + btn.width - 4, lineY);
+    }
+    ctx.stroke();
+
+    if (isToolbarExpanded) {
+        const ctb = canvasUI.colorToolButton;
+        if (!colorWheelIcon) {
+            colorWheelIcon = createColorWheelIcon(ctb.width);
+        }
+        ctx.drawImage(colorWheelIcon, ctb.x, ctb.y, ctb.width, ctb.height);
+        if (isColorPaletteExpanded) {
+            ctx.strokeStyle = "rgba(255, 255, 255, 0.9)";
+            ctx.lineWidth = 2.5;
+            const radius = ctb.width / 2;
+            ctx.beginPath();
+            ctx.arc(ctb.x + ctb.width / 2, ctb.y + ctb.height / 2, radius + 1, 0, 2 * Math.PI);
+            ctx.stroke();
+        }
+
+        const ttb = canvasUI.transformToolButton;
+        if (ttb) {
+            const labelColor = isTransformPanelExpanded ? "#00ffff" : "white";
+            updateHtmlLabel({
+                id: 'transform-tool-label',
+                content: 'T',
+                x: ttb.x + ttb.width / 2,
+                y: ttb.y + ttb.height / 2,
+                color: labelColor,
+                fontSize: 24,
+                options: {
+                    textAlign: 'center',
+                    textBaseline: 'middle'
+                }
+            });
+            labelsToKeepThisFrame.add('transform-tool-label');
+        }
+    }
+
+    if (!isToolbarExpanded) {
+        labelsToKeepThisFrame.delete('transform-tool-label');
+    }
+
+    if (isColorPaletteExpanded) {
+        const removeBtn = canvasUI.removeColorButton;
+        if (removeBtn) {
+            ctx.strokeStyle = "rgba(255, 255, 255, 0.8)";
+            ctx.lineWidth = 2;
+            ctx.strokeRect(removeBtn.x, removeBtn.y, removeBtn.width, removeBtn.height);
+            ctx.beginPath();
+            ctx.moveTo(removeBtn.x + 7, removeBtn.y + removeBtn.height / 2);
+            ctx.lineTo(removeBtn.x + removeBtn.width - 7, removeBtn.y + removeBtn.height / 2);
+            ctx.stroke();
+        }
+        canvasUI.colorSwatches.forEach((swatch, index) => {
+            ctx.fillStyle = swatch.color;
+            ctx.fillRect(swatch.x, swatch.y, swatch.width, swatch.height);
+            if (index === selectedSwatchIndex) {
+                ctx.strokeStyle = "#00ffff";
+                ctx.lineWidth = 3;
+                ctx.strokeRect(swatch.x - 1, swatch.y - 1, swatch.width + 2, swatch.height + 2);
+            }
+        });
+        const addBtn = canvasUI.addColorButton;
+        if (addBtn) {
+            ctx.strokeStyle = "rgba(255, 255, 255, 0.8)";
+            ctx.lineWidth = 2;
+            ctx.strokeRect(addBtn.x, addBtn.y, addBtn.width, addBtn.height);
+            ctx.beginPath();
+            ctx.moveTo(addBtn.x + addBtn.width / 2, addBtn.y + 7);
+            ctx.lineTo(addBtn.x + addBtn.width / 2, addBtn.y + addBtn.height - 7);
+            ctx.moveTo(addBtn.x + 7, addBtn.y + addBtn.height / 2);
+            ctx.lineTo(addBtn.x + addBtn.width - 7, addBtn.y + addBtn.height / 2);
+            ctx.stroke();
+        }
+    }
+
+    if (isTransformPanelExpanded) {
+        canvasUI.transformIcons.forEach(icon => {
+            drawUITransformSymbol(ctx, icon);
+        });
+    }
+
+    if (isPlacingTransform) {
+        const finalDrawPos = placingSnapPos || mousePos;
+        const ghostIcon = {
+            type: placingTransformType,
+            x: finalDrawPos.x - 15,
+            y: finalDrawPos.y - 15,
+            width: 30,
+            height: 30
+        };
+        drawUITransformSymbol(ctx, ghostIcon);
+    }
+
+    ctx.restore();
+}
+
+// Add this new function to your script
+function drawUITransformSymbol(ctx, icon) {
+    const screenPos = { x: icon.x + icon.width / 2, y: icon.y + icon.height / 2 };
+    const radius = icon.width / 2;
+
+    ctx.strokeStyle = 'white';
+    ctx.setLineDash([]);
+    ctx.lineWidth = 2;
+
+    if (icon.type === 'center_rotate_scale') {
+        ctx.beginPath();
+        ctx.arc(screenPos.x, screenPos.y, radius, 0, 2 * Math.PI);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(screenPos.x - radius, screenPos.y);
+        ctx.lineTo(screenPos.x + radius, screenPos.y);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(screenPos.x, screenPos.y - radius);
+        ctx.lineTo(screenPos.x, screenPos.y + radius);
+        ctx.stroke();
+    } else if (icon.type === 'center_rotate_only') {
+        ctx.beginPath();
+        ctx.arc(screenPos.x, screenPos.y, radius, 0, 2 * Math.PI);
+        ctx.stroke();
+    } else if (icon.type === 'center_scale_only') {
+        ctx.beginPath();
+        ctx.moveTo(screenPos.x - radius, screenPos.y);
+        ctx.lineTo(screenPos.x + radius, screenPos.y);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(screenPos.x, screenPos.y - radius);
+        ctx.lineTo(screenPos.x, screenPos.y + radius);
+        ctx.stroke();
+    }
+}
+
+function handleCanvasUIClick(screenPos) {
+    const btn = canvasUI.toolbarButton;
+    if (screenPos.x >= btn.x && screenPos.x <= btn.x + btn.width &&
+        screenPos.y >= btn.y && screenPos.y <= btn.y + btn.height) {
+        isToolbarExpanded = !isToolbarExpanded;
+        if (isToolbarExpanded) {
+            buildMainToolbarUI();
+        } else {
+            isColorPaletteExpanded = false;
+            isTransformPanelExpanded = false;
+            selectedSwatchIndex = null;
+        }
+        return true;
+    }
+
+    if (isToolbarExpanded) {
+        const ctb = canvasUI.colorToolButton;
+        if (screenPos.x >= ctb.x && screenPos.x <= ctb.x + ctb.width &&
+            screenPos.y >= ctb.y && screenPos.y <= ctb.y + ctb.height) {
+            isColorPaletteExpanded = !isColorPaletteExpanded;
+            isTransformPanelExpanded = false;
+            if (isColorPaletteExpanded) {
+                buildColorPaletteUI();
+            } else {
+                selectedSwatchIndex = null;
+            }
+            return true;
+        }
+        
+        const ttb = canvasUI.transformToolButton;
+        if (ttb && screenPos.x >= ttb.x && screenPos.x <= ttb.x + ttb.width &&
+            screenPos.y >= ttb.y && screenPos.y <= ttb.y + ttb.height) {
+            isTransformPanelExpanded = !isTransformPanelExpanded;
+            isColorPaletteExpanded = false;
+            if (isTransformPanelExpanded) {
+                buildTransformPanelUI();
+            }
+            return true;
+        }
+    }
+
+    if (isColorPaletteExpanded) {
+        for (const swatch of canvasUI.colorSwatches) {
+            if (screenPos.x >= swatch.x && screenPos.x <= swatch.x + swatch.width &&
+                screenPos.y >= swatch.y && screenPos.y <= swatch.y + swatch.height) {
+                setCurrentColor(swatch.color);
+                selectedSwatchIndex = swatch.index;
+                return true;
+            }
+        }
+        const removeBtn = canvasUI.removeColorButton;
+        if (removeBtn && screenPos.x >= removeBtn.x && screenPos.x <= removeBtn.x + removeBtn.width &&
+            screenPos.y >= removeBtn.y && screenPos.y <= removeBtn.y + removeBtn.height) {
+            if (selectedSwatchIndex === null && recentColors.length > 0) {
+                selectedSwatchIndex = 0;
+            }
+            if (selectedSwatchIndex !== null) {
+                recentColors.splice(selectedSwatchIndex, 1);
+                if (recentColors.length === 0) {
+                    selectedSwatchIndex = null;
+                } else {
+                    selectedSwatchIndex = Math.min(selectedSwatchIndex, recentColors.length - 1);
+                }
+                if(selectedSwatchIndex !== null) {
+                    setCurrentColor(recentColors[selectedSwatchIndex]);
+                }
+                buildColorPaletteUI();
+            }
+            return true;
+        }
+        const addBtn = canvasUI.addColorButton;
+        if (addBtn && screenPos.x >= addBtn.x && screenPos.x <= addBtn.x + addBtn.height) {
+            setTimeout(() => { colorPicker.click(); }, 0);
+            return true;
+        }
+    }
+    
+    if (isTransformPanelExpanded) {
+        for (const icon of canvasUI.transformIcons) {
+            if (screenPos.x >= icon.x && screenPos.x <= icon.x + icon.width &&
+                screenPos.y >= icon.y && screenPos.y <= icon.y + icon.height) {
+                isPlacingTransform = true;
+                placingTransformType = icon.type;
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+function addToRecentColors(color) {
+    if (recentColors.includes(color)) {
+        return;
+    }
+    recentColors.push(color);
+
+    if (isColorPaletteExpanded) {
+        buildColorPaletteUI();
+    }
+}
+
 function updateMouseCoordinates(screenPos) {
-    if (!screenPos) return;
-    
+    if (!screenPos || !isMouseOverCanvas) {
+        labelsToKeepThisFrame.delete('mouse-coord-x');
+        labelsToKeepThisFrame.delete('mouse-coord-y');
+        return;
+    };
+
     const dataPos = screenToData(screenPos);
-    const x = formatNumber(dataPos.x, distanceSigFigs);
-    const y = formatNumber(dataPos.y, distanceSigFigs);
-    
+    const xText = `x = ${formatNumber(dataPos.x, distanceSigFigs)}`;
+    const yText = `y = ${formatNumber(dataPos.y, distanceSigFigs)}`;
+
+    const canvasWidth = canvas.width / dpr;
+    const padding = 10;
+
     updateHtmlLabel({
         id: 'mouse-coord-x',
-        content: `x = ${x}`,
-        x: 0,
-        y: 0,
-        color: 'rgba(255, 255, 255, 0.9)',
+        content: xText,
+        x: canvasWidth - padding, // Position from the right edge
+        y: padding,               // Position from the top edge
+        color: 'rgba(255, 255, 255, 0.7)',
         fontSize: 12,
-        options: { textAlign: 'left', textBaseline: 'middle' }
+        options: { textAlign: 'right' } // Align text to the right
     });
-    
+
     updateHtmlLabel({
-        id: 'mouse-coord-y', 
-        content: `y = ${y}`,
-        x: 0,
-        y: 0,
-        color: 'rgba(255, 255, 255, 0.9)',
+        id: 'mouse-coord-y',
+        content: yText,
+        x: canvasWidth - padding, // Position from the right edge
+        y: padding * 2.5,         // Position below the x-coordinate
+        color: 'rgba(255, 255, 255, 0.7)',
         fontSize: 12,
-        options: { textAlign: 'left', textBaseline: 'middle' }
+        options: { textAlign: 'right' } // Align text to the right
     });
-    
-    const xLabel = activeHtmlLabels.get('mouse-coord-x');
-    const yLabel = activeHtmlLabels.get('mouse-coord-y');
-    
-    if (xLabel) {
-        const xContainer = document.getElementById('mouseCoordX');
-        if (xContainer && !xContainer.contains(xLabel)) {
-            xContainer.appendChild(xLabel);
-            xLabel.style.position = 'relative';
-            xLabel.style.left = 'auto';
-            xLabel.style.top = 'auto';
-            xLabel.style.transform = 'none';
-        }
-    }
-    
-    if (yLabel) {
-        const yContainer = document.getElementById('mouseCoordY');
-        if (yContainer && !yContainer.contains(yLabel)) {
-            yContainer.appendChild(yLabel);
-            yLabel.style.position = 'relative';
-            yLabel.style.left = 'auto';
-            yLabel.style.top = 'auto';
-            yLabel.style.transform = 'none';
-        }
-    }
 }
 
 function updateHtmlLabel({ id, content, x, y, color, fontSize, options = {} }) {
@@ -459,27 +1030,6 @@ function snapToLength(targetLength, referenceLength, snapThresholdFactor = 0.05,
 }
 
 
-
-function addToRecentColors(color) {
-    const index = recentColors.indexOf(color);
-    if (index > -1) recentColors.splice(index, 1);
-    recentColors.unshift(color);
-    if (recentColors.length > 8) recentColors = recentColors.slice(0, 8);
-    updateColorPalette();
-}
-
-function updateColorPalette() {
-    colorPalette.innerHTML = '';
-    recentColors.forEach(color => {
-        const paletteColor = document.createElement('div');
-        paletteColor.className = 'palette-color';
-        paletteColor.style.backgroundColor = color;
-        if (color === currentColor) paletteColor.classList.add('active');
-        paletteColor.addEventListener('click', () => setCurrentColor(color));
-        colorPalette.appendChild(paletteColor);
-    });
-}
-
 function setCurrentColor(newColor) {
     const oldColor = currentColor;
     let changedPoints = [];
@@ -487,7 +1037,7 @@ function setCurrentColor(newColor) {
         selectedPointIds.forEach(id => {
             const point = findPointById(id);
             if (point && point.type === 'regular') {
-                changedPoints.push({id: point.id, oldColor: point.color || oldColor });
+                changedPoints.push({ id: point.id, oldColor: point.color || oldColor });
                 point.color = newColor;
             }
         });
@@ -495,7 +1045,7 @@ function setCurrentColor(newColor) {
     if (activeCenterId) {
         const center = findPointById(activeCenterId);
         if (center) {
-            changedPoints.push({id: center.id, oldColor: center.color || oldColor });
+            changedPoints.push({ id: center.id, oldColor: center.color || oldColor });
             center.color = newColor;
         }
     }
@@ -503,15 +1053,18 @@ function setCurrentColor(newColor) {
         const actualUndoState = {
             points: allPoints.map(p => {
                 const changed = changedPoints.find(cp => cp.id === p.id);
-                return changed ? {...p, color: changed.oldColor } : {...p};
+                return changed ? { ...p, color: changed.oldColor } : { ...p };
             }),
             edges: JSON.parse(JSON.stringify(allEdges)),
-            selectedPointIds: JSON.parse(JSON.stringify(selectedPointIds)), selectedEdgeIds: JSON.parse(JSON.stringify(selectedEdgeIds)), activeCenterId, isDrawingMode, previewLineStartPointId
-          };
+            selectedPointIds: JSON.parse(JSON.stringify(selectedPointIds)),
+            selectedEdgeIds: JSON.parse(JSON.stringify(selectedEdgeIds)),
+            activeCenterId,
+            isDrawingMode,
+            previewLineStartPointId
+        };
         undoStack.push(actualUndoState);
         if (undoStack.length > MAX_HISTORY_SIZE) undoStack.shift();
         redoStack = [];
-        redrawAll();
     }
     currentColor = newColor;
     colorPicker.value = newColor;
@@ -553,7 +1106,6 @@ function restoreState(state) {
     actionTargetPoint = null; currentMouseButton = -1;
     clickData = { pointId: null, count: 0, timestamp: 0 };
     canvas.style.cursor = 'crosshair';
-    redrawAll();
 }
 
 function handleUndo() {
@@ -634,7 +1186,6 @@ function resizeCanvas() {
         htmlOverlay.style.width = `${cW}px`;
         htmlOverlay.style.height = `${cH}px`;
     }
-    redrawAll();
 }
 
 function findPointById(id) { return allPoints.find(p => p.id === id); }
@@ -721,16 +1272,7 @@ function drawCenterSymbol(point) {
 
 function applySelectionLogic(pointIdsToSelect, edgeIdsToSelect, wantsShift, wantsCtrl, targetIsCenter = false) {
     if (targetIsCenter) {
-        const centerId = pointIdsToSelect[0];
-        if (wantsCtrl) {
-            activeCenterId = (activeCenterId === centerId) ? null : centerId;
-        } else {
-            activeCenterId = centerId;
-            if (!wantsShift) {
-                selectedPointIds = [];
-                selectedEdgeIds = [];
-            }
-        }
+        handleCenterSelection(pointIdsToSelect[0], wantsShift, wantsCtrl);
     } else {
         if (wantsShift) {
             selectedPointIds = [...new Set([...selectedPointIds, ...pointIdsToSelect])];
@@ -749,6 +1291,8 @@ function applySelectionLogic(pointIdsToSelect, edgeIdsToSelect, wantsShift, want
         } else {
             selectedPointIds = [...pointIdsToSelect];
             selectedEdgeIds = [...edgeIdsToSelect];
+            selectedCenterIds = [];
+            activeCenterId = null;
         }
     }
 }
@@ -861,28 +1405,38 @@ function handlePaste() {
     selectedPointIds = newPastedRegularPointIds; 
     selectedEdgeIds = clipboard.edges.map(e => getEdgeId({id1: oldToNewIdMap.get(e.id1), id2: oldToNewIdMap.get(e.id2)}));
     activeCenterId = newPastedActiveCenterId;
-    redrawAll();
 }
 
 function drawPoint(point) {
-    const isSelected = selectedPointIds.includes(point.id) || point.id === activeCenterId;
+    let isSelected;
+    if (point.type === 'regular') {
+        isSelected = selectedPointIds.includes(point.id);
+    } else {
+        isSelected = selectedCenterIds.includes(point.id);
+    }
+
     const pointColor = point.color || currentColor;
     const screenPos = dataToScreen(point);
-    if (point.type !== 'regular') drawCenterSymbol(point);
-    else {
-        ctx.beginPath(); ctx.arc(screenPos.x, screenPos.y, POINT_RADIUS, 0, 2 * Math.PI);
-        ctx.fillStyle = pointColor; ctx.fill();
+    
+    if (point.type !== 'regular') {
+        drawCenterSymbol(point);
+    } else {
+        ctx.beginPath();
+        ctx.arc(screenPos.x, screenPos.y, POINT_RADIUS, 0, 2 * Math.PI);
+        ctx.fillStyle = pointColor;
+        ctx.fill();
     }
+
     if (isSelected) {
         ctx.save();
-        ctx.shadowColor = '#4da6ff';
+        ctx.shadowColor = point.id === activeCenterId ? '#00ffff' : '#4da6ff';
         ctx.shadowBlur = 15;
         ctx.globalAlpha = 0.8;
         
         ctx.beginPath();
         const glowRadius = point.type !== 'regular' ? CENTER_POINT_VISUAL_RADIUS + 3 : POINT_RADIUS + 3;
         ctx.arc(screenPos.x, screenPos.y, glowRadius, 0, 2 * Math.PI);
-        ctx.strokeStyle = '#4da6ff';
+        ctx.strokeStyle = point.id === activeCenterId ? '#00ffff' : '#4da6ff';
         ctx.lineWidth = 2;
         ctx.stroke();
         
@@ -950,7 +1504,7 @@ function drawAllEdges() {
 }
 
 function deleteSelectedItems() {
-    if (selectedPointIds.length === 0 && selectedEdgeIds.length === 0 && !activeCenterId) return;
+    if (selectedPointIds.length === 0 && selectedEdgeIds.length === 0 && selectedCenterIds.length === 0) return;
     
     saveStateForUndo();
     
@@ -977,13 +1531,13 @@ function deleteSelectedItems() {
         allEdges = allEdges.filter(edge => edge.id1 !== pointId && edge.id2 !== pointId);
     });
     
-    const idsToDelete = new Set(selectedPointIds);
-    if (activeCenterId) idsToDelete.add(activeCenterId);
+    const idsToDelete = new Set([...selectedPointIds, ...selectedCenterIds]);
     
     allPoints = allPoints.filter(point => !idsToDelete.has(point.id));
     
     selectedPointIds = [];
     selectedEdgeIds = [];
+    selectedCenterIds = [];
     activeCenterId = null;
     
     if (previewLineStartPointId && !findPointById(previewLineStartPointId)) {
@@ -994,8 +1548,6 @@ function deleteSelectedItems() {
         frozenReference_D_du = null;
         frozenReference_Origin_Data = null;
     }
-    
-    redrawAll();
 }
 
 function performEscapeAction() {
@@ -1007,7 +1559,7 @@ function performEscapeAction() {
     frozenReference_A_rad = null;
     frozenReference_A_baseRad = null;
     frozenReference_D_du = null;
-    frozenReference_D_g2g = null; // <-- ADD THIS
+    frozenReference_D_g2g = null;
     frozenReference_Origin_Data = null;
     currentDrawingFirstSegmentAbsoluteAngleRad = null;
     isActionInProgress = false;
@@ -1020,7 +1572,7 @@ function performEscapeAction() {
     currentMouseButton = -1;
     clickData = { pointId: null, count: 0, timestamp: 0 };
     canvas.style.cursor = 'crosshair';
-    redrawAll();
+    transformIndicatorData = null;
 }
 
 function drawAngleArc(centerScreen, dataStartAngleRad, dataEndAngleRad, radius, color, isDashed = false) {
@@ -1036,6 +1588,7 @@ function drawAngleArc(centerScreen, dataStartAngleRad, dataEndAngleRad, radius, 
     ctx.stroke();
     ctx.restore();
 }
+
 
 
 function drawReferenceElementsGeometry(context, shiftPressed) {
@@ -1498,13 +2051,13 @@ canvas.addEventListener('wheel', (event) => {
     const mouseScreen = getMousePosOnCanvas(event, canvas);
     const scaleFactor = event.deltaY > 0 ? 1/1.15 : 1.15;
     zoomAt(mouseScreen, scaleFactor);
-    redrawAll();
 });
 
 
 function getDragSnapPosition(dragOrigin, mouseDataPos) {
     const neighbors = findNeighbors(dragOrigin.id).map(id => allPoints.find(p => p.id === id)).filter(Boolean);
     let gridCandidates = [];
+    let pointCandidates = [];
     let geometricCandidates = [];
     let bisectorCandidates = [];
     let circumcenterCandidates = [];
@@ -1530,6 +2083,12 @@ function getDragSnapPosition(dragOrigin, mouseDataPos) {
                     type: 'grid'
                 });
             }
+        }
+    }
+
+    for (const p of allPoints) {
+        if (p.id !== dragOrigin.id && p.type === 'regular') {
+            pointCandidates.push({ x: p.x, y: p.y, type: 'point' });
         }
     }
 
@@ -1579,10 +2138,13 @@ function getDragSnapPosition(dragOrigin, mouseDataPos) {
         }
     }
 
-    const PRIORITY_RADIUS_PX = 12;
-    const SECONDARY_SNAP_RADIUS_PX = 8;
-    const priorityRadiusDataSq = Math.pow(PRIORITY_RADIUS_PX / viewTransform.scale, 2);
-    const secondarySnapRadiusDataSq = Math.pow(SECONDARY_SNAP_RADIUS_PX / viewTransform.scale, 2);
+    const dominantGridInterval = (lastGridState.alpha2 > lastGridState.alpha1 && lastGridState.interval2) ? lastGridState.interval2 : lastGridState.interval1;
+    const gridIntervalInPixels = dominantGridInterval * viewTransform.scale;
+    const priorityRadiusPixels = gridIntervalInPixels * 0.2;
+    const secondaryRadiusPixels = gridIntervalInPixels * 0.15;
+
+    const priorityRadiusDataSq = Math.pow(priorityRadiusPixels / viewTransform.scale, 2);
+    const secondarySnapRadiusDataSq = Math.pow(secondaryRadiusPixels / viewTransform.scale, 2);
 
     let prioritizedSnaps = [];
     for (const center of circumcenterCandidates) {
@@ -1610,6 +2172,7 @@ function getDragSnapPosition(dragOrigin, mouseDataPos) {
 
     const allCandidates = [
         ...gridCandidates,
+        ...pointCandidates,
         ...geometricCandidates,
         ...bisectorCandidates,
         ...circumcenterCandidates
@@ -1891,6 +2454,13 @@ function redrawAll() {
             prepareReferenceElementsTexts(drawingContext, true);
         }
     }
+
+    if (transformIndicatorData) {
+        drawTransformIndicators(ctx);
+        labelsToKeepThisFrame.add('transform-angle-indicator');
+        labelsToKeepThisFrame.add('transform-scale-indicator');
+    }
+
     drawAllEdges();
     allPoints.forEach(point => {
         let pointToDraw = { ...point };
@@ -1952,7 +2522,7 @@ function redrawAll() {
             ctx.lineWidth = LINE_WIDTH;
             ctx.stroke();
             ctx.setLineDash([]);
-            if (snappedData.gridSnapped) {
+            if (snappedData.snapped) {
                 ctx.beginPath();
                 ctx.arc(targetScreen.x, targetScreen.y, POINT_RADIUS, 0, 2 * Math.PI);
                 ctx.fillStyle = 'rgba(240, 240, 130, 0.9)';
@@ -1972,371 +2542,26 @@ function redrawAll() {
         ctx.strokeRect(rX, rY, rW, rH);
         ctx.setLineDash([]);
     }
+
+    updateMouseCoordinates(mousePos);
     cleanupHtmlLabels();
+    drawCanvasUI(ctx);
 }
 
 
-toggleGridCheckbox.addEventListener('change', (e) => {
-    showGrid = e.target.checked;
-    redrawAll();
-});
 
-gridTypeSelect.addEventListener('change', (e) => {
-    gridType = e.target.value;
-    redrawAll();
-});
-
-gridColorPicker.addEventListener('input', (e) => {
-    gridColor = e.target.value;
-    redrawAll();
-});
-
-gridAlphaInput.addEventListener('input', (e) => {
-    gridAlpha = parseFloat(e.target.value) || 0;
-    redrawAll();
-});
-
-canvas.addEventListener('mousedown', (event) => {
-    isActionInProgress = true;
-    isDragConfirmed = false;
-    isPanningBackground = false;
-    isRectangleSelecting = false;
-    initialDragPointStates = [];
-    dragPreviewPoints = [];
-    currentMouseButton = event.button;
-    actionStartPos = getMousePosOnCanvas(event, canvas);
-    mousePos = actionStartPos;
-
-    const targetPoint = findClickedPoint(actionStartPos);
-    const targetEdge = targetPoint ? null : findClickedEdge(actionStartPos);
-
-    actionContext = {
-        targetPoint,
-        targetEdge,
-        target: targetPoint || targetEdge || 'canvas',
-        shiftKey: event.shiftKey,
-        ctrlKey: event.ctrlKey || event.metaKey,
-    };
-
-    if (event.altKey) {
-        if (targetPoint && targetPoint.type === 'regular') {
-            saveStateForUndo();
-            performEscapeAction();
-            isDrawingMode = true;
-            previewLineStartPointId = targetPoint.id;
-            isActionInProgress = false; // This is a one-shot action
-            redrawAll();
-            return;
-        } else if (targetEdge) {
-            saveStateForUndo();
-            performEscapeAction();
-            const p1 = findPointById(targetEdge.id1);
-            const p2 = findPointById(targetEdge.id2);
-            const closest = getClosestPointOnLineSegment(screenToData(actionStartPos), p1, p2);
-            const newPoint = { id: generateUniqueId(), x: closest.x, y: closest.y, type: 'regular', color: currentColor };
-            allPoints.push(newPoint);
-            allEdges = allEdges.filter(e => getEdgeId(e) !== getEdgeId(targetEdge));
-            allEdges.push({ id1: p1.id, id2: newPoint.id });
-            allEdges.push({ id1: newPoint.id, id2: p2.id });
-            isDrawingMode = true;
-            previewLineStartPointId = newPoint.id;
-            isActionInProgress = false;
-            redrawAll();
-            return;
-        }
-    }
-});
-
-canvas.addEventListener('mousemove', (event) => {
-    mousePos = getMousePosOnCanvas(event, canvas);
-    currentShiftPressed = event.shiftKey;
-    lastSnapResult = null;
-    ghostPointPosition = null;
-    
-    updateMouseCoordinates(mousePos);
-    
-    if (!isActionInProgress && currentShiftPressed && !isDrawingMode) {
-        const gridData = calculateGridIntervals(viewTransform.scale);
-        const mouseDataPos = screenToData(mousePos);
-        let bestGridSnap = { dist: Infinity, pos: null };
-        const checkGrid = (interval, alpha) => {
-            if (!interval || alpha < 0.01) return;
-            const snapX = Math.round(mouseDataPos.x / interval) * interval;
-            const snapY = Math.round(mouseDataPos.y / interval) * interval;
-            const distToGridPoint = distance(mouseDataPos, { x: snapX, y: snapY });
-            if (distToGridPoint < bestGridSnap.dist) {
-                bestGridSnap.dist = distToGridPoint;
-                bestGridSnap.pos = { x: snapX, y: snapY };
-            }
-        };
-        checkGrid(gridData.grid1Interval, gridData.alpha1);
-        checkGrid(gridData.grid2Interval, gridData.alpha2);
-        ghostPointPosition = bestGridSnap.pos;
-    }
-    if (!isActionInProgress) {
-        redrawAll();
-        return;
-    }
-    if (!isDragConfirmed && distance(mousePos, actionStartPos) > DRAG_THRESHOLD) {
-        isDragConfirmed = true;
-        if (currentMouseButton === 2) {
-            isRectangleSelecting = true;
-            redrawAll();
-            return;
-        }
-        const { target, shiftKey, ctrlKey } = actionContext;
-        if (target !== 'canvas') {
-            actionTargetPoint = actionContext.targetPoint;
-            if (actionTargetPoint && !selectedPointIds.includes(actionTargetPoint.id)) {
-                applySelectionLogic([actionTargetPoint.id], [], shiftKey, ctrlKey, false);
-            } else if (actionContext.targetEdge && !selectedEdgeIds.includes(getEdgeId(actionContext.targetEdge))) {
-                applySelectionLogic([], [getEdgeId(actionContext.targetEdge)], shiftKey, ctrlKey, false);
-            }
-            const dragGroupIds = new Set(selectedPointIds);
-            selectedEdgeIds.forEach(eid => {
-                const parts = eid.split('_EDGE_');
-                if (parts[0]) dragGroupIds.add(parts[0]);
-                if (parts[1]) dragGroupIds.add(parts[1]);
-            });
-            if (dragGroupIds.size > 0) {
-                const pointsToDrag = Array.from(dragGroupIds).map(id => findPointById(id)).filter(Boolean);
-                if (pointsToDrag.length > 0) {
-                    initialDragPointStates = pointsToDrag.map(p => ({ ...p }));
-                    dragPreviewPoints = pointsToDrag.map(p => ({ ...p }));
-                    canvas.style.cursor = 'grabbing';
-                }
-            }
-        } else {
-            isPanningBackground = true;
-            backgroundPanStartOffset = { x: viewTransform.offsetX, y: viewTransform.offsetY };
-            canvas.style.cursor = 'move';
-        }
-    }
-    if (isDragConfirmed) {
-        if (isPanningBackground) {
-            const deltaX_css = mousePos.x - actionStartPos.x;
-            const deltaY_css = mousePos.y - actionStartPos.y;
-            viewTransform.offsetX = backgroundPanStartOffset.x + (deltaX_css * dpr);
-            viewTransform.offsetY = backgroundPanStartOffset.y - (deltaY_css * dpr);
-        } else if (isRectangleSelecting) {} else if (dragPreviewPoints.length > 0) {
-            const mouseData = screenToData(mousePos);
-            const startMouseData = screenToData(actionStartPos);
-            let finalDelta = {
-                x: mouseData.x - startMouseData.x,
-                y: mouseData.y - startMouseData.y
-            };
-            if (currentShiftPressed && actionTargetPoint) {
-                const dragOrigin = initialDragPointStates.find(p => p.id === actionTargetPoint.id);
-                const targetSnapPos = { x: dragOrigin.x + finalDelta.x, y: dragOrigin.y + finalDelta.y };
-                const snapResult = getDragSnapPosition(dragOrigin, targetSnapPos);
-                if (snapResult.snapped) {
-                    finalDelta = { x: snapResult.point.x - dragOrigin.x, y: snapResult.point.y - dragOrigin.y };
-                }
-                lastSnapResult = snapResult;
-            }
-            initialDragPointStates.forEach(originalPointState => {
-                const previewPointToUpdate = dragPreviewPoints.find(dp => dp.id === originalPointState.id);
-                if (previewPointToUpdate) {
-                    previewPointToUpdate.x = originalPointState.x + finalDelta.x;
-                    previewPointToUpdate.y = originalPointState.y + finalDelta.y;
-                }
-            });
-        }
-    }
-    redrawAll();
-});
-
-canvas.addEventListener('mouseup', (event) => {
-    if (!isActionInProgress) return;
-
-    if (isDragConfirmed) {
-        if (isRectangleSelecting) {
-            const dataP1 = screenToData({ x: Math.min(actionStartPos.x, mousePos.x), y: Math.min(actionStartPos.y, mousePos.y) });
-            const dataP2 = screenToData({ x: Math.max(actionStartPos.x, mousePos.x), y: Math.max(actionStartPos.y, mousePos.y) });
-            const minX = Math.min(dataP1.x, dataP2.x),
-                maxX = Math.max(dataP1.x, dataP2.x);
-            const minY = Math.min(dataP1.y, dataP2.y),
-                maxY = Math.max(dataP1.y, dataP2.y);
-            const pointsInRect = allPoints.filter(p => p.type === 'regular' && p.x >= minX && p.x <= maxX && p.y >= minY && p.y <= maxY).map(p => p.id);
-            const edgesInRect = allEdges.filter(edge => pointsInRect.includes(edge.id1) && pointsInRect.includes(edge.id2)).map(edge => getEdgeId(edge));
-            applySelectionLogic(pointsInRect, edgesInRect, actionContext.shiftKey, actionContext.ctrlKey, false);
-        } else if (dragPreviewPoints.length > 0) {
-            saveStateForUndo();
-            dragPreviewPoints.forEach(dp => {
-                const actualPoint = findPointById(dp.id);
-                if (actualPoint) {
-                    actualPoint.x = dp.x;
-                    actualPoint.y = dp.y;
-                }
-            });
-            if (lastSnapResult && lastSnapResult.snapped && lastSnapResult.constraints) {
-                frozenReference_D_du = lastSnapResult.constraints.dist;
-                frozenReference_A_rad = lastSnapResult.constraints.angle;
-                frozenReference_Origin_Data = initialDragPointStates.find(p => p.id === actionTargetPoint.id);
-                frozenReference_A_baseRad = null;
-            }
-        }
-    } else {
-        if (currentMouseButton === 2) {
-            performEscapeAction();
-        } else if (currentMouseButton === 0) {
-            const { targetPoint, targetEdge, shiftKey, ctrlKey } = actionContext;
-            const startPoint = findPointById(previewLineStartPointId);
-            const drawingContextForCompletedSegment = getDrawingContext(startPoint ? startPoint.id : null);
-
-            if (isDrawingMode && startPoint) {
-                saveStateForUndo();
-                let newPoint = null;
-                let snappedDataForCompletedSegment = null;
-
-                if (targetPoint && targetPoint.type === 'regular' && targetPoint.id !== startPoint.id) {
-                    const edgeExists = allEdges.some(e => (e.id1 === startPoint.id && e.id2 === targetPoint.id) || (e.id2 === startPoint.id && e.id1 === targetPoint.id));
-                    if (!edgeExists) {
-                        allEdges.push({ id1: startPoint.id, id2: targetPoint.id });
-                    }
-                    newPoint = targetPoint;
-                    snappedDataForCompletedSegment = getSnappedPosition(startPoint, dataToScreen(newPoint), shiftKey);
-                } else if (targetEdge) {
-                    const p1 = findPointById(targetEdge.id1);
-                    const p2 = findPointById(targetEdge.id2);
-                    if (p1 && p2) {
-                        const closest = getClosestPointOnLineSegment(screenToData(mousePos), p1, p2);
-                        newPoint = { id: generateUniqueId(), x: closest.x, y: closest.y, type: 'regular', color: currentColor };
-                        allPoints.push(newPoint);
-                        allEdges = allEdges.filter(e => getEdgeId(e) !== getEdgeId(targetEdge));
-                        allEdges.push({ id1: p1.id, id2: newPoint.id });
-                        allEdges.push({ id1: p2.id, id2: newPoint.id });
-                        allEdges.push({ id1: startPoint.id, id2: newPoint.id });
-                        snappedDataForCompletedSegment = getSnappedPosition(startPoint, dataToScreen(newPoint), shiftKey);
-                    }
-                } else {
-                    snappedDataForCompletedSegment = getSnappedPosition(startPoint, mousePos, shiftKey);
-                    newPoint = { id: generateUniqueId(), x: snappedDataForCompletedSegment.x, y: snappedDataForCompletedSegment.y, type: 'regular', color: currentColor };
-                    allPoints.push(newPoint);
-                    allEdges.push({ id1: startPoint.id, id2: newPoint.id });
-                }
-
-                if (shiftKey && newPoint && snappedDataForCompletedSegment) {
-                    frozenReference_Origin_Data = startPoint;
-
-                    frozenReference_D_du = snappedDataForCompletedSegment.distance;
-                    if (snappedDataForCompletedSegment.gridToGridSquaredSum > 0) {
-                        frozenReference_D_g2g = {
-                            g2gSquaredSum: snappedDataForCompletedSegment.gridToGridSquaredSum,
-                            interval: snappedDataForCompletedSegment.gridInterval
-                        };
-                    } else {
-                        frozenReference_D_g2g = null;
-                    }
-
-                    if (drawingContextForCompletedSegment.isFirstSegmentBeingDrawn) {
-                        frozenReference_A_rad = normalizeAngleToPi(snappedDataForCompletedSegment.angle * (Math.PI / 180));
-                        frozenReference_A_baseRad = 0;
-                    } else {
-                        frozenReference_A_rad = snappedDataForCompletedSegment.angleTurn;
-                        frozenReference_A_baseRad = drawingContextForCompletedSegment.offsetAngleRad;
-                    }
-                } else {
-                    frozenReference_D_du = null;
-                    frozenReference_D_g2g = null;
-                    frozenReference_A_rad = null;
-                    frozenReference_A_baseRad = null;
-                    frozenReference_Origin_Data = null;
-                }
-
-                if (newPoint) {
-                    previewLineStartPointId = newPoint.id;
-                } else {
-                    isDrawingMode = false;
-                    previewLineStartPointId = null;
-                }
-                clickData.count = 0;
-
-            } else {
-                const now = Date.now();
-                const target = targetPoint || targetEdge;
-
-                if (target) {
-                    const targetId = targetPoint ? targetPoint.id : getEdgeId(targetEdge);
-                    const targetType = targetPoint ? 'point' : 'edge';
-
-                    if (clickData.targetId === targetId && (now - clickData.timestamp) < DOUBLE_CLICK_MS) {
-                        clickData.count++;
-                    } else {
-                        clickData.count = 1;
-                        clickData.targetId = targetId;
-                        clickData.type = targetType;
-                    }
-                    clickData.timestamp = now;
-
-                    switch (clickData.count) {
-                        case 1:
-                            if (targetPoint) { applySelectionLogic([targetPoint.id], [], shiftKey, ctrlKey, targetPoint.type !== 'regular'); } else { applySelectionLogic([], [getEdgeId(targetEdge)], shiftKey, ctrlKey, false); }
-                            break;
-                        case 2:
-                            if (clickData.type === 'point') {
-                                const neighbors = findNeighbors(clickData.targetId);
-                                applySelectionLogic([clickData.targetId, ...neighbors], [], false, false);
-                            } else {
-                                const edge = allEdges.find(e => getEdgeId(e) === clickData.targetId);
-                                if (edge) {
-                                    const edges = new Set([...findNeighborEdges(edge.id1), ...findNeighborEdges(edge.id2)]);
-                                    applySelectionLogic([], Array.from(edges).map(e => getEdgeId(e)), false, false);
-                                }
-                            }
-                            break;
-                        case 3:
-                            if (clickData.type === 'point') {
-                                const pointsInSubgraph = findAllPointsInSubgraph(clickData.targetId);
-                                applySelectionLogic(pointsInSubgraph, [], false, false);
-                            } else {
-                                const edge = allEdges.find(e => getEdgeId(e) === clickData.targetId);
-                                if (edge) {
-                                    const pointsInSubgraph = new Set(findAllPointsInSubgraph(edge.id1));
-                                    const edgesInSubgraph = allEdges.filter(e => pointsInSubgraph.has(e.id1) && pointsInSubgraph.has(e.id2));
-                                    applySelectionLogic([], edgesInSubgraph.map(e => getEdgeId(e)), false, false);
-                                }
-                            }
-                            clickData.count = 0;
-                            break;
-                    }
-                } else {
-                    clickData.count = 0;
-                    saveStateForUndo();
-                    performEscapeAction();
-                    const startCoords = ghostPointPosition ? ghostPointPosition : screenToData(mousePos);
-                    const newPoint = { id: generateUniqueId(), ...startCoords, type: 'regular', color: currentColor };
-                    allPoints.push(newPoint);
-                    isDrawingMode = true;
-                    previewLineStartPointId = newPoint.id;
-                    frozenReference_D_du = null;
-                    frozenReference_D_g2g = null; // Clear exact reference too
-                    frozenReference_A_rad = null;
-                    frozenReference_A_baseRad = null;
-                    frozenReference_Origin_Data = null;
-                }
-            }
-        }
-    }
-
-    isActionInProgress = false;
-    isDragConfirmed = false;
-    isPanningBackground = false;
-    isRectangleSelecting = false;
-    actionContext = null;
-    actionTargetPoint = null;
-    dragBoundaryContext = null;
-    canvas.style.cursor = 'crosshair';
-    redrawAll();
-});
 
 
 canvas.addEventListener('mouseenter', () => {
     isMouseOverCanvas = true;
 });
 
+
+
+
 canvas.addEventListener('mouseleave', () => {
     isMouseOverCanvas = false;
+    redrawAll(); // To hide the mouse coordinates
 });
 
 canvas.addEventListener('contextmenu', (event) => event.preventDefault());
@@ -2372,19 +2597,477 @@ function completeGraphOnSelectedPoints() {
             }
         }
     }
-    
-    if (edgesAdded > 0) {
-        redrawAll();
-    }
 }
+
+canvas.addEventListener('mousemove', (event) => {
+    mousePos = getMousePosOnCanvas(event, canvas);
+    currentShiftPressed = event.shiftKey;
+    lastSnapResult = null;
+    ghostPointPosition = null;
+
+    if (isPlacingTransform) {
+        placingSnapPos = null;
+        if (currentShiftPressed && lastGridState.interval1) {
+            const mouseDataPos = screenToData(mousePos);
+            const gridInterval = (lastGridState.alpha2 > lastGridState.alpha1 && lastGridState.interval2) ? lastGridState.interval2 : lastGridState.interval1;
+            if (gridInterval > 0) {
+                const snappedDataX = Math.round(mouseDataPos.x / gridInterval) * gridInterval;
+                const snappedDataY = Math.round(mouseDataPos.y / gridInterval) * gridInterval;
+                placingSnapPos = dataToScreen({ x: snappedDataX, y: snappedDataY });
+            }
+        }
+    }
+
+    if (currentShiftPressed && !isActionInProgress && !isDrawingMode) {
+        if (lastGridState.interval1) {
+            const mouseDataPos = screenToData(mousePos);
+            const gridInterval = (lastGridState.alpha2 > lastGridState.alpha1 && lastGridState.interval2) ? lastGridState.interval2 : lastGridState.interval1;
+            if (gridInterval > 0) {
+                ghostPointPosition = {
+                    x: Math.round(mouseDataPos.x / gridInterval) * gridInterval,
+                    y: Math.round(mouseDataPos.y / gridInterval) * gridInterval
+                };
+            }
+        }
+    }
+
+    if (!isActionInProgress) {
+        return;
+    }
+
+    if (!isDragConfirmed && distance(mousePos, actionStartPos) > DRAG_THRESHOLD) {
+        isDragConfirmed = true;
+        if (currentMouseButton === 2) {
+            isRectangleSelecting = true;
+            return;
+        }
+        const { target, shiftKey, ctrlKey } = actionContext;
+        if (target !== 'canvas') {
+            actionTargetPoint = actionContext.targetPoint;
+            if (actionTargetPoint?.type !== 'regular') {
+                handleCenterSelection(actionTargetPoint.id, shiftKey, ctrlKey);
+            } else if (actionTargetPoint && !selectedPointIds.includes(actionTargetPoint.id)) {
+                applySelectionLogic([actionTargetPoint.id], [], shiftKey, ctrlKey, false);
+            } else if (actionContext.targetEdge && !selectedEdgeIds.includes(getEdgeId(actionContext.targetEdge))) {
+                applySelectionLogic([], [getEdgeId(actionContext.targetEdge)], shiftKey, ctrlKey, false);
+            }
+            
+            let pointsToDragIds = new Set([...selectedPointIds, ...selectedCenterIds]);
+            if (actionTargetPoint && !pointsToDragIds.has(actionTargetPoint.id)) {
+                 pointsToDragIds = new Set([actionTargetPoint.id]);
+                 if (actionTargetPoint.type === 'regular') {
+                    selectedPointIds = [actionTargetPoint.id];
+                    selectedCenterIds = [];
+                 } else {
+                    selectedPointIds = [];
+                    selectedCenterIds = [actionTargetPoint.id];
+                 }
+                 activeCenterId = selectedCenterIds.at(-1) ?? null;
+            }
+            
+            const pointsToDrag = Array.from(pointsToDragIds).map(id => findPointById(id)).filter(Boolean);
+            if (pointsToDrag.length > 0) {
+                initialDragPointStates = JSON.parse(JSON.stringify(pointsToDrag));
+                dragPreviewPoints = JSON.parse(JSON.stringify(pointsToDrag));
+                canvas.style.cursor = 'grabbing';
+            }
+        } else {
+            isPanningBackground = true;
+            backgroundPanStartOffset = { x: viewTransform.offsetX, y: viewTransform.offsetY };
+            canvas.style.cursor = 'move';
+        }
+    }
+    
+    if (isDragConfirmed) {
+        const isTransforming = activeCenterId && selectedPointIds.length > 0;
+
+        if (isPanningBackground) {
+            const deltaX_css = mousePos.x - actionStartPos.x;
+            const deltaY_css = mousePos.y - actionStartPos.y;
+            viewTransform.offsetX = backgroundPanStartOffset.x + (deltaX_css * dpr);
+            viewTransform.offsetY = backgroundPanStartOffset.y - (deltaY_css * dpr);
+        } else if (isTransforming) {
+            const center = findPointById(activeCenterId);
+            const referencePoint = actionTargetPoint?.type === 'regular' ? actionTargetPoint : initialDragPointStates.find(p => selectedPointIds.includes(p.id));
+            if (!center || !referencePoint) return;
+        
+            const mouseData = screenToData(mousePos);
+            const startReferencePoint = initialDragPointStates.find(p => p.id === referencePoint.id) || referencePoint;
+            const centerType = center.type;
+            let rotation, scale, finalMouseData, isSnapping, snappedScaleValue;
+            isSnapping = false;
+            snappedScaleValue = null;
+            finalMouseData = mouseData;
+
+            if (currentShiftPressed) {
+                const snapResult = getTransformSnap(center, mouseData, startReferencePoint, centerType);
+                if (snapResult.snapped) {
+                    isSnapping = true;
+                    finalMouseData = snapResult.pos;
+                    rotation = snapResult.rotation;
+                    scale = snapResult.scale;
+                    snappedScaleValue = snapResult.pureScaleForDisplay;
+                }
+            }
+            
+            if (!isSnapping) {
+                const startVector = { x: startReferencePoint.x - center.x, y: startReferencePoint.y - center.y };
+                const currentVector = { x: mouseData.x - center.x, y: mouseData.y - center.y };
+                const startDist = Math.hypot(startVector.x, startVector.y);
+                const currentDist = Math.hypot(currentVector.x, currentVector.y);
+                const startAngle = Math.atan2(startVector.y, startVector.x);
+                const currentAngle = Math.atan2(currentVector.y, currentVector.x);
+                rotation = normalizeAngleToPi(currentAngle - startAngle);
+                scale = (startDist < 1e-9) ? 1 : currentDist / startDist;
+            }
+        
+            if (centerType === 'center_rotate_only') scale = 1.0;
+            if (centerType === 'center_scale_only') rotation = 0.0;
+        
+            transformIndicatorData = { center, startPos: startReferencePoint, currentPos: finalMouseData, rotation, scale, isSnapping, snappedScaleValue, transformType: centerType };
+        
+            initialDragPointStates.forEach(p_initial => {
+                if (p_initial.type !== 'regular') return;
+                const p_preview = dragPreviewPoints.find(p => p.id === p_initial.id);
+                if (!p_preview) return;
+                
+                const initialPointVector = { x: p_initial.x - center.x, y: p_initial.y - center.y };
+                let transformedVector = { ...initialPointVector };
+                
+                if (centerType !== 'center_rotate_only') {
+                    transformedVector.x *= scale;
+                    transformedVector.y *= scale;
+                }
+                if (centerType !== 'center_scale_only') {
+                    const x = transformedVector.x;
+                    const y = transformedVector.y;
+                    transformedVector.x = x * Math.cos(rotation) - y * Math.sin(rotation);
+                    transformedVector.y = x * Math.sin(rotation) + y * Math.cos(rotation);
+                }
+                p_preview.x = center.x + transformedVector.x;
+                p_preview.y = center.y + transformedVector.y;
+            });
+
+        } else if (dragPreviewPoints.length > 0) {
+            const mouseData = screenToData(mousePos);
+            const startMouseData = screenToData(actionStartPos);
+            let finalDelta = { x: mouseData.x - startMouseData.x, y: mouseData.y - startMouseData.y };
+
+            if (currentShiftPressed && actionTargetPoint) {
+                const dragOrigin = initialDragPointStates.find(p => p.id === actionTargetPoint.id);
+                const targetSnapPos = { x: dragOrigin.x + finalDelta.x, y: dragOrigin.y + finalDelta.y };
+                const snapResult = getDragSnapPosition(dragOrigin, targetSnapPos);
+                if (snapResult.snapped) {
+                    finalDelta = { x: snapResult.point.x - dragOrigin.x, y: snapResult.point.y - dragOrigin.y };
+                }
+                lastSnapResult = snapResult;
+            }
+
+            initialDragPointStates.forEach(originalPointState => {
+                const previewPointToUpdate = dragPreviewPoints.find(dp => dp.id === originalPointState.id);
+                if (previewPointToUpdate) {
+                    previewPointToUpdate.x = originalPointState.x + finalDelta.x;
+                    previewPointToUpdate.y = originalPointState.y + finalDelta.y;
+                }
+            });
+        }
+    }
+});
+
+canvas.addEventListener('mousedown', (event) => {
+    mousePos = getMousePosOnCanvas(event, canvas);
+
+    if (handleCanvasUIClick(mousePos)) {
+        return;
+    }
+
+    if (isPlacingTransform) {
+        if (event.button === 0) {
+            const finalPlacePos = placingSnapPos || mousePos;
+            const dataPos = screenToData(finalPlacePos);
+            const newCenter = { 
+                id: generateUniqueId(), 
+                x: dataPos.x, 
+                y: dataPos.y, 
+                type: placingTransformType, 
+                color: currentColor 
+            };
+            allPoints.push(newCenter);
+            saveStateForUndo();
+        }
+        isPlacingTransform = false;
+        placingTransformType = null;
+        placingSnapPos = null;
+        return; 
+    }
+
+    isActionInProgress = true;
+    isDragConfirmed = false;
+    isPanningBackground = false;
+    isRectangleSelecting = false;
+    initialDragPointStates = [];
+    dragPreviewPoints = [];
+    currentMouseButton = event.button;
+    actionStartPos = mousePos;
+    rectangleSelectStartPos = actionStartPos;
+
+    const targetPoint = findClickedPoint(actionStartPos);
+    const targetEdge = targetPoint ? null : findClickedEdge(actionStartPos);
+
+    actionContext = {
+        targetPoint,
+        targetEdge,
+        target: targetPoint || targetEdge || 'canvas',
+        shiftKey: event.shiftKey,
+        ctrlKey: event.ctrlKey || event.metaKey,
+    };
+
+    if (event.altKey) {
+        if (targetPoint && targetPoint.type === 'regular') {
+            saveStateForUndo();
+            performEscapeAction();
+            isDrawingMode = true;
+            previewLineStartPointId = targetPoint.id;
+            isActionInProgress = false;
+            return;
+        } else if (targetEdge) {
+            saveStateForUndo();
+            performEscapeAction();
+            const p1 = findPointById(targetEdge.id1);
+            const p2 = findPointById(targetEdge.id2);
+            const closest = getClosestPointOnLineSegment(screenToData(actionStartPos), p1, p2);
+            const newPoint = { id: generateUniqueId(), x: closest.x, y: closest.y, type: 'regular', color: currentColor };
+            allPoints.push(newPoint);
+            allEdges = allEdges.filter(e => getEdgeId(e) !== getEdgeId(targetEdge));
+            allEdges.push({ id1: p1.id, id2: newPoint.id });
+            allEdges.push({ id1: newPoint.id, id2: p2.id });
+            isDrawingMode = true;
+            previewLineStartPointId = newPoint.id;
+            isActionInProgress = false;
+            return;
+        }
+    }
+});
+
+canvas.addEventListener('mouseup', (event) => {
+    if (!isActionInProgress) return;
+
+    const { shiftKey, ctrlKey } = actionContext;
+
+    if (isDragConfirmed) {
+        if (isRectangleSelecting) {
+            const dataP1 = screenToData({ x: Math.min(actionStartPos.x, mousePos.x), y: Math.min(actionStartPos.y, mousePos.y) });
+            const dataP2 = screenToData({ x: Math.max(actionStartPos.x, mousePos.x), y: Math.max(actionStartPos.y, mousePos.y) });
+            const minX = Math.min(dataP1.x, dataP2.x), maxX = Math.max(dataP1.x, dataP2.x);
+            const minY = Math.min(dataP1.y, dataP2.y), maxY = Math.max(dataP1.y, dataP2.y);
+            
+            const pointsInRect = allPoints.filter(p => p.type === 'regular' && p.x >= minX && p.x <= maxX && p.y >= minY && p.y <= maxY).map(p => p.id);
+            const centersInRect = allPoints.filter(p => p.type !== 'regular' && p.x >= minX && p.x <= maxX && p.y >= minY && p.y <= maxY).map(p => p.id);
+            
+            if (!shiftKey && !ctrlKey) {
+                selectedPointIds = pointsInRect;
+                selectedEdgeIds = allEdges.filter(e => pointsInRect.includes(e.id1) && pointsInRect.includes(e.id2)).map(e => getEdgeId(e));
+                selectedCenterIds = centersInRect;
+            } else {
+                if (shiftKey) {
+                    selectedPointIds = [...new Set([...selectedPointIds, ...pointsInRect])];
+                    const edgesInRect = allEdges.filter(e => pointsInRect.includes(e.id1) && pointsInRect.includes(e.id2)).map(e => getEdgeId(e));
+                    selectedEdgeIds = [...new Set([...selectedEdgeIds, ...edgesInRect])];
+                    selectedCenterIds = [...new Set([...selectedCenterIds, ...centersInRect])];
+                } else { // ctrlKey
+                    pointsInRect.forEach(id => { const i = selectedPointIds.indexOf(id); if (i > -1) selectedPointIds.splice(i, 1); else selectedPointIds.push(id); });
+                    centersInRect.forEach(id => { const i = selectedCenterIds.indexOf(id); if (i > -1) selectedCenterIds.splice(i, 1); else selectedCenterIds.push(id); });
+                    // Note: Edge selection with ctrl-drag is not implemented, consistent with original behavior.
+                }
+            }
+            activeCenterId = selectedCenterIds.at(-1) ?? null;
+
+        } else if (dragPreviewPoints.length > 0) {
+            let didMerge = false;
+            if (actionTargetPoint && dragPreviewPoints.length === 1 && actionTargetPoint.type === 'regular') {
+                const finalDropPos = dragPreviewPoints[0];
+                let targetPoint = null;
+                const mergeRadiusData = POINT_SELECT_RADIUS / viewTransform.scale;
+                
+                for (const p of allPoints) {
+                    if (p.id !== actionTargetPoint.id && p.type === 'regular' && distance(finalDropPos, p) < mergeRadiusData) {
+                        targetPoint = p;
+                        break;
+                    }
+                }
+                
+                if (targetPoint) {
+                    didMerge = true;
+                    saveStateForUndo();
+                    const pointToDeleteId = actionTargetPoint.id;
+                    const pointToKeepId = targetPoint.id;
+                    const edgesToRewire = allEdges.filter(edge => edge.id1 === pointToDeleteId || edge.id2 === pointToDeleteId);
+                    const newEdges = [];
+                    for (const edge of edgesToRewire) {
+                        const otherEndId = (edge.id1 === pointToDeleteId) ? edge.id2 : edge.id1;
+                        if (otherEndId !== pointToKeepId) {
+                            const edgeAlreadyExists = allEdges.some(e => (e.id1 === pointToKeepId && e.id2 === otherEndId) || (e.id2 === pointToKeepId && e.id1 === otherEndId));
+                            if (!edgeAlreadyExists) newEdges.push({ id1: pointToKeepId, id2: otherEndId });
+                        }
+                    }
+                    allEdges = allEdges.filter(edge => edge.id1 !== pointToDeleteId && edge.id2 !== pointToDeleteId);
+                    allPoints = allPoints.filter(p => p.id !== pointToDeleteId);
+                    allEdges.push(...newEdges);
+                    selectedPointIds = selectedPointIds.filter(id => id !== pointToDeleteId);
+                }
+            }
+            if (!didMerge) {
+                saveStateForUndo();
+                dragPreviewPoints.forEach(dp => { const p = findPointById(dp.id); if (p) { p.x = dp.x; p.y = dp.y; } });
+            }
+        }
+    } else {
+        const { targetPoint, targetEdge } = actionContext;
+        if (currentMouseButton === 0) {
+            const startPoint = findPointById(previewLineStartPointId);
+            if (isDrawingMode && startPoint) {
+                saveStateForUndo();
+                let newPoint = null;
+                const snappedDataForCompletedSegment = getSnappedPosition(startPoint, mousePos, shiftKey);
+
+                if (targetPoint && targetPoint.type === 'regular' && targetPoint.id !== startPoint.id) {
+                    const edgeExists = allEdges.some(e => (e.id1 === startPoint.id && e.id2 === targetPoint.id) || (e.id2 === startPoint.id && e.id1 === targetPoint.id));
+                    if (!edgeExists) allEdges.push({ id1: startPoint.id, id2: targetPoint.id });
+                    newPoint = targetPoint;
+                } else if (targetEdge) {
+                    const p1 = findPointById(targetEdge.id1), p2 = findPointById(targetEdge.id2);
+                    if (p1 && p2) {
+                        const closest = getClosestPointOnLineSegment(screenToData(mousePos), p1, p2);
+                        newPoint = { id: generateUniqueId(), x: closest.x, y: closest.y, type: 'regular', color: currentColor };
+                        allPoints.push(newPoint);
+                        allEdges = allEdges.filter(e => getEdgeId(e) !== getEdgeId(targetEdge));
+                        allEdges.push({ id1: p1.id, id2: newPoint.id }, { id1: p2.id, id2: newPoint.id }, { id1: startPoint.id, id2: newPoint.id });
+                    }
+                } else {
+                    newPoint = { id: generateUniqueId(), x: snappedDataForCompletedSegment.x, y: snappedDataForCompletedSegment.y, type: 'regular', color: currentColor };
+                    allPoints.push(newPoint);
+                    allEdges.push({ id1: startPoint.id, id2: newPoint.id });
+                }
+
+                if (shiftKey && newPoint && snappedDataForCompletedSegment) {
+                    const drawingContext = getDrawingContext(startPoint.id);
+                    frozenReference_Origin_Data = startPoint;
+                    frozenReference_D_du = snappedDataForCompletedSegment.distance;
+                    frozenReference_D_g2g = snappedDataForCompletedSegment.gridToGridSquaredSum > 0 ? { g2gSquaredSum: snappedDataForCompletedSegment.gridToGridSquaredSum, interval: snappedDataForCompletedSegment.gridInterval } : null;
+                    if (drawingContext.isFirstSegmentBeingDrawn) {
+                        frozenReference_A_rad = normalizeAngleToPi(snappedDataForCompletedSegment.angle * (Math.PI / 180));
+                        frozenReference_A_baseRad = 0;
+                    } else {
+                        frozenReference_A_rad = snappedDataForCompletedSegment.angleTurn;
+                        frozenReference_A_baseRad = drawingContext.offsetAngleRad;
+                    }
+                } else {
+                    frozenReference_D_du = null;
+                    frozenReference_D_g2g = null;
+                    frozenReference_A_rad = null;
+                    frozenReference_A_baseRad = null;
+                    frozenReference_Origin_Data = null;
+                }
+                if (newPoint) previewLineStartPointId = newPoint.id;
+                else isDrawingMode = false;
+                clickData.count = 0;
+            } else {
+                const now = Date.now();
+                const target = targetPoint || targetEdge;
+                if (target) {
+                    if (targetPoint?.type !== 'regular') {
+                        handleCenterSelection(targetPoint.id, shiftKey, ctrlKey);
+                    } else {
+                        const targetId = targetPoint ? targetPoint.id : getEdgeId(targetEdge);
+                        const targetType = targetPoint ? 'point' : 'edge';
+                        if (clickData.targetId === targetId && (now - clickData.timestamp) < DOUBLE_CLICK_MS) {
+                            clickData.count++;
+                        } else {
+                            clickData.count = 1;
+                            clickData.targetId = targetId;
+                            clickData.type = targetType;
+                        }
+                        clickData.timestamp = now;
+                        switch (clickData.count) {
+                            case 1:
+                                applySelectionLogic([targetId], targetEdge ? [getEdgeId(targetEdge)] : [], shiftKey, ctrlKey, false);
+                                break;
+                            case 2:
+                                if (clickData.type === 'point') {
+                                    const neighbors = findNeighbors(clickData.targetId);
+                                    applySelectionLogic([clickData.targetId, ...neighbors], [], false, false);
+                                } else {
+                                    const edge = allEdges.find(e => getEdgeId(e) === clickData.targetId);
+                                    if (edge) {
+                                        const edges = new Set([...findNeighborEdges(edge.id1), ...findNeighborEdges(edge.id2)]);
+                                        applySelectionLogic([], Array.from(edges).map(e => getEdgeId(e)), false, false);
+                                    }
+                                }
+                                break;
+                            case 3:
+                                if (clickData.type === 'point') {
+                                    const pointsInSubgraph = findAllPointsInSubgraph(clickData.targetId);
+                                    applySelectionLogic(pointsInSubgraph, [], false, false);
+                                } else {
+                                    const edge = allEdges.find(e => getEdgeId(e) === clickData.targetId);
+                                    if (edge) {
+                                        const pointsInSubgraph = new Set(findAllPointsInSubgraph(edge.id1));
+                                        const edgesInSubgraph = allEdges.filter(e => pointsInSubgraph.has(e.id1) && pointsInSubgraph.has(e.id2));
+                                        applySelectionLogic([], edgesInSubgraph.map(e => getEdgeId(e)), false, false);
+                                    }
+                                }
+                                clickData.count = 0;
+                                break;
+                        }
+                    }
+                } else {
+                    clickData.count = 0;
+                    saveStateForUndo();
+                    performEscapeAction();
+                    const startCoords = ghostPointPosition ? ghostPointPosition : screenToData(mousePos);
+                    const newPoint = { id: generateUniqueId(), ...startCoords, type: 'regular', color: currentColor };
+                    allPoints.push(newPoint);
+                    isDrawingMode = true;
+                    previewLineStartPointId = newPoint.id;
+                    frozenReference_D_du = null;
+                    frozenReference_D_g2g = null; 
+                    frozenReference_A_rad = null;
+                    frozenReference_A_baseRad = null;
+                    frozenReference_Origin_Data = null;
+                }
+            }
+        }
+    }
+
+    isActionInProgress = false;
+    isDragConfirmed = false;
+    isPanningBackground = false;
+    isRectangleSelecting = false;
+    actionContext = null;
+    actionTargetPoint = null;
+    dragBoundaryContext = null;
+    transformIndicatorData = null;
+    canvas.style.cursor = 'crosshair';
+});
 
 window.addEventListener('keydown', (event) => {
     const isCtrlOrCmd = event.ctrlKey || event.metaKey;
     if (event.key === 'Shift') {
         currentShiftPressed = true;
-        if (isDrawingMode && previewLineStartPointId) redrawAll();
+        if (!isActionInProgress && !isDrawingMode && lastGridState.interval1) {
+            const mouseDataPos = screenToData(mousePos);
+            const gridInterval = (lastGridState.alpha2 > lastGridState.alpha1 && lastGridState.interval2)
+                                   ? lastGridState.interval2
+                                   : lastGridState.interval1;
+            if (gridInterval > 0) {
+                ghostPointPosition = {
+                    x: Math.round(mouseDataPos.x / gridInterval) * gridInterval,
+                    y: Math.round(mouseDataPos.y / gridInterval) * gridInterval
+                };
+            }
+        }
     }
-    
+
     const allowedDuringAction = ['Shift', 'Control', 'Meta', 'Alt', 'Escape', 'Delete', 'Backspace'];
     if (isActionInProgress && !allowedDuringAction.includes(event.key) && !(isCtrlOrCmd && ['c','x','v','z','y','a','=','-'].includes(event.key.toLowerCase()))) return;
 
@@ -2392,14 +3075,12 @@ window.addEventListener('keydown', (event) => {
         event.preventDefault();
         const centerScreen = { x: (canvas.width/dpr)/2, y: (canvas.height/dpr)/2 };
         zoomAt(centerScreen, 1.15);
-        redrawAll();
         return;
     }
     if (isMouseOverCanvas && isCtrlOrCmd && event.key === '-') {
         event.preventDefault();
         const centerScreen = { x: (canvas.width/dpr)/2, y: (canvas.height/dpr)/2 };
         zoomAt(centerScreen, 1/1.15);
-        redrawAll();
         return;
     }
 
@@ -2429,16 +3110,14 @@ window.addEventListener('keydown', (event) => {
         event.preventDefault();
         selectedPointIds = allPoints.filter(p => p.type === 'regular').map(p => p.id);
         selectedEdgeIds = allEdges.map(edge => getEdgeId(edge));
-        if (!activeCenterId && allPoints.some(p => p.type !== 'regular')) {
-            activeCenterId = allPoints.find(p => p.type !== 'regular').id;
+        
+        if (!activeCenterId) {
+             const firstCenter = allPoints.find(p => p.type !== 'regular');
+             if (firstCenter) {
+                 activeCenterId = firstCenter.id;
+             }
         }
-        isDrawingMode = false;
-        previewLineStartPointId = null;
-        frozenReference_A_rad = null;
-        frozenReference_A_baseRad = null;
-        frozenReference_D_du = null;
-        frozenReference_Origin_Data = null;
-        redrawAll();
+        
     } else if (['c', 'r', 's'].includes(event.key.toLowerCase()) && !isCtrlOrCmd && !isActionInProgress) {
         event.preventDefault();
         saveStateForUndo();
@@ -2453,45 +3132,36 @@ window.addEventListener('keydown', (event) => {
         const newCenter = { id: generateUniqueId(), x: mouseDataPos.x, y: mouseDataPos.y, type: type, color: currentColor };
         allPoints.push(newCenter);
         activeCenterId = newCenter.id;
-        redrawAll();
     }
 });
 
 window.addEventListener('keyup', (event) => {
     if (event.key === 'Shift') {
         currentShiftPressed = false;
-        const needsRedraw = ghostPointPosition || (isDrawingMode && previewLineStartPointId) || (isActionInProgress && isDragConfirmed);
         ghostPointPosition = null;
-        if (needsRedraw) {
-            redrawAll();
-        }
     }
 });
 
-document.getElementById('showAnglesCheckbox').addEventListener('change', (e) => { showAngles = e.target.checked; redrawAll(); });
-document.getElementById('showDistancesCheckbox').addEventListener('change', (e) => { showDistances = e.target.checked; redrawAll(); });
-document.getElementById('angleSigFigs').addEventListener('change', (e) => { angleSigFigs = parseInt(e.target.value) || 2; redrawAll(); });
-document.getElementById('distanceSigFigs').addEventListener('change', (e) => { distanceSigFigs = parseInt(e.target.value) || 2; redrawAll(); });
 window.addEventListener('resize', resizeCanvas);
 
+colorPicker.addEventListener('change', (e) => {
+    setCurrentColor(e.target.value);
+});
 
+function gameLoop() {
+    redrawAll();
+    requestAnimationFrame(gameLoop);
+}
+
+// In your 'load' event listener
 window.addEventListener('load', () => {
     if (typeof window.katex === 'undefined') {
         console.error("KaTeX library failed to load or initialize. Math rendering will be broken.");
     }
-
-    // Force the UI to match the desired initial state from the script.
-    showGrid = true;
-    toggleGridCheckbox.checked = showGrid;
-
-    // --- START: ADD THIS LINE ---
-    // Read the selected grid type from the HTML dropdown into the script's variable.
-    gridType = gridTypeSelect.value;
-    // --- END: ADD THIS LINE ---
-
+    initializeCanvasUI();
     resizeCanvas();
-    updateColorPalette();
     setCurrentColor(currentColor);
     saveStateForUndo();
-    redrawAll();
+    // redrawAll(); // DELETE THIS LINE
+    gameLoop();   // AND ADD THIS LINE to start the loop
 });
