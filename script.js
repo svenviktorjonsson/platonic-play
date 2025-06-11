@@ -51,6 +51,11 @@ let currentDrawingFirstSegmentAbsoluteAngleRad = null;
 let dragBoundaryContext = null;
 let isMouseOverCanvas = false;
 let placingSnapPos = null;
+let isDisplayPanelExpanded = false;
+let coordsDisplayMode = 'none';    // Options: 'regular', 'complex', 'polar', 'none'
+let gridDisplayMode = 'none';      // Options: 'lines', 'points', 'none'
+let angleDisplayMode = 'degrees';  // Options: 'degrees', 'radians', 'none'
+let distanceDisplayMode = 'on';    // Options: 'on', 'none'
 
 let allPoints = [];
 let allEdges = [];
@@ -774,9 +779,15 @@ const canvasUI = {
     mainToolbar: null,
     colorToolButton: null,
     colorSwatches: [],
-    addColorButton: null
+    addColorButton: null,
+    transformToolButton: null, // Ensure this exists if it doesn't already
+    transformIcons: [],      // Ensure this exists if it doesn't already
+    // NEW UI elements
+    displayToolButton: null,
+    displayIcons: []
 };
 
+// NEW: Function to build the Display Settings Button in the main toolbar
 function buildMainToolbarUI() {
     const canvasHeight = canvas.height / dpr;
     canvasUI.mainToolbar = {
@@ -797,7 +808,6 @@ function buildMainToolbarUI() {
         height: 40,
     };
     
-    // Add the new Transform Tool button below the color button
     canvasUI.transformToolButton = {
         id: "transform-tool-button",
         type: "toolButton",
@@ -806,6 +816,40 @@ function buildMainToolbarUI() {
         width: UI_TOOLBAR_WIDTH - (2 * UI_BUTTON_PADDING),
         height: 40,
     };
+
+    // NEW: Add the Display Settings button
+    canvasUI.displayToolButton = {
+        id: "display-tool-button",
+        type: "toolButton",
+        x: UI_BUTTON_PADDING,
+        y: canvasUI.transformToolButton.y + canvasUI.transformToolButton.height + UI_BUTTON_PADDING,
+        width: UI_TOOLBAR_WIDTH - (2 * UI_BUTTON_PADDING),
+        height: 40,
+    };
+}
+
+
+function buildDisplayPanelUI() {
+    canvasUI.displayIcons = [];
+    if (!canvasUI.displayToolButton) return; // Guard against race conditions
+
+    const panelX = UI_TOOLBAR_WIDTH + UI_BUTTON_PADDING;
+    const iconY = canvasUI.displayToolButton.y;
+    const iconSize = 40; 
+    const iconPadding = 15;
+
+    const iconGroups = ['coords', 'grid', 'angles', 'distances'];
+
+    iconGroups.forEach((group, index) => {
+        canvasUI.displayIcons.push({
+            id: `display-icon-${group}`,
+            group: group,
+            x: panelX + index * (iconSize + iconPadding),
+            y: iconY,
+            width: iconSize,
+            height: iconSize
+        });
+    });
 }
 
 function buildTransformPanelUI() {
@@ -868,6 +912,255 @@ function buildColorPaletteUI() {
     };
 }
 
+function drawDisplayIcon(ctx, icon) {
+    const rect = { x: icon.x, y: icon.y, width: icon.width, height: icon.height };
+
+    switch (icon.group) {
+        case 'coords':
+            drawCoordsIcon(ctx, rect, coordsDisplayMode, true);
+            break;
+        case 'grid':
+            drawGridIcon(ctx, rect, gridDisplayMode, true);
+            break;
+        case 'angles':
+            drawAngleIcon(ctx, rect, angleDisplayMode, true);
+            break;
+        case 'distances':
+            drawDistanceIcon(ctx, rect, distanceDisplayMode, true);
+            break;
+    }
+}
+
+function drawCoordsIcon(ctx, rect, mode, isSelected) {
+    const colorStrong = isSelected ? '#F9FAFB' : '#9CA3AF';
+    const center = { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+
+    ctx.save();
+    ctx.translate(center.x, center.y);
+    const scale = rect.width / 32;
+    ctx.scale(scale, scale);
+    ctx.translate(-16, -16);
+
+    const x_offset = 1; // The amount to shift everything right
+
+    // Common elements: Axes
+    ctx.strokeStyle = colorStrong;
+    ctx.lineWidth = 1.5;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(2 + x_offset, 30); ctx.lineTo(30 + x_offset, 30); // X-axis (bottom)
+    ctx.moveTo(2 + x_offset, 30); ctx.lineTo(2 + x_offset, 2);   // Y-axis (left)
+    ctx.stroke();
+
+    // Mode-specific elements
+    ctx.fillStyle = colorStrong;
+
+    const point = { x: 16 + x_offset, y: 16 };
+    let labelPos = { x: 17 + x_offset, y: 8 };
+
+    let label = '';
+    switch (mode) {
+        case 'regular':
+            ctx.setLineDash([2, 2]);
+            ctx.beginPath();
+            ctx.moveTo(point.x, point.y); ctx.lineTo(point.x, 30);
+            ctx.moveTo(point.x, point.y); ctx.lineTo(2 + x_offset, point.y);
+            ctx.stroke();
+            ctx.setLineDash([]);
+            ctx.beginPath();
+            ctx.arc(point.x, point.y, 1.5, 0, 2 * Math.PI);
+            ctx.fill();
+            label = '(x,y)';
+            break;
+        case 'complex':
+            ctx.setLineDash([2, 2]);
+            ctx.beginPath();
+            ctx.moveTo(2 + x_offset, 30); ctx.lineTo(point.x, point.y);
+            ctx.stroke();
+            ctx.setLineDash([]);
+            ctx.beginPath();
+            ctx.arc(point.x, point.y, 1.5, 0, 2 * Math.PI);
+            ctx.fill();
+            label = 'x+iy';
+            break;
+        case 'polar':
+            ctx.setLineDash([2, 2]);
+            ctx.beginPath();
+            ctx.moveTo(2 + x_offset, 30); ctx.lineTo(point.x, point.y);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.arc(2 + x_offset, 30, 8, -Math.atan2(30 - point.y, point.x - (2 + x_offset)), 0);
+            ctx.stroke();
+            ctx.setLineDash([]);
+            ctx.beginPath();
+            ctx.arc(point.x, point.y, 1.5, 0, 2 * Math.PI);
+            ctx.fill();
+            label = '(r,\\theta)';
+            break;
+        case 'none':
+            break;
+    }
+    ctx.restore();
+
+    if (label) {
+        const labelId = 'icon-label-coords';
+        updateHtmlLabel({
+            id: labelId,
+            content: label,
+            x: center.x + (labelPos.x - 16) * scale,
+            y: center.y + (labelPos.y - 16) * scale,
+            color: isSelected ? '#E0F2FE' : '#D1D5DB',
+            fontSize: 10,
+            options: { textAlign: 'center', textBaseline: 'middle' }
+        });
+        labelsToKeepThisFrame.add(labelId);
+    }
+}
+
+function drawGridIcon(ctx, rect, mode, isSelected) {
+    const colorStrong = isSelected ? '#F9FAFB' : '#9CA3AF';
+    const center = { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+
+    ctx.save();
+    ctx.translate(center.x, center.y);
+    const scale = rect.width / 32;
+    ctx.scale(scale, scale);
+    ctx.translate(-16, -16);
+
+    ctx.strokeStyle = colorStrong;
+    ctx.fillStyle = colorStrong;
+    ctx.lineWidth = 1.5; // FIXED: Explicitly set for consistency
+
+    // Outer rectangle
+    ctx.strokeRect(2, 2, 28, 28);
+
+    switch (mode) {
+        case 'lines':
+            ctx.beginPath();
+            ctx.moveTo(2, 8); ctx.lineTo(30, 8);
+            ctx.moveTo(2, 16); ctx.lineTo(30, 16);
+            ctx.moveTo(2, 24); ctx.lineTo(30, 24);
+            ctx.moveTo(8, 2); ctx.lineTo(8, 30);
+            ctx.moveTo(16, 2); ctx.lineTo(16, 30);
+            ctx.moveTo(24, 2); ctx.lineTo(24, 30);
+            ctx.stroke();
+            break;
+        case 'points':
+            ctx.beginPath();
+            [8, 16, 24].forEach(x => {
+                [8, 16, 24].forEach(y => {
+                    ctx.moveTo(x, y);
+                    ctx.arc(x, y, 1.5, 0, 2 * Math.PI);
+                });
+            });
+            ctx.fill();
+            break;
+        case 'none':
+            break;
+    }
+    ctx.restore();
+}
+
+// UPDATED: Repositions the math label
+function drawAngleIcon(ctx, rect, mode, isSelected) {
+    const colorStrong = isSelected ? '#F9FAFB' : '#9CA3AF';
+    const center = { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+
+    ctx.save();
+    ctx.translate(center.x, center.y);
+    const scale = rect.width / 32;
+    ctx.scale(scale, scale);
+    ctx.translate(-16, -16);
+
+    ctx.strokeStyle = colorStrong;
+    ctx.lineWidth = 1.5;
+
+    const p1 = { x: 28, y: 30 };
+    const p2 = { x: 4, y: 30 };
+    const p3 = { x: 16, y: 8 };
+    ctx.beginPath();
+    ctx.moveTo(p1.x, p1.y);
+    ctx.lineTo(p2.x, p2.y);
+    ctx.lineTo(p3.x, p3.y);
+    ctx.stroke();
+
+    let label = '';
+    // FIXED: Label moved slightly to the right for better visual balance
+    let labelPos = { x: 20, y: 22 };
+
+    if (mode !== 'none') {
+        ctx.beginPath();
+        const angle = Math.atan2(p3.y - p2.y, p3.x - p2.x);
+        ctx.arc(p2.x, p2.y, 8, angle, 0);
+        ctx.stroke();
+        if (mode === 'degrees') {
+            label = '60^\\circ';
+        } else if (mode === 'radians') {
+            label = '\\pi/3';
+        }
+    }
+    ctx.restore();
+
+    if (label) {
+        const labelId = 'icon-label-angles';
+        updateHtmlLabel({
+            id: labelId,
+            content: label,
+            x: center.x + (labelPos.x - 16) * scale,
+            y: center.y + (labelPos.y - 16) * scale,
+            color: isSelected ? '#E0F2FE' : '#D1D5DB',
+            fontSize: 10,
+            options: { textAlign: 'center', textBaseline: 'middle' }
+        });
+        labelsToKeepThisFrame.add(labelId);
+    }
+}
+
+// UPDATED: Aligned to bottom
+function drawDistanceIcon(ctx, rect, mode, isSelected) {
+    const colorStrong = isSelected ? '#F9FAFB' : '#9CA3AF';
+    const center = { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+
+    ctx.save();
+    ctx.translate(center.x, center.y);
+    // Use the standard 32x32 viewbox for alignment
+    const scale = rect.width / 32;
+    ctx.scale(scale, scale);
+    ctx.translate(-16, -16);
+
+    ctx.strokeStyle = colorStrong;
+    ctx.lineWidth = 1.5;
+
+    // Line, now at y=30 to align with other icons
+    ctx.beginPath();
+    ctx.moveTo(2, 30);
+    ctx.lineTo(30, 30);
+    ctx.stroke();
+
+    let label = '';
+    // Position label above the line
+    let labelPos = { x: 16, y: 22 };
+
+    if (mode === 'on') {
+        label = '3.14';
+    }
+
+    ctx.restore();
+    if (label) {
+        const labelId = 'icon-label-distances';
+        updateHtmlLabel({
+            id: labelId,
+            content: label,
+            x: center.x + (labelPos.x - 16) * scale,
+            y: center.y + (labelPos.y - 16) * scale,
+            color: isSelected ? '#E0F2FE' : '#D1D5DB',
+            fontSize: 12,
+            options: { textAlign: 'center', textBaseline: 'middle' }
+        });
+        labelsToKeepThisFrame.add(labelId);
+    }
+}
+
 // Replace your existing createColorWheelIcon function with this one
 function createColorWheelIcon(size) {
     const tempCanvas = document.createElement('canvas');
@@ -918,11 +1211,51 @@ function createColorWheelIcon(size) {
     return tempCanvas;
 }
 
+
+
+// Add this new function to your script
+function drawUITransformSymbol(ctx, icon) {
+    const screenPos = { x: icon.x + icon.width / 2, y: icon.y + icon.height / 2 };
+    const radius = icon.width / 2;
+
+    ctx.strokeStyle = 'white';
+    ctx.setLineDash([]);
+    ctx.lineWidth = 2;
+
+    if (icon.type === 'center_rotate_scale') {
+        ctx.beginPath();
+        ctx.arc(screenPos.x, screenPos.y, radius, 0, 2 * Math.PI);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(screenPos.x - radius, screenPos.y);
+        ctx.lineTo(screenPos.x + radius, screenPos.y);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(screenPos.x, screenPos.y - radius);
+        ctx.lineTo(screenPos.x, screenPos.y + radius);
+        ctx.stroke();
+    } else if (icon.type === 'center_rotate_only') {
+        ctx.beginPath();
+        ctx.arc(screenPos.x, screenPos.y, radius, 0, 2 * Math.PI);
+        ctx.stroke();
+    } else if (icon.type === 'center_scale_only') {
+        ctx.beginPath();
+        ctx.moveTo(screenPos.x - radius, screenPos.y);
+        ctx.lineTo(screenPos.x + radius, screenPos.y);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(screenPos.x, screenPos.y - radius);
+        ctx.lineTo(screenPos.x, screenPos.y + radius);
+        ctx.stroke();
+    }
+}
+
 function drawCanvasUI(ctx) {
     ctx.save();
     ctx.resetTransform();
     ctx.scale(dpr, dpr);
 
+    // Draw the main toolbar expand/collapse button (hamburger icon)
     const btn = canvasUI.toolbarButton;
     ctx.strokeStyle = "rgba(255, 255, 255, 0.8)";
     ctx.lineWidth = 3;
@@ -934,37 +1267,57 @@ function drawCanvasUI(ctx) {
     }
     ctx.stroke();
 
+    // If the main toolbar is expanded, draw all the tool buttons
     if (isToolbarExpanded) {
+        // --- Color Tool Button ---
         const ctb = canvasUI.colorToolButton;
-        if (!colorWheelIcon) {
-            colorWheelIcon = createColorWheelIcon(ctb.width);
-        }
-        ctx.drawImage(colorWheelIcon, ctb.x, ctb.y, ctb.width, ctb.height);
-        if (isColorPaletteExpanded) {
-            ctx.strokeStyle = "rgba(255, 255, 255, 0.9)";
-            ctx.lineWidth = 2.5;
-            const radius = ctb.width / 2;
-            ctx.beginPath();
-            ctx.arc(ctb.x + ctb.width / 2, ctb.y + ctb.height / 2, radius + 1, 0, 2 * Math.PI);
-            ctx.stroke();
+        if (ctb) {
+            if (!colorWheelIcon) {
+                colorWheelIcon = createColorWheelIcon(ctb.width);
+            }
+            ctx.drawImage(colorWheelIcon, ctb.x, ctb.y, ctb.width, ctb.height);
+            // The selection box remains for the color tool, as it provides useful feedback
+            if (isColorPaletteExpanded) {
+                ctx.strokeStyle = "#00ffff";
+                ctx.lineWidth = 2.5;
+                ctx.strokeRect(ctb.x - 1, ctb.y - 1, ctb.width + 2, ctb.height + 2);
+            }
         }
 
+        // --- Transform Tool Button ---
         const ttb = canvasUI.transformToolButton;
         if (ttb) {
-            const labelColor = isTransformPanelExpanded ? "#00ffff" : "white";
+            const ttbLabelColor = isTransformPanelExpanded ? "#00ffff" : "white";
             updateHtmlLabel({
                 id: 'transform-tool-label',
                 content: 'T',
                 x: ttb.x + ttb.width / 2,
                 y: ttb.y + ttb.height / 2,
-                color: labelColor,
+                color: ttbLabelColor,
                 fontSize: 24,
-                options: {
-                    textAlign: 'center',
-                    textBaseline: 'middle'
-                }
+                options: { textAlign: 'center', textBaseline: 'middle' }
             });
             labelsToKeepThisFrame.add('transform-tool-label');
+        }
+
+        // --- Display Settings Button ---
+        const dtb = canvasUI.displayToolButton;
+        if (dtb) {
+            const displayButtonColor = "rgba(255, 255, 255, 0.8)";
+            ctx.strokeStyle = displayButtonColor;
+            ctx.fillStyle = displayButtonColor;
+            ctx.lineWidth = 2;
+            const barWidth = dtb.width - 12;
+            for (let i = 0; i < 3; i++) {
+                const y = dtb.y + 10 + i * 10;
+                ctx.beginPath();
+                ctx.moveTo(dtb.x + 6, y);
+                ctx.lineTo(dtb.x + 6 + barWidth, y);
+                ctx.stroke();
+                ctx.beginPath();
+                ctx.arc(dtb.x + 6 + barWidth * (i / 2), y, 3, 0, 2 * Math.PI);
+                ctx.fill();
+            }
         }
     }
 
@@ -972,7 +1325,9 @@ function drawCanvasUI(ctx) {
         labelsToKeepThisFrame.delete('transform-tool-label');
     }
 
+    // --- Draw Expanded Panels ---
     if (isColorPaletteExpanded) {
+        // This panel's drawing logic is unchanged
         const removeBtn = canvasUI.removeColorButton;
         if (removeBtn) {
             ctx.strokeStyle = "rgba(255, 255, 255, 0.8)";
@@ -1012,6 +1367,12 @@ function drawCanvasUI(ctx) {
         });
     }
 
+    if (isDisplayPanelExpanded) {
+        canvasUI.displayIcons.forEach(icon => {
+            drawDisplayIcon(ctx, icon);
+        });
+    }
+
     if (isPlacingTransform) {
         const finalDrawPos = placingSnapPos || mousePos;
         const ghostIcon = {
@@ -1027,43 +1388,6 @@ function drawCanvasUI(ctx) {
     ctx.restore();
 }
 
-// Add this new function to your script
-function drawUITransformSymbol(ctx, icon) {
-    const screenPos = { x: icon.x + icon.width / 2, y: icon.y + icon.height / 2 };
-    const radius = icon.width / 2;
-
-    ctx.strokeStyle = 'white';
-    ctx.setLineDash([]);
-    ctx.lineWidth = 2;
-
-    if (icon.type === 'center_rotate_scale') {
-        ctx.beginPath();
-        ctx.arc(screenPos.x, screenPos.y, radius, 0, 2 * Math.PI);
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.moveTo(screenPos.x - radius, screenPos.y);
-        ctx.lineTo(screenPos.x + radius, screenPos.y);
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.moveTo(screenPos.x, screenPos.y - radius);
-        ctx.lineTo(screenPos.x, screenPos.y + radius);
-        ctx.stroke();
-    } else if (icon.type === 'center_rotate_only') {
-        ctx.beginPath();
-        ctx.arc(screenPos.x, screenPos.y, radius, 0, 2 * Math.PI);
-        ctx.stroke();
-    } else if (icon.type === 'center_scale_only') {
-        ctx.beginPath();
-        ctx.moveTo(screenPos.x - radius, screenPos.y);
-        ctx.lineTo(screenPos.x + radius, screenPos.y);
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.moveTo(screenPos.x, screenPos.y - radius);
-        ctx.lineTo(screenPos.x, screenPos.y + radius);
-        ctx.stroke();
-    }
-}
-
 function handleCanvasUIClick(screenPos) {
     const btn = canvasUI.toolbarButton;
     if (screenPos.x >= btn.x && screenPos.x <= btn.x + btn.width &&
@@ -1072,8 +1396,10 @@ function handleCanvasUIClick(screenPos) {
         if (isToolbarExpanded) {
             buildMainToolbarUI();
         } else {
+            // Close all panels when main toolbar is closed
             isColorPaletteExpanded = false;
             isTransformPanelExpanded = false;
+            isDisplayPanelExpanded = false;
             selectedSwatchIndex = null;
         }
         return true;
@@ -1081,26 +1407,33 @@ function handleCanvasUIClick(screenPos) {
 
     if (isToolbarExpanded) {
         const ctb = canvasUI.colorToolButton;
-        if (screenPos.x >= ctb.x && screenPos.x <= ctb.x + ctb.width &&
+        if (ctb && screenPos.x >= ctb.x && screenPos.x <= ctb.x + ctb.width &&
             screenPos.y >= ctb.y && screenPos.y <= ctb.y + ctb.height) {
             isColorPaletteExpanded = !isColorPaletteExpanded;
             isTransformPanelExpanded = false;
-            if (isColorPaletteExpanded) {
-                buildColorPaletteUI();
-            } else {
-                selectedSwatchIndex = null;
-            }
+            isDisplayPanelExpanded = false;
+            if (isColorPaletteExpanded) buildColorPaletteUI();
+            else selectedSwatchIndex = null;
             return true;
         }
-        
+
         const ttb = canvasUI.transformToolButton;
         if (ttb && screenPos.x >= ttb.x && screenPos.x <= ttb.x + ttb.width &&
             screenPos.y >= ttb.y && screenPos.y <= ttb.y + ttb.height) {
             isTransformPanelExpanded = !isTransformPanelExpanded;
             isColorPaletteExpanded = false;
-            if (isTransformPanelExpanded) {
-                buildTransformPanelUI();
-            }
+            isDisplayPanelExpanded = false;
+            if (isTransformPanelExpanded) buildTransformPanelUI();
+            return true;
+        }
+
+        const dtb = canvasUI.displayToolButton;
+        if (dtb && screenPos.x >= dtb.x && screenPos.x <= dtb.x + dtb.width &&
+            screenPos.y >= dtb.y && screenPos.y <= dtb.y + dtb.height) {
+            isDisplayPanelExpanded = !isDisplayPanelExpanded;
+            isColorPaletteExpanded = false;
+            isTransformPanelExpanded = false;
+            if (isDisplayPanelExpanded) buildDisplayPanelUI();
             return true;
         }
     }
@@ -1127,7 +1460,7 @@ function handleCanvasUIClick(screenPos) {
                 } else {
                     selectedSwatchIndex = Math.min(selectedSwatchIndex, recentColors.length - 1);
                 }
-                if(selectedSwatchIndex !== null) {
+                if (selectedSwatchIndex !== null) {
                     setCurrentColor(recentColors[selectedSwatchIndex]);
                 }
                 buildColorPaletteUI();
@@ -1136,18 +1469,53 @@ function handleCanvasUIClick(screenPos) {
         }
         const addBtn = canvasUI.addColorButton;
         if (addBtn && screenPos.x >= addBtn.x && screenPos.x <= addBtn.x + addBtn.height) {
-            setTimeout(() => { colorPicker.click(); }, 0);
+            setTimeout(() => {
+                colorPicker.click();
+            }, 0);
             return true;
         }
     }
-    
+
     if (isTransformPanelExpanded) {
         for (const icon of canvasUI.transformIcons) {
             if (screenPos.x >= icon.x && screenPos.x <= icon.x + icon.width &&
                 screenPos.y >= icon.y && screenPos.y <= icon.y + icon.height) {
                 isPlacingTransform = true;
                 placingTransformType = icon.type;
+                isTransformPanelExpanded = false; // Close panel after selection
                 return true;
+            }
+        }
+    }
+
+    if (isDisplayPanelExpanded) {
+        for (const icon of canvasUI.displayIcons) {
+            if (screenPos.x >= icon.x && screenPos.x <= icon.x + icon.width &&
+                screenPos.y >= icon.y && screenPos.y <= icon.y + icon.height) {
+
+                // Cycle through modes for the clicked icon group
+                switch (icon.group) {
+                    case 'coords':
+                        const coordsModes = ['none', 'regular', 'complex', 'polar'];
+                        coordsDisplayMode = coordsModes[(coordsModes.indexOf(coordsDisplayMode) + 1) % coordsModes.length];
+                        break;
+                    case 'grid':
+                        const gridModes = ['none', 'points', 'lines'];
+                        gridDisplayMode = gridModes[(gridModes.indexOf(gridDisplayMode) + 1) % gridModes.length];
+                        // FUTURE: Link to showGrid and gridType here
+                        break;
+                    case 'angles':
+                        const angleModes = ['degrees', 'radians', 'none'];
+                        angleDisplayMode = angleModes[(angleModes.indexOf(angleDisplayMode) + 1) % angleModes.length];
+                        // FUTURE: Link to showAngles here
+                        break;
+                    case 'distances':
+                        const distModes = ['on', 'none'];
+                        distanceDisplayMode = distModes[(distModes.indexOf(distanceDisplayMode) + 1) % distModes.length];
+                        // FUTURE: Link to showDistances here
+                        break;
+                }
+                return true; // Click handled
             }
         }
     }
