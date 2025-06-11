@@ -1,4 +1,916 @@
+import {
+    formatNumber,
+    generateAngleSnapFractions,
+    generateUniqueId,
+    normalize,
+    normalizeAngleToPi,
+    normalizeAngleDegrees,
+    generateDistanceSnapFactors,
+    distance,
+    formatFraction,
+    hslToRgb,
+    getClosestPointOnLineSegment,
+    getMousePosOnCanvas,
+    snapToAngle,
+    formatSnapFactor,
+    simplifySquareRoot,
+    formatSimplifiedRoot
+} from './utils.js';
 
+const canvas = document.getElementById('drawingCanvas');
+const ctx = canvas.getContext('2d');
+const htmlOverlay = document.getElementById('html-overlay');
+const colorPicker = document.getElementById('colorPicker');
+
+const POINT_RADIUS = 5;
+const CENTER_POINT_VISUAL_RADIUS = POINT_RADIUS * 2;
+const POINT_SELECT_RADIUS = 10;
+const LINE_WIDTH = 2;
+const GRID_LINEWIDTH = 1;
+const DASH_PATTERN = [6, 6];
+const SELECTED_INDICATOR_OFFSET = 3;
+const DOUBLE_CLICK_MS = 300;
+const DRAG_THRESHOLD = 3;
+const EDGE_CLICK_THRESHOLD = 7;
+const dpr = window.devicePixelRatio || 1;
+const FROZEN_REFERENCE_COLOR = 'rgba(240, 240, 130, 0.95)'
+
+const DEFAULT_CALIBRATION_VIEW_SCALE = 80.0;
+const DEFAULT_REFERENCE_DISTANCE = 1.0;
+const DEFAULT_REFERENCE_ANGLE_RAD = Math.PI / 2;
+
+const UI_BUTTON_PADDING = 10;
+const UI_TOOLBAR_WIDTH = 56;
+const UI_SWATCH_SIZE = 30;
+
+let frozenReference_A_rad = null;
+let frozenReference_A_baseRad = null;
+let frozenReference_D_du = null;
+let frozenReference_Origin_Data = null;
+let currentDrawingFirstSegmentAbsoluteAngleRad = null;
+let dragBoundaryContext = null;
+let isMouseOverCanvas = false;
+let placingSnapPos = null;
+
+let allPoints = [];
+let allEdges = [];
+let selectedPointIds = [];
+let selectedEdgeIds = [];
+let activeCenterId = null;
+let mousePos = { x: 0, y: 0 };
+let currentColor = '#ffffff';
+let frozenReference_D_g2g = null; // Will store { g2gSquaredSum, interval }
+let isToolbarExpanded = false;
+let isColorPaletteExpanded = false;
+let selectedSwatchIndex = null;
+// Add these new state variables at the top of your script
+let isTransformPanelExpanded = false;
+let isPlacingTransform = false;
+let placingTransformType = null;
+
+// Default states for UI controls that were in HTML
+let showAngles = true;
+let showDistances = true;
+let angleSigFigs = 4;
+let distanceSigFigs = 3;
+let showGrid = true;
+let gridType = 'points';
+let gridColor = '#888888';
+let gridAlpha = 0.5;
+let colorWheelIcon = null
+let transformIndicatorData = null;
+
+let viewTransform = {
+    scale: DEFAULT_CALIBRATION_VIEW_SCALE,
+    offsetX: 0,
+    offsetY: 0
+};
+
+let isActionInProgress = false;
+let isDragConfirmed = false;
+let isPanningBackground = false;
+let isRectangleSelecting = false;
+let currentMouseButton = -1;
+let actionStartPos = { x: 0, y: 0 };
+let backgroundPanStartOffset = { x: 0, y: 0 };
+let initialDragPointStates = [];
+let rectangleSelectStartPos = { x: 0, y: 0 };
+let actionContext = null;
+
+let recentColors = ['#ffffff', '#ff4444', '#44ff44', '#4444ff', '#ffff44', '#ff44ff', '#44ffff', '#ffa544'];
+
+let isDrawingMode = false;
+let previewLineStartPointId = null;
+let actionTargetPoint = null;
+let isTransformDrag = false;
+let dragPreviewPoints = [];
+let currentShiftPressed = false;
+let clipboard = { points: [], edges: [], referencePoint: null };
+let clickData = { targetId: null, type: null, count: 0, timestamp: 0 };
+let undoStack = [];
+let redoStack = [];
+let ghostPointPosition = null;
+let selectedCenterIds = []; // ADD THIS NEW STATE VARIABLE
+
+let lastGridState = {
+    interval1: null,
+    interval2: null,
+    alpha1: 0,
+    alpha2: 0,
+    scale: null
+};
+
+const MAX_HISTORY_SIZE = 50;
+
+const MAX_FRACTION_DENOMINATOR_FOR_ANGLE_SNAPS = 6;
+const MAX_BASE_ANGLE_MULTIPLIER_FOR_SNAPS = 2;
+const ANGLE_SNAP_FRACTIONS = generateAngleSnapFractions(
+    MAX_FRACTION_DENOMINATOR_FOR_ANGLE_SNAPS,
+    MAX_BASE_ANGLE_MULTIPLIER_FOR_SNAPS
+);
+
+const MAX_INITIAL_METER_SNAP_MULTIPLIER = 10;
+const INITIAL_DISTANCE_SNAP_FACTORS = generateAngleSnapFractions(
+    MAX_FRACTION_DENOMINATOR_FOR_ANGLE_SNAPS,
+    MAX_INITIAL_METER_SNAP_MULTIPLIER
+);
+
+const MAX_SNAP_DENOMINATOR = 6;
+const MAX_SNAP_INTEGER = 10;
+
+
+
+
+
+function generateSnapFactors(maxDenominator, maxInteger) {
+    const fractionsSet = new Set();
+    fractionsSet.add(0);
+    for (let q = 1; q <= maxDenominator; q++) {
+        for (let p = 1; p <= q * maxInteger; p++) {
+            fractionsSet.add(p / q);
+        }
+    }
+    return Array.from(fractionsSet).sort((a, b) => a - b);
+}
+
+const NINETY_DEG_ANGLE_SNAP_FRACTIONS = (() => {
+    const uniqueFractions = new Set();
+    const denominators = [1, 2, 3, 4, 5, 6];
+    for (const q of denominators) {
+        // Generate fractions for angles up to 360 degrees (p/q * 90 <= 360 => p/q <= 4)
+        for (let p = 1; p <= q * 4; p++) {
+            uniqueFractions.add(p / q);
+        }
+    }
+    return Array.from(uniqueFractions).sort((a, b) => a - b);
+})();
+
+const SNAP_FACTORS = generateSnapFactors(MAX_SNAP_DENOMINATOR, MAX_SNAP_INTEGER);
+const tempSegmentSnapFactorsForAlt = SNAP_FACTORS.filter(f => f > 0 && f <= 1);
+const SEGMENT_SNAP_FRACTIONS = [...new Set([0, ...tempSegmentSnapFactorsForAlt, 1])].sort((a,b)=>a-b);
+
+function normalizeAngle(angleRad) {
+    while (angleRad < 0) angleRad += 2 * Math.PI;
+    while (angleRad >= 2 * Math.PI) angleRad -= 2 * Math.PI;
+    return angleRad;
+}
+
+const SORTED_SNAP_DISTANCES = [...new Set(SNAP_FACTORS.map(f => f * DEFAULT_REFERENCE_DISTANCE))].sort((a, b) => a - b);
+const SORTED_SNAP_ANGLES = [...new Set(NINETY_DEG_ANGLE_SNAP_FRACTIONS.flatMap(f => {
+    const offset = f * (Math.PI / 2);
+    return [0, Math.PI / 2, Math.PI, 3 * Math.PI / 2].flatMap(base => [normalizeAngle(base + offset), normalizeAngle(base - offset)]);
+}))].sort((a, b) => a - b);
+
+let lastSnapResult = null;
+
+function solveForPoint(N1, N2, d1, alpha) {
+    const d_n = distance(N1, N2);
+    if (d_n < 1e-6 || Math.sin(alpha) < 1e-6) return [];
+    const solutions = [];
+    const A = 1,
+        B = -2 * d1 * Math.cos(alpha),
+        C = d1 * d1 - d_n * d_n;
+    const discriminant = B * B - 4 * A * C;
+    if (discriminant < 0) return [];
+
+    [(-B + Math.sqrt(discriminant)) / (2 * A), (-B - Math.sqrt(discriminant)) / (2 * A)].forEach(d2 => {
+        if (d2 <= 0) return;
+        const a = (d1 * d1 - d2 * d2 + d_n * d_n) / (2 * d_n);
+        const h = Math.sqrt(Math.max(0, d1 * d1 - a * a));
+        const x_mid = N1.x + a * (N2.x - N1.x) / d_n;
+        const y_mid = N1.y + a * (N2.y - N1.y) / d_n;
+        solutions.push({ x: x_mid + h * (N2.y - N1.y) / d_n, y: y_mid - h * (N2.x - N1.x) / d_n, dist: d1, angle: alpha });
+        solutions.push({ x: x_mid - h * (N2.y - N1.y) / d_n, y: y_mid + h * (N2.x - N1.x) / d_n, dist: d1, angle: alpha });
+    });
+    return solutions;
+}
+
+const activeHtmlLabels = new Map();
+let labelsToKeepThisFrame = new Set();
+
+function handleCenterSelection(centerId, shiftKey, ctrlKey) {
+    if (ctrlKey) {
+        const index = selectedCenterIds.indexOf(centerId);
+        if (index > -1) {
+            selectedCenterIds.splice(index, 1);
+        } else {
+            selectedCenterIds.push(centerId);
+        }
+    } else if (shiftKey) {
+        if (!selectedCenterIds.includes(centerId)) {
+            selectedCenterIds.push(centerId);
+        }
+    } else {
+        selectedPointIds = [];
+        selectedEdgeIds = [];
+        if (selectedCenterIds.length === 1 && selectedCenterIds[0] === centerId) {
+            return;
+        }
+        selectedCenterIds = [centerId];
+    }
+    activeCenterId = selectedCenterIds.length > 0 ? selectedCenterIds[selectedCenterIds.length - 1] : null;
+}
+
+function getTransformSnap(center, mouseDataPos, startReferencePoint, transformType) {
+    const allCandidates = [];
+    const startVector = { x: startReferencePoint.x - center.x, y: startReferencePoint.y - center.y };
+    const startDist = Math.hypot(startVector.x, startVector.y);
+    const startAngle = Math.atan2(startVector.y, startVector.x);
+
+    const gridInterval = (lastGridState.alpha2 > lastGridState.alpha1 && lastGridState.interval2) ? lastGridState.interval2 : lastGridState.interval1;
+    if (gridInterval > 0) {
+        const baseGridX = Math.round(mouseDataPos.x / gridInterval) * gridInterval;
+        const baseGridY = Math.round(mouseDataPos.y / gridInterval) * gridInterval;
+        for (let dx = -2; dx <= 2; dx++) {
+            for (let dy = -2; dy <= 2; dy++) {
+                allCandidates.push({
+                    pos: { x: baseGridX + dx * gridInterval, y: baseGridY + dy * gridInterval },
+                    type: 'grid', pureRotation: null, pureScale: null
+                });
+            }
+        }
+    }
+
+    if (startDist > 1e-9) {
+        const scaleSnapFactors = SNAP_FACTORS.filter(f => f > 0);
+        const angleSnapFractions = NINETY_DEG_ANGLE_SNAP_FRACTIONS;
+        const useAngleSnaps = transformType !== 'center_scale_only';
+        const useScaleSnaps = transformType !== 'center_rotate_only';
+
+        const rotationSnaps = useAngleSnaps ? angleSnapFractions.flatMap(f => (f === 0 ? [0] : [f * Math.PI / 2, -f * Math.PI / 2])) : [0];
+        const scaleSnaps = useScaleSnaps ? scaleSnapFactors : [1];
+
+        for (const rot of rotationSnaps) {
+            for (const factor of scaleSnaps) {
+                const dist = startDist * factor;
+                allCandidates.push({
+                    pos: { x: center.x + dist * Math.cos(startAngle + rot), y: center.y + dist * Math.sin(startAngle + rot) },
+                    type: 'transform', pureRotation: rot, pureScale: factor
+                });
+            }
+        }
+    }
+
+    if (allCandidates.length === 0) return { snapped: false };
+
+    let bestCandidate = allCandidates.reduce((best, current) => {
+        const distSq = (p, c) => (p.x - c.pos.x) ** 2 + (p.y - c.pos.y) ** 2;
+        return distSq(mouseDataPos, current) < distSq(mouseDataPos, best) ? current : best;
+    });
+
+    const finalVec = { x: bestCandidate.pos.x - center.x, y: bestCandidate.pos.y - center.y };
+    const finalRotation = normalizeAngleToPi(Math.atan2(finalVec.y, finalVec.x) - startAngle);
+    const finalScale = (startDist > 1e-9) ? Math.hypot(finalVec.x, finalVec.y) / startDist : 1;
+
+    return {
+        snapped: true,
+        pos: bestCandidate.pos,
+        rotation: bestCandidate.pureRotation ?? finalRotation,
+        scale: bestCandidate.pureScale ?? finalScale,
+        pureScaleForDisplay: bestCandidate.pureScale
+    };
+}
+
+function drawTransformIndicators(ctx) {
+    if (!transformIndicatorData) return;
+
+    const { center, startPos, currentPos, rotation, scale, isSnapping, snappedScaleValue, transformType } = transformIndicatorData;
+
+    const centerScreen = dataToScreen(center);
+    const startScreen = dataToScreen(startPos);
+    const currentScreen = dataToScreen(currentPos);
+
+    const color = isSnapping ? 'rgba(240, 240, 130, 0.95)' : 'rgba(230, 230, 230, 0.95)';
+    const katexFontSize = 12;
+
+    const startVecScreen = { x: startScreen.x - centerScreen.x, y: startScreen.y - centerScreen.y };
+    const currentVecScreen = { x: currentScreen.x - centerScreen.x, y: currentScreen.y - centerScreen.y };
+
+    const startAngleScreen = Math.atan2(startVecScreen.y, startVecScreen.x);
+    const currentAngleScreen = Math.atan2(currentVecScreen.y, currentVecScreen.x);
+    const arcRadius = Math.hypot(startVecScreen.x, startVecScreen.y);
+
+    ctx.save();
+    ctx.setLineDash(DASH_PATTERN);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1;
+
+    ctx.beginPath();
+    ctx.moveTo(centerScreen.x, centerScreen.y);
+    ctx.lineTo(startScreen.x, startScreen.y);
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.moveTo(centerScreen.x, centerScreen.y);
+    ctx.lineTo(currentScreen.x, currentScreen.y);
+    ctx.stroke();
+
+    ctx.setLineDash([]);
+
+    if (transformType !== 'center_scale_only' && Math.abs(rotation) > 0.001) {
+        const screenRotation = -rotation;
+        const anticlockwise = screenRotation < 0;
+        ctx.beginPath();
+        ctx.arc(centerScreen.x, centerScreen.y, arcRadius, startAngleScreen, startAngleScreen + screenRotation, anticlockwise);
+        ctx.stroke();
+    }
+    ctx.restore();
+
+    if (transformType !== 'center_scale_only' && Math.abs(rotation) > 0.001) {
+        const angleDeg = rotation * (180 / Math.PI);
+        const angleText = `${formatNumber(angleDeg, angleSigFigs)}^{\\circ}`;
+        const angleDiff = normalizeAngleToPi(currentAngleScreen - startAngleScreen);
+        const bisectorAngle = startAngleScreen + angleDiff / 2;
+        const labelRadius = arcRadius + 20;
+        const angleTextX = centerScreen.x + labelRadius * Math.cos(bisectorAngle);
+        const angleTextY = centerScreen.y + labelRadius * Math.sin(bisectorAngle);
+
+        updateHtmlLabel({
+            id: 'transform-angle-indicator',
+            content: angleText,
+            x: angleTextX,
+            y: angleTextY,
+            color: color,
+            fontSize: katexFontSize,
+            options: { textAlign: 'center', textBaseline: 'middle' }
+        });
+    }
+
+    if (transformType !== 'center_rotate_only' && Math.abs(scale - 1) > 0.001) {
+        let scaleText;
+        if (isSnapping && snappedScaleValue !== null) {
+            scaleText = `\\times ${formatFraction(snappedScaleValue, 0.001, 10)}`;
+        } else {
+            scaleText = `\\times ${formatNumber(scale, distanceSigFigs)}`;
+        }
+
+        const midX = (centerScreen.x + currentScreen.x) / 2;
+        const midY = (centerScreen.y + currentScreen.y) / 2;
+        let textPerpAngle = currentAngleScreen - Math.PI / 2;
+        const textOffset = 18;
+        const scaleTextX = midX + Math.cos(textPerpAngle) * textOffset;
+        const scaleTextY = midY + Math.sin(textPerpAngle) * textOffset;
+
+        let rotationDeg = currentAngleScreen * (180 / Math.PI);
+        if (rotationDeg > 90 || rotationDeg < -90) {
+            rotationDeg += 180;
+        }
+
+        updateHtmlLabel({
+            id: 'transform-scale-indicator',
+            content: scaleText,
+            x: scaleTextX,
+            y: scaleTextY,
+            color: color,
+            fontSize: katexFontSize,
+            options: { textAlign: 'center', textBaseline: 'bottom', rotation: rotationDeg }
+        });
+    }
+}
+
+function initializeCanvasUI() {
+    canvasUI.toolbarButton = {
+        id: "toolbar-button",
+        x: UI_BUTTON_PADDING,
+        y: UI_BUTTON_PADDING,
+        width: 36,
+        height: 30,
+        type: "menuButton"
+    };
+}
+
+function calculateGridIntervals(viewTransformScale) {
+    const targetScreenSpacing = 80;
+    const effectiveDataInterval = targetScreenSpacing / viewTransformScale;
+    
+    const logInterval = Math.log10(effectiveDataInterval);
+    const lowerPowerOf10 = Math.pow(10, Math.floor(logInterval));
+    const higherPowerOf10 = Math.pow(10, Math.ceil(logInterval));
+    
+    let grid1Interval = lowerPowerOf10;
+    let grid2Interval = higherPowerOf10;
+    let alpha1 = 1;
+    let alpha2 = 0;
+    
+    if (Math.abs(higherPowerOf10 - lowerPowerOf10) > lowerPowerOf10 * 0.0001) {
+        const logInterpFactor = (logInterval - Math.log10(lowerPowerOf10)) / (Math.log10(higherPowerOf10) - Math.log10(lowerPowerOf10));
+        
+        const transitionZoneStart = 0.2;
+        const transitionZoneEnd = 0.8;
+        
+        let interpValue = (logInterpFactor - transitionZoneStart) / (transitionZoneEnd - transitionZoneStart);
+        interpValue = Math.max(0, Math.min(1, interpValue));
+        interpValue = interpValue * interpValue * (3 - 2 * interpValue);
+        
+        alpha1 = 1 - interpValue;
+        alpha2 = interpValue;
+    } else {
+        grid2Interval = null;
+    }
+    
+    return { grid1Interval, grid2Interval, alpha1, alpha2 };
+}
+
+const canvasUI = {
+    toolbarButton: null,
+    mainToolbar: null,
+    colorToolButton: null,
+    colorSwatches: [],
+    addColorButton: null
+};
+
+function buildMainToolbarUI() {
+    const canvasHeight = canvas.height / dpr;
+    canvasUI.mainToolbar = {
+        id: "main-toolbar-bg",
+        x: 0,
+        y: 0,
+        width: UI_TOOLBAR_WIDTH,
+        height: canvasHeight,
+        type: "toolbar"
+    };
+
+    canvasUI.colorToolButton = {
+        id: "color-tool-button",
+        type: "toolButton",
+        x: UI_BUTTON_PADDING,
+        y: canvasUI.toolbarButton.y + canvasUI.toolbarButton.height + 20,
+        width: UI_TOOLBAR_WIDTH - (2 * UI_BUTTON_PADDING),
+        height: 40,
+    };
+    
+    // Add the new Transform Tool button below the color button
+    canvasUI.transformToolButton = {
+        id: "transform-tool-button",
+        type: "toolButton",
+        x: UI_BUTTON_PADDING,
+        y: canvasUI.colorToolButton.y + canvasUI.colorToolButton.height + UI_BUTTON_PADDING,
+        width: UI_TOOLBAR_WIDTH - (2 * UI_BUTTON_PADDING),
+        height: 40,
+    };
+}
+
+function buildTransformPanelUI() {
+    canvasUI.transformIcons = [];
+    const panelX = UI_TOOLBAR_WIDTH + UI_BUTTON_PADDING;
+    const iconY = canvasUI.transformToolButton.y;
+    const iconSize = 30;
+    const iconPadding = 15;
+    const transformTypes = ['center_rotate_scale', 'center_rotate_only', 'center_scale_only'];
+
+    transformTypes.forEach((type, index) => {
+        canvasUI.transformIcons.push({
+            id: `transform-icon-${type}`,
+            type: type,
+            x: panelX + index * (iconSize + iconPadding),
+            y: iconY + 5, // Align vertically with the T button
+            width: iconSize,
+            height: iconSize
+        });
+    });
+}
+
+function buildColorPaletteUI() {
+    canvasUI.colorSwatches = [];
+    // This is the corrected line: The Y position is now based on the color tool button
+    const paletteY = canvasUI.colorToolButton.y;
+
+    const removeBtnX = UI_TOOLBAR_WIDTH + UI_BUTTON_PADDING;
+    canvasUI.removeColorButton = {
+        id: "remove-color-button",
+        type: "button",
+        x: removeBtnX,
+        y: paletteY + 5, // Add a small offset to center it with the button
+        width: UI_SWATCH_SIZE,
+        height: UI_SWATCH_SIZE,
+    };
+
+    const swatchesX = removeBtnX + UI_SWATCH_SIZE + UI_BUTTON_PADDING;
+    recentColors.forEach((color, index) => {
+        canvasUI.colorSwatches.push({
+            id: `swatch-${color}-${index}`,
+            type: "colorSwatch",
+            x: swatchesX + index * (UI_SWATCH_SIZE + UI_BUTTON_PADDING),
+            y: paletteY + 5, // Add a small offset to center it with the button
+            width: UI_SWATCH_SIZE,
+            height: UI_SWATCH_SIZE,
+            index: index,
+            color: color
+        });
+    });
+
+    const addButtonX = swatchesX + recentColors.length * (UI_SWATCH_SIZE + UI_BUTTON_PADDING);
+    canvasUI.addColorButton = {
+        id: "add-color-button",
+        type: "button",
+        x: addButtonX,
+        y: paletteY + 5, // Add a small offset to center it with the button
+        width: UI_SWATCH_SIZE,
+        height: UI_SWATCH_SIZE,
+    };
+}
+
+// Replace your existing createColorWheelIcon function with this one
+function createColorWheelIcon(size) {
+    const tempCanvas = document.createElement('canvas');
+    tempCanvas.width = size * dpr;
+    tempCanvas.height = size * dpr;
+    const tempCtx = tempCanvas.getContext('2d');
+    const imageData = tempCtx.createImageData(tempCanvas.width, tempCanvas.height);
+    const pixels = imageData.data;
+
+    const centerX = tempCanvas.width / 2;
+    const centerY = tempCanvas.height / 2;
+    const radius = tempCanvas.width / 2;
+
+    for (let y = 0; y < tempCanvas.height; y++) {
+        for (let x = 0; x < tempCanvas.width; x++) {
+            const i = (y * tempCanvas.width + x) * 4;
+            const dx = x - centerX;
+            const dy = y - centerY;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+
+            if (dist > radius) continue;
+
+            const hue = (Math.atan2(dy, dx) * 180 / Math.PI + 360) % 360;
+            const saturation = 100; // Saturation is now always 100%
+            const lightness = 50;
+
+            let alpha;
+            const fadeStartRadius = radius * 0.75;
+
+            if (dist < fadeStartRadius) {
+                alpha = 1.0; // Opaque inside 75% of the radius
+            } else {
+                // Smoothly fade from opaque to transparent on the outer edge
+                const fadeDistance = radius - fadeStartRadius;
+                alpha = 1.0 - ((dist - fadeStartRadius) / fadeDistance);
+            }
+
+            const [R, G, B] = hslToRgb(hue / 360, saturation / 100, lightness / 100);
+
+            pixels[i] = R;
+            pixels[i + 1] = G;
+            pixels[i + 2] = B;
+            pixels[i + 3] = Math.round(Math.max(0, alpha) * 255);
+        }
+    }
+
+    tempCtx.putImageData(imageData, 0, 0);
+    return tempCanvas;
+}
+
+function drawCanvasUI(ctx) {
+    ctx.save();
+    ctx.resetTransform();
+    ctx.scale(dpr, dpr);
+
+    const btn = canvasUI.toolbarButton;
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.8)";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    for (let i = 0; i < 3; i++) {
+        const lineY = btn.y + 5 + i * 10;
+        ctx.moveTo(btn.x + 4, lineY);
+        ctx.lineTo(btn.x + btn.width - 4, lineY);
+    }
+    ctx.stroke();
+
+    if (isToolbarExpanded) {
+        const ctb = canvasUI.colorToolButton;
+        if (!colorWheelIcon) {
+            colorWheelIcon = createColorWheelIcon(ctb.width);
+        }
+        ctx.drawImage(colorWheelIcon, ctb.x, ctb.y, ctb.width, ctb.height);
+        if (isColorPaletteExpanded) {
+            ctx.strokeStyle = "rgba(255, 255, 255, 0.9)";
+            ctx.lineWidth = 2.5;
+            const radius = ctb.width / 2;
+            ctx.beginPath();
+            ctx.arc(ctb.x + ctb.width / 2, ctb.y + ctb.height / 2, radius + 1, 0, 2 * Math.PI);
+            ctx.stroke();
+        }
+
+        const ttb = canvasUI.transformToolButton;
+        if (ttb) {
+            const labelColor = isTransformPanelExpanded ? "#00ffff" : "white";
+            updateHtmlLabel({
+                id: 'transform-tool-label',
+                content: 'T',
+                x: ttb.x + ttb.width / 2,
+                y: ttb.y + ttb.height / 2,
+                color: labelColor,
+                fontSize: 24,
+                options: {
+                    textAlign: 'center',
+                    textBaseline: 'middle'
+                }
+            });
+            labelsToKeepThisFrame.add('transform-tool-label');
+        }
+    }
+
+    if (!isToolbarExpanded) {
+        labelsToKeepThisFrame.delete('transform-tool-label');
+    }
+
+    if (isColorPaletteExpanded) {
+        const removeBtn = canvasUI.removeColorButton;
+        if (removeBtn) {
+            ctx.strokeStyle = "rgba(255, 255, 255, 0.8)";
+            ctx.lineWidth = 2;
+            ctx.strokeRect(removeBtn.x, removeBtn.y, removeBtn.width, removeBtn.height);
+            ctx.beginPath();
+            ctx.moveTo(removeBtn.x + 7, removeBtn.y + removeBtn.height / 2);
+            ctx.lineTo(removeBtn.x + removeBtn.width - 7, removeBtn.y + removeBtn.height / 2);
+            ctx.stroke();
+        }
+        canvasUI.colorSwatches.forEach((swatch, index) => {
+            ctx.fillStyle = swatch.color;
+            ctx.fillRect(swatch.x, swatch.y, swatch.width, swatch.height);
+            if (index === selectedSwatchIndex) {
+                ctx.strokeStyle = "#00ffff";
+                ctx.lineWidth = 3;
+                ctx.strokeRect(swatch.x - 1, swatch.y - 1, swatch.width + 2, swatch.height + 2);
+            }
+        });
+        const addBtn = canvasUI.addColorButton;
+        if (addBtn) {
+            ctx.strokeStyle = "rgba(255, 255, 255, 0.8)";
+            ctx.lineWidth = 2;
+            ctx.strokeRect(addBtn.x, addBtn.y, addBtn.width, addBtn.height);
+            ctx.beginPath();
+            ctx.moveTo(addBtn.x + addBtn.width / 2, addBtn.y + 7);
+            ctx.lineTo(addBtn.x + addBtn.width / 2, addBtn.y + addBtn.height - 7);
+            ctx.moveTo(addBtn.x + 7, addBtn.y + addBtn.height / 2);
+            ctx.lineTo(addBtn.x + addBtn.width - 7, addBtn.y + addBtn.height / 2);
+            ctx.stroke();
+        }
+    }
+
+    if (isTransformPanelExpanded) {
+        canvasUI.transformIcons.forEach(icon => {
+            drawUITransformSymbol(ctx, icon);
+        });
+    }
+
+    if (isPlacingTransform) {
+        const finalDrawPos = placingSnapPos || mousePos;
+        const ghostIcon = {
+            type: placingTransformType,
+            x: finalDrawPos.x - 15,
+            y: finalDrawPos.y - 15,
+            width: 30,
+            height: 30
+        };
+        drawUITransformSymbol(ctx, ghostIcon);
+    }
+
+    ctx.restore();
+}
+
+// Add this new function to your script
+function drawUITransformSymbol(ctx, icon) {
+    const screenPos = { x: icon.x + icon.width / 2, y: icon.y + icon.height / 2 };
+    const radius = icon.width / 2;
+
+    ctx.strokeStyle = 'white';
+    ctx.setLineDash([]);
+    ctx.lineWidth = 2;
+
+    if (icon.type === 'center_rotate_scale') {
+        ctx.beginPath();
+        ctx.arc(screenPos.x, screenPos.y, radius, 0, 2 * Math.PI);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(screenPos.x - radius, screenPos.y);
+        ctx.lineTo(screenPos.x + radius, screenPos.y);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(screenPos.x, screenPos.y - radius);
+        ctx.lineTo(screenPos.x, screenPos.y + radius);
+        ctx.stroke();
+    } else if (icon.type === 'center_rotate_only') {
+        ctx.beginPath();
+        ctx.arc(screenPos.x, screenPos.y, radius, 0, 2 * Math.PI);
+        ctx.stroke();
+    } else if (icon.type === 'center_scale_only') {
+        ctx.beginPath();
+        ctx.moveTo(screenPos.x - radius, screenPos.y);
+        ctx.lineTo(screenPos.x + radius, screenPos.y);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(screenPos.x, screenPos.y - radius);
+        ctx.lineTo(screenPos.x, screenPos.y + radius);
+        ctx.stroke();
+    }
+}
+
+function handleCanvasUIClick(screenPos) {
+    const btn = canvasUI.toolbarButton;
+    if (screenPos.x >= btn.x && screenPos.x <= btn.x + btn.width &&
+        screenPos.y >= btn.y && screenPos.y <= btn.y + btn.height) {
+        isToolbarExpanded = !isToolbarExpanded;
+        if (isToolbarExpanded) {
+            buildMainToolbarUI();
+        } else {
+            isColorPaletteExpanded = false;
+            isTransformPanelExpanded = false;
+            selectedSwatchIndex = null;
+        }
+        return true;
+    }
+
+    if (isToolbarExpanded) {
+        const ctb = canvasUI.colorToolButton;
+        if (screenPos.x >= ctb.x && screenPos.x <= ctb.x + ctb.width &&
+            screenPos.y >= ctb.y && screenPos.y <= ctb.y + ctb.height) {
+            isColorPaletteExpanded = !isColorPaletteExpanded;
+            isTransformPanelExpanded = false;
+            if (isColorPaletteExpanded) {
+                buildColorPaletteUI();
+            } else {
+                selectedSwatchIndex = null;
+            }
+            return true;
+        }
+        
+        const ttb = canvasUI.transformToolButton;
+        if (ttb && screenPos.x >= ttb.x && screenPos.x <= ttb.x + ttb.width &&
+            screenPos.y >= ttb.y && screenPos.y <= ttb.y + ttb.height) {
+            isTransformPanelExpanded = !isTransformPanelExpanded;
+            isColorPaletteExpanded = false;
+            if (isTransformPanelExpanded) {
+                buildTransformPanelUI();
+            }
+            return true;
+        }
+    }
+
+    if (isColorPaletteExpanded) {
+        for (const swatch of canvasUI.colorSwatches) {
+            if (screenPos.x >= swatch.x && screenPos.x <= swatch.x + swatch.width &&
+                screenPos.y >= swatch.y && screenPos.y <= swatch.y + swatch.height) {
+                setCurrentColor(swatch.color);
+                selectedSwatchIndex = swatch.index;
+                return true;
+            }
+        }
+        const removeBtn = canvasUI.removeColorButton;
+        if (removeBtn && screenPos.x >= removeBtn.x && screenPos.x <= removeBtn.x + removeBtn.width &&
+            screenPos.y >= removeBtn.y && screenPos.y <= removeBtn.y + removeBtn.height) {
+            if (selectedSwatchIndex === null && recentColors.length > 0) {
+                selectedSwatchIndex = 0;
+            }
+            if (selectedSwatchIndex !== null) {
+                recentColors.splice(selectedSwatchIndex, 1);
+                if (recentColors.length === 0) {
+                    selectedSwatchIndex = null;
+                } else {
+                    selectedSwatchIndex = Math.min(selectedSwatchIndex, recentColors.length - 1);
+                }
+                if(selectedSwatchIndex !== null) {
+                    setCurrentColor(recentColors[selectedSwatchIndex]);
+                }
+                buildColorPaletteUI();
+            }
+            return true;
+        }
+        const addBtn = canvasUI.addColorButton;
+        if (addBtn && screenPos.x >= addBtn.x && screenPos.x <= addBtn.x + addBtn.height) {
+            setTimeout(() => { colorPicker.click(); }, 0);
+            return true;
+        }
+    }
+    
+    if (isTransformPanelExpanded) {
+        for (const icon of canvasUI.transformIcons) {
+            if (screenPos.x >= icon.x && screenPos.x <= icon.x + icon.width &&
+                screenPos.y >= icon.y && screenPos.y <= icon.y + icon.height) {
+                isPlacingTransform = true;
+                placingTransformType = icon.type;
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+function addToRecentColors(color) {
+    if (recentColors.includes(color)) {
+        return;
+    }
+    recentColors.push(color);
+
+    if (isColorPaletteExpanded) {
+        buildColorPaletteUI();
+    }
+}
+
+function updateMouseCoordinates(screenPos) {
+    if (!screenPos || !isMouseOverCanvas) {
+        labelsToKeepThisFrame.delete('mouse-coord-x');
+        labelsToKeepThisFrame.delete('mouse-coord-y');
+        return;
+    };
+
+    const dataPos = screenToData(screenPos);
+    const xText = `x = ${formatNumber(dataPos.x, distanceSigFigs)}`;
+    const yText = `y = ${formatNumber(dataPos.y, distanceSigFigs)}`;
+
+    const canvasWidth = canvas.width / dpr;
+    const padding = 10;
+
+    updateHtmlLabel({
+        id: 'mouse-coord-x',
+        content: xText,
+        x: canvasWidth - padding, // Position from the right edge
+        y: padding,               // Position from the top edge
+        color: 'rgba(255, 255, 255, 0.7)',
+        fontSize: 12,
+        options: { textAlign: 'right' } // Align text to the right
+    });
+
+    updateHtmlLabel({
+        id: 'mouse-coord-y',
+        content: yText,
+        x: canvasWidth - padding, // Position from the right edge
+        y: padding * 2.5,         // Position below the x-coordinate
+        color: 'rgba(255, 255, 255, 0.7)',
+        fontSize: 12,
+        options: { textAlign: 'right' } // Align text to the right
+    });
+}
+
+function updateHtmlLabel({ id, content, x, y, color, fontSize, options = {} }) {
+    labelsToKeepThisFrame.add(id);
+    let el = activeHtmlLabels.get(id);
+
+    if (!el) {
+        el = document.createElement('div');
+        el.style.position = 'absolute';
+        el.style.fontFamily = 'KaTeX_Main, Times New Roman, serif';
+        el.style.whiteSpace = 'nowrap';
+        htmlOverlay.appendChild(el);
+        activeHtmlLabels.set(id, el);
+    }
+
+    let transform = '';
+    if (options.textAlign === 'center') {
+        transform += ' translateX(-50%)';
+    } else if (options.textAlign === 'right') {
+        transform += ' translateX(-100%)';
+    }
+
+    if (options.textBaseline === 'middle') {
+        transform += ' translateY(-50%)';
+    } else if (options.textBaseline === 'bottom') {
+        transform += ' translateY(-100%)';
+    }
+
+    if (options.rotation !== undefined) {
+        transform += ` rotate(${options.rotation}deg)`;
+    }
+
+    el.style.transform = transform.trim();
+    el.style.left = `${x}px`;
+    el.style.top = `${y}px`;
+    el.style.color = color;
+    el.style.fontSize = `${fontSize}px`;
+
+    if (el.katexContent !== content) {
+        if (typeof window.katex !== 'undefined') {
+            katex.render(content, el, {
+                throwOnError: false,
+                displayMode: false
+            });
+        } else {
+            el.textContent = content.replace(/\\frac\{([^}]+)\}\{([^}]+)\}/g, "$1/$2").replace(/[\\{}]/g, "");
+        }
+        el.katexContent = content;
+    }
+}
 
 function cleanupHtmlLabels() {
     const coordinateLabels = new Set(['mouse-coord-x', 'mouse-coord-y']);
@@ -11,6 +923,1348 @@ function cleanupHtmlLabels() {
         }
     }
 }
+
+function getPrecedingSegment(pointId, edgesToIgnoreIds = []) {
+    const currentPoint = findPointById(pointId);
+    if (!currentPoint) return null;
+    for (let i = allEdges.length - 1; i >= 0; i--) {
+        const edge = allEdges[i];
+        const edgeIdentifier = edge.id1 < edge.id2 ? edge.id1 + edge.id2 : edge.id2 + edge.id1;
+        if (edgesToIgnoreIds.includes(edgeIdentifier)) continue;
+        let otherPointId = null;
+        if (edge.id1 === pointId) otherPointId = edge.id2;
+        else if (edge.id2 === pointId) otherPointId = edge.id1;
+        if (otherPointId) {
+            const otherPoint = findPointById(otherPointId);
+            if (otherPoint) {
+                const dx = currentPoint.x - otherPoint.x; const dy = currentPoint.y - otherPoint.y;
+                return { p1: otherPoint, p2: currentPoint, angleRad: Math.atan2(dy, dx), length: Math.sqrt(dx*dx + dy*dy), edgeId: edgeIdentifier };
+            }
+        }
+    }
+    return null;
+}
+
+
+
+function snapToLength(targetLength, referenceLength, snapThresholdFactor = 0.05, factors = SNAP_FACTORS, forceSnap = false) {
+    if (isNaN(targetLength) || isNaN(referenceLength) || referenceLength <= 0) {
+        return { length: isNaN(targetLength) ? 0 : targetLength, factor: null };
+    }
+
+    let bestLength = targetLength;
+    let minDiff = Infinity;
+    let bestFactor = null;
+    
+    for (const factor of factors) {
+        const snapLength = referenceLength * factor;
+        const diff = Math.abs(targetLength - snapLength);
+        if (diff < minDiff) {
+            minDiff = diff;
+            bestLength = snapLength;
+            bestFactor = factor;
+        }
+    }
+
+    const snapThreshold = Math.max(referenceLength * snapThresholdFactor, 1 / viewTransform.scale, 0.00001);
+
+    if (forceSnap) {
+        return { length: bestLength, factor: bestFactor };
+    }
+
+    if (minDiff < snapThreshold) {
+        return { length: bestLength, factor: bestFactor };
+    }
+    
+    return { length: targetLength, factor: null };
+}
+
+
+function setCurrentColor(newColor) {
+    const oldColor = currentColor;
+    let changedPoints = [];
+    if (selectedPointIds.length > 0) {
+        selectedPointIds.forEach(id => {
+            const point = findPointById(id);
+            if (point && point.type === 'regular') {
+                changedPoints.push({ id: point.id, oldColor: point.color || oldColor });
+                point.color = newColor;
+            }
+        });
+    }
+    if (activeCenterId) {
+        const center = findPointById(activeCenterId);
+        if (center) {
+            changedPoints.push({ id: center.id, oldColor: center.color || oldColor });
+            center.color = newColor;
+        }
+    }
+    if (changedPoints.length > 0) {
+        const actualUndoState = {
+            points: allPoints.map(p => {
+                const changed = changedPoints.find(cp => cp.id === p.id);
+                return changed ? { ...p, color: changed.oldColor } : { ...p };
+            }),
+            edges: JSON.parse(JSON.stringify(allEdges)),
+            selectedPointIds: JSON.parse(JSON.stringify(selectedPointIds)),
+            selectedEdgeIds: JSON.parse(JSON.stringify(selectedEdgeIds)),
+            activeCenterId,
+            isDrawingMode,
+            previewLineStartPointId
+        };
+        undoStack.push(actualUndoState);
+        if (undoStack.length > MAX_HISTORY_SIZE) undoStack.shift();
+        redoStack = [];
+    }
+    currentColor = newColor;
+    colorPicker.value = newColor;
+    addToRecentColors(newColor);
+}
+
+function saveStateForUndo() {
+    const state = {
+        points: JSON.parse(JSON.stringify(allPoints)),
+        edges: JSON.parse(JSON.stringify(allEdges)),
+        selectedPointIds: JSON.parse(JSON.stringify(selectedPointIds)),
+        selectedEdgeIds: JSON.parse(JSON.stringify(selectedEdgeIds)),
+        activeCenterId: activeCenterId,
+        isDrawingMode: isDrawingMode,
+        previewLineStartPointId: previewLineStartPointId,
+        frozenReference_A_rad, frozenReference_A_baseRad, frozenReference_D_du, frozenReference_Origin_Data,
+        frozenReference_D_g2g // <-- ADD THIS
+    };
+    undoStack.push(state);
+    if (undoStack.length > MAX_HISTORY_SIZE) undoStack.shift();
+    redoStack = [];
+}
+
+function restoreState(state) {
+    allPoints = JSON.parse(JSON.stringify(state.points));
+    allEdges = JSON.parse(JSON.stringify(state.edges));
+    selectedPointIds = JSON.parse(JSON.stringify(state.selectedPointIds || []));
+    selectedEdgeIds = JSON.parse(JSON.stringify(state.selectedEdgeIds || []));
+    activeCenterId = state.activeCenterId !== undefined ? state.activeCenterId : null;
+    isDrawingMode = state.isDrawingMode !== undefined ? state.isDrawingMode : false;
+    previewLineStartPointId = state.previewLineStartPointId !== undefined ? state.previewLineStartPointId : null;
+    frozenReference_A_rad = state.frozenReference_A_rad !== undefined ? state.frozenReference_A_rad : null;
+    frozenReference_A_baseRad = state.frozenReference_A_baseRad !== undefined ? state.frozenReference_A_baseRad : null;
+    frozenReference_D_du = state.frozenReference_D_du !== undefined ? state.frozenReference_D_du : null;
+    frozenReference_Origin_Data = state.frozenReference_Origin_Data !== undefined ? state.frozenReference_Origin_Data : null;
+    frozenReference_D_g2g = state.frozenReference_D_g2g !== undefined ? state.frozenReference_D_g2g : null; // <-- ADD THIS
+    isActionInProgress = false; isDragConfirmed = false; isRectangleSelecting = false;
+    isTransformDrag = false; isPanningBackground = false; dragPreviewPoints = [];
+    actionTargetPoint = null; currentMouseButton = -1;
+    clickData = { pointId: null, count: 0, timestamp: 0 };
+    canvas.style.cursor = 'crosshair';
+}
+
+function handleUndo() {
+    if (undoStack.length === 0) return;
+    const currentStateForRedo = {
+        points: JSON.parse(JSON.stringify(allPoints)),
+        edges: JSON.parse(JSON.stringify(allEdges)),
+        selectedPointIds: JSON.parse(JSON.stringify(selectedPointIds)),
+        selectedEdgeIds: JSON.parse(JSON.stringify(selectedEdgeIds)),
+        activeCenterId: activeCenterId,
+        isDrawingMode: isDrawingMode,
+        previewLineStartPointId: previewLineStartPointId,
+        frozenReference_A_rad, frozenReference_A_baseRad, frozenReference_D_du, frozenReference_Origin_Data
+    };
+    redoStack.push(currentStateForRedo);
+    if (redoStack.length > MAX_HISTORY_SIZE) redoStack.shift();
+    const prevState = undoStack.pop();
+    restoreState(prevState);
+}
+
+function handleRedo() {
+    if (redoStack.length === 0) return;
+    const currentStateForUndo = {
+        points: JSON.parse(JSON.stringify(allPoints)),
+        edges: JSON.parse(JSON.stringify(allEdges)),
+        selectedPointIds: JSON.parse(JSON.stringify(selectedPointIds)),
+        selectedEdgeIds: JSON.parse(JSON.stringify(selectedEdgeIds)),
+        activeCenterId: activeCenterId,
+        isDrawingMode: isDrawingMode,
+        previewLineStartPointId: previewLineStartPointId,
+        frozenReference_A_rad, frozenReference_A_baseRad, frozenReference_D_du, frozenReference_Origin_Data
+    };
+    undoStack.push(currentStateForUndo);
+    if (undoStack.length > MAX_HISTORY_SIZE) undoStack.shift();
+    const nextState = redoStack.pop();
+    restoreState(nextState);
+}
+
+function screenToData(screenPos_css_pixels) {
+    const screenX_physical = screenPos_css_pixels.x * dpr;
+    const screenY_physical = screenPos_css_pixels.y * dpr;
+    const canvasHeight_physical = canvas.height;
+    return {
+        x: (screenX_physical - viewTransform.offsetX) / viewTransform.scale,
+        y: (canvasHeight_physical - screenY_physical - viewTransform.offsetY) / viewTransform.scale
+    };
+}
+
+function dataToScreen(dataPos) {
+    const canvasHeight_physical = canvas.height;
+    const screenX_physical = dataPos.x * viewTransform.scale + viewTransform.offsetX;
+    const screenY_physical = canvasHeight_physical - (dataPos.y * viewTransform.scale + viewTransform.offsetY);
+    return {
+        x: screenX_physical / dpr,
+        y: screenY_physical / dpr
+    };
+}
+
+
+function resizeCanvas() {
+    const canvasContainer = document.querySelector('.canvas-container');
+    const canvasWrapper = document.querySelector('.canvas-wrapper-relative');
+
+    if (!canvasContainer || !canvasWrapper) {
+        console.error("Canvas container or wrapper not found. Ensure index.html structure has '.canvas-container' and '.canvas-wrapper-relative'.");
+        return;
+    }
+
+    const cW = canvasWrapper.offsetWidth;
+    const cH = canvasWrapper.offsetHeight;
+
+    canvas.width = cW * dpr;
+    canvas.height = cH * dpr;
+    canvas.style.width = `${cW}px`;
+    canvas.style.height = `${cH}px`;
+
+    if (htmlOverlay) {
+        htmlOverlay.style.width = `${cW}px`;
+        htmlOverlay.style.height = `${cH}px`;
+    }
+}
+
+function findPointById(id) { return allPoints.find(p => p.id === id); }
+
+function findClickedPoint(clickPos) {
+    const dataPos = screenToData(clickPos);
+    const selectRadiusDataRegular = POINT_SELECT_RADIUS / viewTransform.scale;
+    const selectRadiusDataCenter = (CENTER_POINT_VISUAL_RADIUS + POINT_SELECT_RADIUS / 2) / viewTransform.scale;
+
+    // Prioritize center points for selection
+    for (let i = allPoints.length - 1; i >= 0; i--) {
+        const point = allPoints[i];
+        if (point.type !== 'regular' && distance(dataPos, point) < selectRadiusDataCenter) return point;
+    }
+
+    // Then check for regular points
+    for (let i = allPoints.length - 1; i >= 0; i--) {
+        const point = allPoints[i];
+        if (point.type === 'regular' && distance(dataPos, point) < selectRadiusDataRegular) return point;
+    }
+    return null;
+}
+
+function findClickedEdge(clickPos) {
+    const dataPos = screenToData(clickPos);
+    const edgeClickThresholdData = EDGE_CLICK_THRESHOLD / viewTransform.scale;
+    
+    for (let i = allEdges.length - 1; i >= 0; i--) {
+        const edge = allEdges[i];
+        const p1 = findPointById(edge.id1);
+        const p2 = findPointById(edge.id2);
+        if (p1 && p2 && p1.type === 'regular' && p2.type === 'regular') {
+            const closest = getClosestPointOnLineSegment(dataPos, p1, p2);
+            if (closest.distance < edgeClickThresholdData && closest.onSegmentStrict) {
+                return edge;
+            }
+        }
+    }
+    return null;
+}
+
+function getEdgeId(edge) {
+    const DELIMITER = '_EDGE_';
+    return edge.id1 < edge.id2 ? `${edge.id1}${DELIMITER}${edge.id2}` : `${edge.id2}${DELIMITER}${edge.id1}`;
+}
+
+function findNeighbors(pointId) {
+    const n = new Set();
+    allEdges.forEach(e => { if (e.id1 === pointId) n.add(e.id2); else if (e.id2 === pointId) n.add(e.id1); });
+    return Array.from(n);
+}
+
+function findNeighborEdges(pointId) {
+    return allEdges.filter(e => e.id1 === pointId || e.id2 === pointId);
+}
+
+function findAllPointsInSubgraph(startPointId) {
+    if (!findPointById(startPointId)) return [];
+    const visited = new Set(); const queue = [startPointId]; const subgraphPointIds = [];
+    visited.add(startPointId);
+    while (queue.length > 0) {
+        const currentPointId = queue.shift(); subgraphPointIds.push(currentPointId);
+        findNeighbors(currentPointId).forEach(neighborId => {
+            if (!visited.has(neighborId)) { visited.add(neighborId); queue.push(neighborId); }
+        });
+    }
+    return subgraphPointIds;
+}
+
+function drawCenterSymbol(point) {
+    const screenPos = dataToScreen(point); const radius = CENTER_POINT_VISUAL_RADIUS;
+    ctx.strokeStyle = point.color || currentColor; ctx.setLineDash([]); ctx.lineWidth = LINE_WIDTH;
+    if (point.type === 'center_rotate_scale') {
+        ctx.beginPath(); ctx.arc(screenPos.x, screenPos.y, radius, 0, 2*Math.PI); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(screenPos.x-radius,screenPos.y); ctx.lineTo(screenPos.x+radius,screenPos.y); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(screenPos.x,screenPos.y-radius); ctx.lineTo(screenPos.x,screenPos.y+radius); ctx.stroke();
+    } else if (point.type === 'center_rotate_only') {
+        ctx.beginPath(); ctx.arc(screenPos.x, screenPos.y, radius, 0, 2*Math.PI); ctx.stroke();
+    } else if (point.type === 'center_scale_only') {
+        ctx.beginPath(); ctx.moveTo(screenPos.x-radius,screenPos.y); ctx.lineTo(screenPos.x+radius,screenPos.y); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(screenPos.x,screenPos.y-radius); ctx.lineTo(screenPos.x,screenPos.y+radius); ctx.stroke();
+    }
+}
+
+function applySelectionLogic(pointIdsToSelect, edgeIdsToSelect, wantsShift, wantsCtrl, targetIsCenter = false) {
+    if (targetIsCenter) {
+        handleCenterSelection(pointIdsToSelect[0], wantsShift, wantsCtrl);
+    } else {
+        if (wantsShift) {
+            selectedPointIds = [...new Set([...selectedPointIds, ...pointIdsToSelect])];
+            selectedEdgeIds = [...new Set([...selectedEdgeIds, ...edgeIdsToSelect])];
+        } else if (wantsCtrl) {
+            pointIdsToSelect.forEach(id => {
+                const index = selectedPointIds.indexOf(id);
+                if (index > -1) selectedPointIds.splice(index, 1);
+                else selectedPointIds.push(id);
+            });
+            edgeIdsToSelect.forEach(id => {
+                const index = selectedEdgeIds.indexOf(id);
+                if (index > -1) selectedEdgeIds.splice(index, 1);
+                else selectedEdgeIds.push(id);
+            });
+        } else {
+            selectedPointIds = [...pointIdsToSelect];
+            selectedEdgeIds = [...edgeIdsToSelect];
+            selectedCenterIds = [];
+            activeCenterId = null;
+        }
+    }
+}
+
+/**
+ * Calculates the circumcenter of a triangle defined by three points.
+ * The circumcenter is equidistant from all three points.
+ * Returns null if the points are collinear.
+ */
+function getCircumcenter(p1, p2, p3) {
+    const D = 2 * (p1.x * (p2.y - p3.y) + p2.x * (p3.y - p1.y) + p3.x * (p1.y - p2.y));
+    if (Math.abs(D) < 1e-9) {
+        return null; // Points are collinear, no unique circumcenter
+    }
+
+    const p1_sq = p1.x * p1.x + p1.y * p1.y;
+    const p2_sq = p2.x * p2.x + p2.y * p2.y;
+    const p3_sq = p3.x * p3.x + p3.y * p3.y;
+
+    const Ux = (1 / D) * (p1_sq * (p2.y - p3.y) + p2_sq * (p3.y - p1.y) + p3_sq * (p1.y - p2.y));
+    const Uy = (1 / D) * (p1_sq * (p3.x - p2.x) + p2_sq * (p1.x - p3.x) + p3_sq * (p2.x - p1.x));
+
+    return { x: Ux, y: Uy, type: 'equidistant-circumcenter' };
+}
+
+/**
+ * Calculates the projection of a point 'p' onto the perpendicular bisector
+ * of the segment defined by p1 and p2.
+ */
+function getProjectionOnPerpendicularBisector(p, p1, p2) {
+    const midPoint = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+    const p1p2_vec = { x: p2.x - p1.x, y: p2.y - p1.y };
+    const perp_vec = { x: -p1p2_vec.y, y: p1p2_vec.x };
+    
+    const v_sq_mag = perp_vec.x * perp_vec.x + perp_vec.y * perp_vec.y;
+    if (v_sq_mag < 1e-9) return null; // p1 and p2 are the same point
+
+    const Ap_vec = { x: p.x - midPoint.x, y: p.y - midPoint.y };
+    const t = (Ap_vec.x * perp_vec.x + Ap_vec.y * perp_vec.y) / v_sq_mag;
+    
+    return { x: midPoint.x + t * perp_vec.x, y: midPoint.y + t * perp_vec.y, type: 'equidistant-bisector' };
+}
+
+function handleCopy() {
+    const pointsToCopyIds = new Set(selectedPointIds);
+    if (activeCenterId) pointsToCopyIds.add(activeCenterId);
+    
+    if (pointsToCopyIds.size === 0 && selectedEdgeIds.length === 0) return;
+    
+    selectedEdgeIds.forEach(edgeId => {
+        const [id1, id2] = edgeId.split('-');
+        pointsToCopyIds.add(id1);
+        pointsToCopyIds.add(id2);
+    });
+    
+    clipboard.points = Array.from(pointsToCopyIds).map(id => {
+        const p = findPointById(id);
+        return p ? { ...p } : null;
+    }).filter(p => p);
+    
+    clipboard.edges = [];
+    selectedEdgeIds.forEach(edgeId => {
+        const [id1, id2] = edgeId.split('-');
+        const edge = allEdges.find(e => getEdgeId(e) === edgeId);
+        if (edge) clipboard.edges.push({ ...edge });
+    });
+    
+    allEdges.forEach(edge => {
+        if (pointsToCopyIds.has(edge.id1) && pointsToCopyIds.has(edge.id2) && 
+            findPointById(edge.id1)?.type === 'regular' && findPointById(edge.id2)?.type === 'regular') {
+            const edgeId = getEdgeId(edge);
+            if (!clipboard.edges.find(e => getEdgeId(e) === edgeId)) {
+                clipboard.edges.push({ ...edge });
+            }
+        }
+    });
+    
+    clipboard.referencePoint = screenToData(mousePos);
+}
+
+function handleCut() {
+    const pointsToCutIds = new Set(selectedPointIds);
+    if (activeCenterId) pointsToCutIds.add(activeCenterId);
+    
+    if (pointsToCutIds.size === 0 && selectedEdgeIds.length === 0) return;
+    
+    saveStateForUndo();
+    handleCopy();
+    deleteSelectedItems();
+}
+
+function handlePaste() {
+    if (clipboard.points.length === 0 || !clipboard.referencePoint) return;
+    saveStateForUndo();
+    const pastePosData = screenToData(mousePos);
+    const deltaX = pastePosData.x - clipboard.referencePoint.x; const deltaY = pastePosData.y - clipboard.referencePoint.y;
+    const oldToNewIdMap = new Map(); const newPastedRegularPointIds = []; let newPastedActiveCenterId = null;
+    performEscapeAction();
+    clipboard.points.forEach(cbPoint => {
+        const newId = generateUniqueId();
+        const newPoint = { ...cbPoint, id: newId, x: cbPoint.x + deltaX, y: cbPoint.y + deltaY };
+        allPoints.push(newPoint); oldToNewIdMap.set(cbPoint.id, newId);
+        if (newPoint.type === 'regular') newPastedRegularPointIds.push(newId);
+        else newPastedActiveCenterId = newId;
+    });
+    clipboard.edges.forEach(cbEdge => {
+        const newP1Id = oldToNewIdMap.get(cbEdge.id1); const newP2Id = oldToNewIdMap.get(cbEdge.id2);
+        if (newP1Id && newP2Id) allEdges.push({ id1: newP1Id, id2: newP2Id });
+    });
+    selectedPointIds = newPastedRegularPointIds; 
+    selectedEdgeIds = clipboard.edges.map(e => getEdgeId({id1: oldToNewIdMap.get(e.id1), id2: oldToNewIdMap.get(e.id2)}));
+    activeCenterId = newPastedActiveCenterId;
+}
+
+function drawPoint(point) {
+    let isSelected;
+    if (point.type === 'regular') {
+        isSelected = selectedPointIds.includes(point.id);
+    } else {
+        isSelected = selectedCenterIds.includes(point.id);
+    }
+
+    const pointColor = point.color || currentColor;
+    const screenPos = dataToScreen(point);
+    
+    if (point.type !== 'regular') {
+        drawCenterSymbol(point);
+    } else {
+        ctx.beginPath();
+        ctx.arc(screenPos.x, screenPos.y, POINT_RADIUS, 0, 2 * Math.PI);
+        ctx.fillStyle = pointColor;
+        ctx.fill();
+    }
+
+    if (isSelected) {
+        ctx.save();
+        ctx.shadowColor = point.id === activeCenterId ? '#00ffff' : '#4da6ff';
+        ctx.shadowBlur = 15;
+        ctx.globalAlpha = 0.8;
+        
+        ctx.beginPath();
+        const glowRadius = point.type !== 'regular' ? CENTER_POINT_VISUAL_RADIUS + 3 : POINT_RADIUS + 3;
+        ctx.arc(screenPos.x, screenPos.y, glowRadius, 0, 2 * Math.PI);
+        ctx.strokeStyle = point.id === activeCenterId ? '#00ffff' : '#4da6ff';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        
+        ctx.restore();
+    }
+}
+
+function drawAllEdges() {
+    ctx.lineWidth = LINE_WIDTH;
+    allEdges.forEach(edge => {
+        const p1_orig = findPointById(edge.id1);
+        const p2_orig = findPointById(edge.id2);
+        if (!p1_orig || !p2_orig || p1_orig.type !== 'regular' || p2_orig.type !== 'regular') return;
+
+        let p1_render = { ...p1_orig };
+        let p2_render = { ...p2_orig };
+        let isBeingDragged = false;
+
+        if (isDragConfirmed && dragPreviewPoints.length > 0) {
+            const p1Preview = dragPreviewPoints.find(dp => dp.id === p1_orig.id);
+            const p2Preview = dragPreviewPoints.find(dp => dp.id === p2_orig.id);
+            if (p1Preview) { p1_render.x = p1Preview.x; p1_render.y = p1Preview.y; }
+            if (p2Preview) { p2_render.x = p2Preview.x; p2_render.y = p2Preview.y; }
+            if (p1Preview || p2Preview) isBeingDragged = true;
+        }
+
+        const p1Screen = dataToScreen(p1_render);
+        const p2Screen = dataToScreen(p2_render);
+        const edgeId = getEdgeId(edge);
+        const isSelected = selectedEdgeIds.includes(edgeId);
+        
+        ctx.beginPath();
+        ctx.moveTo(p1Screen.x, p1Screen.y);
+        ctx.lineTo(p2Screen.x, p2Screen.y);
+
+        const color1 = p1_orig.color || currentColor;
+        const color2 = p2_orig.color || currentColor;
+        if (color1 === color2) {
+            ctx.strokeStyle = color1;
+        } else {
+            const gradient = ctx.createLinearGradient(p1Screen.x, p1Screen.y, p2Screen.x, p2Screen.y);
+            gradient.addColorStop(0, color1);
+            gradient.addColorStop(1, color2);
+            ctx.strokeStyle = gradient;
+        }
+        
+        ctx.setLineDash(isBeingDragged ? DASH_PATTERN : []);
+        ctx.lineWidth = LINE_WIDTH;
+        ctx.stroke();
+        ctx.setLineDash([]);
+        
+        if (isSelected) {
+            ctx.beginPath();
+            ctx.moveTo(p1Screen.x, p1Screen.y);
+            ctx.lineTo(p2Screen.x, p2Screen.y);
+            ctx.strokeStyle = '#4da6ff';
+            ctx.globalAlpha = 0.8;
+            ctx.lineWidth = LINE_WIDTH + 4;
+            ctx.stroke();
+            ctx.globalAlpha = 1.0;
+        }
+    });
+    ctx.setLineDash([]);
+    ctx.strokeStyle = 'white';
+}
+
+function deleteSelectedItems() {
+    if (selectedPointIds.length === 0 && selectedEdgeIds.length === 0 && selectedCenterIds.length === 0) return;
+    
+    saveStateForUndo();
+    
+    selectedEdgeIds.forEach(edgeId => {
+        const [id1, id2] = edgeId.split('-');
+        allEdges = allEdges.filter(edge => getEdgeId(edge) !== edgeId);
+    });
+    
+    selectedPointIds.forEach(pointId => {
+        const neighborEdges = findNeighborEdges(pointId);
+        
+        if (neighborEdges.length === 2) {
+            const edge1 = neighborEdges[0];
+            const edge2 = neighborEdges[1];
+            
+            const otherPoint1 = edge1.id1 === pointId ? edge1.id2 : edge1.id1;
+            const otherPoint2 = edge2.id1 === pointId ? edge2.id2 : edge2.id1;
+            
+            if (otherPoint1 !== otherPoint2) {
+                allEdges.push({ id1: otherPoint1, id2: otherPoint2 });
+            }
+        }
+        
+        allEdges = allEdges.filter(edge => edge.id1 !== pointId && edge.id2 !== pointId);
+    });
+    
+    const idsToDelete = new Set([...selectedPointIds, ...selectedCenterIds]);
+    
+    allPoints = allPoints.filter(point => !idsToDelete.has(point.id));
+    
+    selectedPointIds = [];
+    selectedEdgeIds = [];
+    selectedCenterIds = [];
+    activeCenterId = null;
+    
+    if (previewLineStartPointId && !findPointById(previewLineStartPointId)) {
+        isDrawingMode = false;
+        previewLineStartPointId = null;
+        frozenReference_A_rad = null;
+        frozenReference_A_baseRad = null;
+        frozenReference_D_du = null;
+        frozenReference_Origin_Data = null;
+    }
+}
+
+function performEscapeAction() {
+    selectedPointIds = [];
+    selectedEdgeIds = [];
+    activeCenterId = null;
+    isDrawingMode = false;
+    previewLineStartPointId = null;
+    frozenReference_A_rad = null;
+    frozenReference_A_baseRad = null;
+    frozenReference_D_du = null;
+    frozenReference_D_g2g = null;
+    frozenReference_Origin_Data = null;
+    currentDrawingFirstSegmentAbsoluteAngleRad = null;
+    isActionInProgress = false;
+    isDragConfirmed = false;
+    isRectangleSelecting = false;
+    isTransformDrag = false;
+    isPanningBackground = false;
+    dragPreviewPoints = [];
+    actionTargetPoint = null;
+    currentMouseButton = -1;
+    clickData = { pointId: null, count: 0, timestamp: 0 };
+    canvas.style.cursor = 'crosshair';
+    transformIndicatorData = null;
+}
+
+function drawAngleArc(centerScreen, dataStartAngleRad, dataEndAngleRad, radius, color, isDashed = false) {
+    ctx.save();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1;
+    ctx.setLineDash(isDashed ? [3, 3] : []);
+    const canvasStartAngle = -dataStartAngleRad;
+    const canvasEndAngle = -dataEndAngleRad;
+    let signedAngleDiffData = normalizeAngleToPi(dataEndAngleRad - dataStartAngleRad);
+    ctx.beginPath();
+    ctx.arc(centerScreen.x, centerScreen.y, radius, canvasStartAngle, canvasEndAngle, signedAngleDiffData > 0);
+    ctx.stroke();
+    ctx.restore();
+}
+
+
+
+function zoomAt(zoomCenterScreen_css_pixels, scaleFactor) {
+    const mouseX_physical = zoomCenterScreen_css_pixels.x * dpr;
+    const mouseY_physical = zoomCenterScreen_css_pixels.y * dpr;
+    const canvasHeight_physical = canvas.height;
+    const dataX_at_mouse = (mouseX_physical - viewTransform.offsetX) / viewTransform.scale;
+    const dataY_at_mouse = (canvasHeight_physical - mouseY_physical - viewTransform.offsetY) / viewTransform.scale;
+    const oldScale = viewTransform.scale;
+    viewTransform.scale *= scaleFactor;
+    viewTransform.scale = Math.max(0.01, Math.min(viewTransform.scale, 20000));
+    if (Math.abs(viewTransform.scale - oldScale) < 1e-9) {
+        return;
+    }
+    viewTransform.offsetX = mouseX_physical - dataX_at_mouse * viewTransform.scale;
+    viewTransform.offsetY = canvasHeight_physical - dataY_at_mouse * viewTransform.scale - mouseY_physical;
+}
+
+function getSnappedPosition(startPoint, mouseScreenPos, shiftPressed) {
+    const mouseDataPos = screenToData(mouseScreenPos);
+    const drawingContext = getDrawingContext(startPoint.id); // Get context once at the top
+
+    // 1. HIGHEST PRIORITY: Snap to existing user-drawn geometry (Points & Edges).
+    const snapRadiusData = POINT_SELECT_RADIUS / viewTransform.scale;
+    for (const p of allPoints) {
+        if (p.id !== startPoint.id && p.type === "regular" && distance(mouseDataPos, p) < snapRadiusData) {
+            const finalAngleRad = Math.atan2(p.y - startPoint.y, p.x - startPoint.x) || 0;
+            return { x: p.x, y: p.y, angle: finalAngleRad * (180 / Math.PI), distance: distance(startPoint, p), snapped: true, gridSnapped: false, lengthSnapFactor: null, angleSnapFactor: null, angleTurn: normalizeAngleToPi(finalAngleRad - drawingContext.offsetAngleRad), gridToGridSquaredSum: null, gridInterval: null };
+        }
+    }
+    const segmentSnapThresholdData = EDGE_CLICK_THRESHOLD / viewTransform.scale;
+    for (const edge of allEdges) {
+        const p1 = findPointById(edge.id1);
+        const p2 = findPointById(edge.id2);
+        if (p1 && p2 && p1.type === "regular" && p2.type === "regular" && p1.id !== startPoint.id && p2.id !== startPoint.id) {
+            const closest = getClosestPointOnLineSegment(mouseDataPos, p1, p2);
+            if (closest.distance < segmentSnapThresholdData && closest.onSegmentStrict) {
+                const finalAngleRad = Math.atan2(closest.y - startPoint.y, closest.x - startPoint.x) || 0;
+                return { x: closest.x, y: closest.y, angle: finalAngleRad * (180 / Math.PI), distance: distance(startPoint, closest), snapped: true, gridSnapped: false, lengthSnapFactor: null, angleSnapFactor: null, angleTurn: normalizeAngleToPi(finalAngleRad - drawingContext.offsetAngleRad), gridToGridSquaredSum: null, gridInterval: null };
+            }
+        }
+    }
+
+    // 2. SHIFT-KEY SNAPPING LOGIC
+    if (isDrawingMode && shiftPressed && lastGridState.interval1) {
+        const allCandidates = [];
+        const NUM_CANDIDATES_EACH_SIDE = 2;
+        const gridInterval = (lastGridState.alpha2 > lastGridState.alpha1 && lastGridState.interval2) ? lastGridState.interval2 : lastGridState.interval1;
+
+        const baseGridX = Math.floor(mouseDataPos.x / gridInterval) * gridInterval;
+        const baseGridY = Math.floor(mouseDataPos.y / gridInterval) * gridInterval;
+        const gridCandidates = [ { x: baseGridX, y: baseGridY }, { x: baseGridX + gridInterval, y: baseGridY }, { x: baseGridX, y: baseGridY + gridInterval }, { x: baseGridX + gridInterval, y: baseGridY + gridInterval }];
+        gridCandidates.forEach(p => allCandidates.push({ ...p, isGridPoint: true }));
+
+        const rawAngle = normalizeAngleToPi(Math.atan2(mouseDataPos.y - startPoint.y, mouseDataPos.x - startPoint.x));
+        const rawDist = distance(startPoint, mouseDataPos);
+        const referenceAngleForSnapping = drawingContext.currentSegmentReferenceA_for_display;
+        const baseUnitDistance = drawingContext.currentSegmentReferenceD;
+
+        const allSnapAngles = NINETY_DEG_ANGLE_SNAP_FRACTIONS.map(f => ({ factor: f, angle: normalizeAngleToPi(drawingContext.offsetAngleRad + (f * referenceAngleForSnapping)), turn: normalizeAngleToPi(f * referenceAngleForSnapping) }));
+        const allSnapDistances = [];
+        for (let i = 1; i <= 100; i++) {
+            const factor = i * 0.5;
+            allSnapDistances.push({ factor: factor, dist: factor * baseUnitDistance });
+        }
+        
+        if (allSnapAngles.length > 0 && allSnapDistances.length > 0) {
+            const closestAngleIndex = allSnapAngles.reduce((bestI, current, i) => Math.abs(normalizeAngleToPi(current.angle - rawAngle)) < Math.abs(normalizeAngleToPi(allSnapAngles[bestI].angle - rawAngle)) ? i : bestI, 0);
+            const closestDistIndex = allSnapDistances.reduce((bestI, current, i) => Math.abs(current.dist - rawDist) < Math.abs(allSnapDistances[bestI].dist - rawDist) ? i : bestI, 0);
+            const candidateAngles = [];
+            for (let i = -NUM_CANDIDATES_EACH_SIDE; i <= NUM_CANDIDATES_EACH_SIDE; i++) {
+                const index = (closestAngleIndex + i + allSnapAngles.length) % allSnapAngles.length;
+                candidateAngles.push(allSnapAngles[index]);
+            }
+            const candidateDistances = [];
+            for (let i = -NUM_CANDIDATES_EACH_SIDE; i <= NUM_CANDIDATES_EACH_SIDE; i++) {
+                const index = closestDistIndex + i;
+                if (index >= 0 && index < allSnapDistances.length) { candidateDistances.push(allSnapDistances[index]); }
+            }
+            candidateAngles.forEach(angleData => {
+                candidateDistances.forEach(distData => {
+                    allCandidates.push({ x: startPoint.x + distData.dist * Math.cos(angleData.angle), y: startPoint.y + distData.dist * Math.sin(angleData.angle), isGridPoint: false, lengthSnapFactor: distData.factor, angleSnapFactor: angleData.factor, angleTurn: angleData.turn });
+                });
+            });
+        }
+        
+        const bestSnapPoint = allCandidates.reduce((best, current) => {
+            return distance(mouseDataPos, current) < distance(mouseDataPos, best) ? current : best;
+        });
+        
+        let gridToGridSquaredSum = null;
+        let finalGridInterval = null;
+        const epsilon = gridInterval * 1e-6;
+        const endIsOnGridX = Math.abs(bestSnapPoint.x / gridInterval - Math.round(bestSnapPoint.x / gridInterval)) < epsilon;
+        const endIsOnGridY = Math.abs(bestSnapPoint.y / gridInterval - Math.round(bestSnapPoint.y / gridInterval)) < epsilon;
+
+        if (endIsOnGridX && endIsOnGridY) {
+            const startIsOnGridX = Math.abs(startPoint.x / gridInterval - Math.round(startPoint.x / gridInterval)) < epsilon;
+            const startIsOnGridY = Math.abs(startPoint.y / gridInterval - Math.round(startPoint.y / gridInterval)) < epsilon;
+            if (startIsOnGridX && startIsOnGridY) {
+                const correctedEndX = Math.round(bestSnapPoint.x / gridInterval) * gridInterval;
+                const correctedEndY = Math.round(bestSnapPoint.y / gridInterval) * gridInterval;
+                const deltaX = correctedEndX - startPoint.x;
+                const deltaY = correctedEndY - startPoint.y;
+                const dx_grid = Math.round(deltaX / gridInterval);
+                const dy_grid = Math.round(deltaY / gridInterval);
+                gridToGridSquaredSum = dx_grid * dx_grid + dy_grid * dy_grid;
+                finalGridInterval = gridInterval;
+            }
+        }
+        
+        const finalAngle = Math.atan2(bestSnapPoint.y - startPoint.y, bestSnapPoint.x - startPoint.x);
+        return {
+            x: bestSnapPoint.x, y: bestSnapPoint.y,
+            angle: finalAngle * (180 / Math.PI),
+            distance: distance(startPoint, bestSnapPoint),
+            snapped: true,
+            gridSnapped: bestSnapPoint.isGridPoint,
+            lengthSnapFactor: bestSnapPoint.lengthSnapFactor,
+            angleSnapFactor: bestSnapPoint.angleSnapFactor,
+            angleTurn: bestSnapPoint.isGridPoint ? normalizeAngleToPi(finalAngle - drawingContext.offsetAngleRad) : bestSnapPoint.angleTurn,
+            gridToGridSquaredSum: gridToGridSquaredSum,
+            gridInterval: finalGridInterval,
+        };
+    }
+
+    // 3. DEFAULT: No snapping if shift is not held
+    const finalAngleRad = Math.atan2(mouseDataPos.y - startPoint.y, mouseDataPos.x - startPoint.x) || 0;
+    return {
+        x: mouseDataPos.x, y: mouseDataPos.y,
+        angle: finalAngleRad * (180 / Math.PI),
+        distance: distance(startPoint, mouseDataPos),
+        snapped: false, gridSnapped: false, lengthSnapFactor: null, angleSnapFactor: null,
+        angleTurn: normalizeAngleToPi(finalAngleRad - drawingContext.offsetAngleRad),
+        gridToGridSquaredSum: null, gridInterval: null
+    };
+}
+
+
+
+function prepareSnapInfoTexts(startPointData, targetDataPos, snappedOutput, shiftPressed, drawingContext) {
+    const epsilon = 1e-6; 
+    if (!showAngles && !showDistances || snappedOutput.distance < epsilon) return;
+
+    const startScreen = dataToScreen(startPointData);
+    const { angle: snappedAbsoluteAngleDeg, distance: snappedDistanceData, lengthSnapFactor, angleSnapFactor, angleTurn, gridToGridSquaredSum, gridInterval } = snappedOutput;
+    const { offsetAngleRad, isFirstSegmentBeingDrawn, currentSegmentReferenceA_for_display, currentSegmentReferenceD } = drawingContext;
+    const currentElementColor = shiftPressed ? 'rgba(240, 240, 130, 0.95)' : 'rgba(230, 230, 230, 0.95)';
+    const katexFontSize = 12;
+
+    if (showDistances) {
+        let distanceText = '';
+        const isReferenceAngleDefault = Math.abs(currentSegmentReferenceA_for_display - (Math.PI / 2)) < 0.001;
+
+        if (shiftPressed && gridToGridSquaredSum > 0 && gridInterval) {
+            const currentExactDistance = gridInterval * Math.sqrt(gridToGridSquaredSum);
+            
+            if (currentSegmentReferenceD !== null && Math.abs(currentExactDistance - currentSegmentReferenceD) < epsilon) {
+                distanceText = '\\delta';
+            } else if (currentSegmentReferenceD !== null && currentSegmentReferenceD > epsilon) {
+                const ratio = currentExactDistance / currentSegmentReferenceD;
+                let foundFraction = false;
+                
+                for (const factor of SNAP_FACTORS) {
+                    if (Math.abs(ratio - factor) < 0.001) {
+                        distanceText = formatSnapFactor(factor, 'D');
+                        foundFraction = true;
+                        break;
+                    }
+                }
+                
+                if (!foundFraction) {
+                    const [coeff, radicand] = simplifySquareRoot(gridToGridSquaredSum);
+                    const finalCoeff = gridInterval * coeff;
+                    distanceText = formatSimplifiedRoot(finalCoeff, radicand);
+                }
+            } else {
+                const [coeff, radicand] = simplifySquareRoot(gridToGridSquaredSum);
+                const finalCoeff = gridInterval * coeff;
+                distanceText = formatSimplifiedRoot(finalCoeff, radicand);
+            }
+        } else if (shiftPressed && lengthSnapFactor !== null && Math.abs(lengthSnapFactor) > epsilon && !isFirstSegmentBeingDrawn && frozenReference_D_du !== null) {
+            if (!isReferenceAngleDefault) {
+                distanceText = formatSnapFactor(lengthSnapFactor, 'D');
+            } else {
+                distanceText = formatNumber(snappedDistanceData, distanceSigFigs);
+            }
+        } else {
+            distanceText = formatNumber(snappedDistanceData, distanceSigFigs);
+        }
+
+        if (distanceText) {
+            const startScreenPos = dataToScreen(startPointData);
+            const endScreenPos = dataToScreen(targetDataPos);
+            const edgeAngleScreen = Math.atan2(endScreenPos.y - startScreenPos.y, endScreenPos.x - startScreenPos.x);
+            
+            const midX = (startScreenPos.x + endScreenPos.x) / 2;
+            const midY = (startScreenPos.y + endScreenPos.y) / 2;
+            
+            let textOffset = 18;
+            
+            if (Math.abs(Math.cos(edgeAngleScreen)) < 0.1) {
+                const distanceTextX = midX + textOffset;
+                const distanceTextY = midY;
+                updateHtmlLabel({ 
+                    id: 'snap-dist', 
+                    content: distanceText, 
+                    x: distanceTextX, 
+                    y: distanceTextY, 
+                    color: currentElementColor, 
+                    fontSize: katexFontSize, 
+                    options: { 
+                        textAlign: 'center', 
+                        textBaseline: 'middle',
+                        rotation: 90
+                    } 
+                });
+            } else {
+                let textPerpAngle = edgeAngleScreen - Math.PI / 2;
+                if (Math.sin(textPerpAngle) > 0) {
+                    textPerpAngle += Math.PI;
+                }
+                const distanceTextX = midX + Math.cos(textPerpAngle) * textOffset;
+                const distanceTextY = midY + Math.sin(textPerpAngle) * textOffset;
+                
+                let rotationDeg = edgeAngleScreen * (180 / Math.PI);
+                if (rotationDeg > 90 || rotationDeg < -90) {
+                    rotationDeg += 180;
+                }
+                
+                updateHtmlLabel({ 
+                    id: 'snap-dist', 
+                    content: distanceText, 
+                    x: distanceTextX, 
+                    y: distanceTextY, 
+                    color: currentElementColor, 
+                    fontSize: katexFontSize, 
+                    options: { 
+                        textAlign: 'center', 
+                        textBaseline: 'middle',
+                        rotation: rotationDeg
+                    } 
+                });
+            }
+        }
+    }
+
+    if (showAngles && Math.abs(angleTurn) > epsilon) {
+        const currentLineAbsoluteAngle = Math.atan2(targetDataPos.y - startPointData.y, targetDataPos.x - startPointData.x);
+        const baseAngleForArc = isFirstSegmentBeingDrawn ? 0 : offsetAngleRad;
+        
+        drawAngleArc(startScreen, baseAngleForArc, currentLineAbsoluteAngle, 30, currentElementColor);
+
+        if (!isFirstSegmentBeingDrawn) {
+            ctx.save();
+            ctx.beginPath();
+            const refLineEndData = { x: startPointData.x + (35 / viewTransform.scale) * Math.cos(baseAngleForArc), y: startPointData.y + (35 / viewTransform.scale) * Math.sin(baseAngleForArc) };
+            const refLineEndScreen = dataToScreen(refLineEndData);
+            ctx.moveTo(startScreen.x, startScreen.y);
+            ctx.lineTo(refLineEndScreen.x, refLineEndScreen.y);
+            ctx.strokeStyle = 'rgba(180, 180, 180, 0.6)';
+            ctx.setLineDash([2, 3]);
+            ctx.lineWidth = 1;
+            ctx.stroke();
+            ctx.restore();
+        }
+
+        let angleText = '';
+        const canReferToTheta = !isFirstSegmentBeingDrawn && frozenReference_A_rad !== null && Math.abs(frozenReference_A_rad) > epsilon;
+
+        if (shiftPressed && canReferToTheta) {
+            const referenceAngleRad = Math.abs(currentSegmentReferenceA_for_display);
+            let potentialFactor = null;
+
+            if (typeof angleSnapFactor === 'number') {
+                potentialFactor = angleSnapFactor;
+            } else if (angleTurn !== null) {
+                if (Math.abs(referenceAngleRad) > epsilon) {
+                    const calculatedFactor = angleTurn / referenceAngleRad;
+                    for (const frac of NINETY_DEG_ANGLE_SNAP_FRACTIONS) {
+                        if (Math.abs(Math.abs(calculatedFactor) - frac) < 0.001) {
+                            potentialFactor = calculatedFactor < 0 ? -frac : frac;
+                            break;
+                        }
+                    }
+                }
+            }
+            if (potentialFactor !== null && Math.abs(potentialFactor) > epsilon) {
+                angleText = formatSnapFactor(potentialFactor, 'A');
+            } else {
+                let degrees = (angleTurn === null) ? 0 : angleTurn * (180 / Math.PI);
+                if (Math.abs(degrees) > epsilon) {
+                    if (degrees > 180.001) degrees -= 360;
+                    angleText = `${formatNumber(degrees, angleSigFigs)}^{\\circ}`;
+                }
+            }
+        } else {
+            let angleToFormatDeg = isFirstSegmentBeingDrawn ? normalizeAngleDegrees(snappedAbsoluteAngleDeg) : angleTurn * (180 / Math.PI);
+            if (Math.abs(angleToFormatDeg) > epsilon) {
+                if (angleToFormatDeg > 180.001 && !isFirstSegmentBeingDrawn) {
+                    angleToFormatDeg -= 360;
+                }
+                angleText = `${formatNumber(angleToFormatDeg, angleSigFigs)}^{\\circ}`;
+            }
+        }
+
+        if (angleText) {
+            const canvasStartAngle = -baseAngleForArc;
+            const canvasEndAngle = -currentLineAbsoluteAngle;
+            const sumCos = Math.cos(canvasStartAngle) + Math.cos(canvasEndAngle);
+            const sumSin = Math.sin(canvasStartAngle) + Math.sin(canvasEndAngle);
+            let bisectorCanvasAngle = Math.atan2(sumSin, sumCos);
+            const labelDistance = 60;
+            const angleTextX = startScreen.x + Math.cos(bisectorCanvasAngle) * labelDistance;
+            const angleTextY = startScreen.y + Math.sin(bisectorCanvasAngle) * labelDistance;
+            updateHtmlLabel({ id: 'snap-angle', content: angleText, x: angleTextX, y: angleTextY, color: currentElementColor, fontSize: katexFontSize, options: { textAlign: 'center', textBaseline: 'middle' } });
+        }
+    }
+}
+
+
+canvas.addEventListener('wheel', (event) => {
+    event.preventDefault();
+    const mouseScreen = getMousePosOnCanvas(event, canvas);
+    const scaleFactor = event.deltaY > 0 ? 1/1.15 : 1.15;
+    zoomAt(mouseScreen, scaleFactor);
+});
+
+
+function getDragSnapPosition(dragOrigin, mouseDataPos) {
+    const neighbors = findNeighbors(dragOrigin.id).map(id => allPoints.find(p => p.id === id)).filter(Boolean);
+    let gridCandidates = [];
+    let pointCandidates = [];
+    let geometricCandidates = [];
+    let bisectorCandidates = [];
+    let circumcenterCandidates = [];
+
+    const distanceSq = (p1, p2) => {
+        const dx = p1.x - p2.x;
+        const dy = p1.y - p2.y;
+        return dx * dx + dy * dy;
+    };
+
+    const gridInterval = (lastGridState.alpha2 > lastGridState.alpha1 && lastGridState.interval2) ? lastGridState.interval2 : lastGridState.interval1;
+    if (gridInterval > 0) {
+        const baseGridX = Math.round(mouseDataPos.x / gridInterval) * gridInterval;
+        const baseGridY = Math.round(mouseDataPos.y / gridInterval) * gridInterval;
+        gridCandidates.push({ x: baseGridX, y: baseGridY, type: 'grid' });
+        
+        for (let dx = -1; dx <= 1; dx++) {
+            for (let dy = -1; dy <= 1; dy++) {
+                if (dx === 0 && dy === 0) continue;
+                gridCandidates.push({
+                    x: baseGridX + dx * gridInterval,
+                    y: baseGridY + dy * gridInterval,
+                    type: 'grid'
+                });
+            }
+        }
+    }
+
+    for (const p of allPoints) {
+        if (p.id !== dragOrigin.id && p.type === 'regular') {
+            pointCandidates.push({ x: p.x, y: p.y, type: 'point' });
+        }
+    }
+
+    const MAJOR_SNAP_ANGLES_RAD = [Math.PI / 6, Math.PI / 4, Math.PI / 3, Math.PI / 2, 2 * Math.PI / 3, 3 * Math.PI / 4, 5 * Math.PI / 6, Math.PI];
+    const MAJOR_SNAP_DISTANCE_FACTORS = [0.5, 1, 1.5, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+    const MAJOR_SORTED_SNAP_DISTANCES = MAJOR_SNAP_DISTANCE_FACTORS.map(f => f * DEFAULT_REFERENCE_DISTANCE);
+    
+    for (let i = 0; i < neighbors.length; i++) {
+        for (let j = i + 1; j < neighbors.length; j++) {
+            const N1 = neighbors[i];
+            const N2 = neighbors[j];
+            for (const d1 of MAJOR_SORTED_SNAP_DISTANCES) {
+                for (const alpha of MAJOR_SNAP_ANGLES_RAD) {
+                    const solutions = solveForPoint(N1, N2, d1, alpha);
+                    solutions.forEach(sol => {
+                        sol.dist = d1;
+                        sol.angle = alpha;
+                        sol.type = 'geometric';
+                    });
+                    geometricCandidates.push(...solutions);
+                }
+            }
+        }
+    }
+
+    for (let i = 0; i < neighbors.length; i++) {
+        for (let j = i + 1; j < neighbors.length; j++) {
+            const projection = getProjectionOnPerpendicularBisector(mouseDataPos, neighbors[i], neighbors[j]);
+            if (projection) {
+                projection.type = 'bisector';
+                bisectorCandidates.push(projection);
+            }
+        }
+    }
+
+    if (neighbors.length >= 3) {
+        for (let i = 0; i < neighbors.length; i++) {
+            for (let j = i + 1; j < neighbors.length; j++) {
+                for (let k = j + 1; k < neighbors.length; k++) {
+                    const circumcenter = getCircumcenter(neighbors[i], neighbors[j], neighbors[k]);
+                    if (circumcenter) {
+                        circumcenter.type = 'circumcenter';
+                        circumcenterCandidates.push(circumcenter);
+                    }
+                }
+            }
+        }
+    }
+
+    const dominantGridInterval = (lastGridState.alpha2 > lastGridState.alpha1 && lastGridState.interval2) ? lastGridState.interval2 : lastGridState.interval1;
+    const gridIntervalInPixels = dominantGridInterval * viewTransform.scale;
+    const priorityRadiusPixels = gridIntervalInPixels * 0.2;
+    const secondaryRadiusPixels = gridIntervalInPixels * 0.15;
+
+    const priorityRadiusDataSq = Math.pow(priorityRadiusPixels / viewTransform.scale, 2);
+    const secondarySnapRadiusDataSq = Math.pow(secondaryRadiusPixels / viewTransform.scale, 2);
+
+    let prioritizedSnaps = [];
+    for (const center of circumcenterCandidates) {
+        if (distanceSq(mouseDataPos, center) < priorityRadiusDataSq) {
+            prioritizedSnaps.push(center);
+        }
+    }
+
+    if (prioritizedSnaps.length > 0) {
+        let bestCandidate = prioritizedSnaps[0];
+        let minDistanceSquared = distanceSq(mouseDataPos, bestCandidate);
+        for (let i = 1; i < prioritizedSnaps.length; i++) {
+            const currentDistSquared = distanceSq(mouseDataPos, prioritizedSnaps[i]);
+            if (currentDistSquared < minDistanceSquared) {
+                minDistanceSquared = currentDistSquared;
+                bestCandidate = prioritizedSnaps[i];
+            }
+        }
+        const constraints = {
+            dist: bestCandidate.dist || null,
+            angle: bestCandidate.angle || null
+        };
+        return { point: bestCandidate, snapped: true, constraints };
+    }
+
+    const allCandidates = [
+        ...gridCandidates,
+        ...pointCandidates,
+        ...geometricCandidates,
+        ...bisectorCandidates,
+        ...circumcenterCandidates
+    ];
+
+    if (allCandidates.length === 0) {
+        return { point: mouseDataPos, snapped: false };
+    }
+
+    let bestCandidate = allCandidates[0];
+    let minDistanceSquared = distanceSq(mouseDataPos, bestCandidate);
+    let constraintCandidates = [];
+
+    for (let i = 0; i < allCandidates.length; i++) {
+        const candidate = allCandidates[i];
+        const currentDistSquared = distanceSq(mouseDataPos, candidate);
+        
+        if (currentDistSquared < minDistanceSquared) {
+            minDistanceSquared = currentDistSquared;
+            bestCandidate = candidate;
+            constraintCandidates = [candidate];
+        } else if (Math.abs(currentDistSquared - minDistanceSquared) < 1e-10) {
+            constraintCandidates.push(candidate);
+        }
+    }
+
+    if (bestCandidate.type === 'geometric' || bestCandidate.type === 'bisector') {
+        for (const candidate of constraintCandidates) {
+            if ((candidate.type === 'grid' || candidate.type === 'geometric') && 
+                distanceSq(mouseDataPos, candidate) < secondarySnapRadiusDataSq) {
+                bestCandidate = candidate;
+                break;
+            }
+        }
+    }
+
+    for (const neighbor of neighbors) {
+        const currentAngleRad = Math.atan2(bestCandidate.y - neighbor.y, bestCandidate.x - neighbor.x);
+        for (const snapAngle of MAJOR_SNAP_ANGLES_RAD) {
+            const snapDistanceToNeighbor = distance(neighbor, bestCandidate);
+            const angleSnapCandidate = {
+                x: neighbor.x + snapDistanceToNeighbor * Math.cos(snapAngle),
+                y: neighbor.y + snapDistanceToNeighbor * Math.sin(snapAngle),
+                type: 'angle-snap',
+                angle: snapAngle,
+                dist: snapDistanceToNeighbor
+            };
+            
+            if (distanceSq(mouseDataPos, angleSnapCandidate) < secondarySnapRadiusDataSq) {
+                bestCandidate = angleSnapCandidate;
+                break;
+            }
+        }
+    }
+
+    const constraints = {
+        dist: bestCandidate.dist || null,
+        angle: bestCandidate.angle || null
+    };
+
+    return { point: bestCandidate, snapped: true, constraints };
+}
+
+function drawDragFeedback(targetPointId, currentPointStates, isSnapping = false, excludedEdgeId = null) {
+    const feedbackColor = isSnapping ? 'rgba(240, 240, 130, 0.95)' : 'rgba(230, 230, 230, 0.95)';
+    const katexFontSize = 12;
+    const ARC_RADIUS_SCREEN = 30;
+    const LABEL_OFFSET_DIST_SCREEN = 18;
+
+    const livePoints = new Map(currentPointStates.map(p => [p.id, { ...p }]));
+    const getLivePoint = (id) => livePoints.get(id);
+
+    const vertex = getLivePoint(targetPointId);
+    if (!vertex) return;
+
+    const neighbors = findNeighbors(vertex.id).map(getLivePoint).filter(Boolean);
+    if (neighbors.length === 0) return;
+
+    const gridInterval = (lastGridState.alpha2 > lastGridState.alpha1 && lastGridState.interval2) ? lastGridState.interval2 : lastGridState.interval1;
+
+    const isPointOnGrid = (point, interval) => {
+        if (!interval || interval <= 0) return false;
+        const epsilon = interval * 1e-6;
+        const isOnGridX = Math.abs(point.x / interval - Math.round(point.x / interval)) < epsilon;
+        const isOnGridY = Math.abs(point.y / interval - Math.round(point.y / interval)) < epsilon;
+        return isOnGridX && isOnGridY;
+    };
+
+    const vertexScreen = dataToScreen(vertex);
+
+    neighbors.forEach(neighbor => {
+        const dist = distance(vertex, neighbor);
+        if (dist < 1e-6) return;
+
+        const currentEdgeId = getEdgeId({ id1: vertex.id, id2: neighbor.id });
+
+        if (currentEdgeId !== excludedEdgeId) {
+            let distText;
+            const areBothPointsOnGrid = gridInterval && isPointOnGrid(vertex, gridInterval) && isPointOnGrid(neighbor, gridInterval);
+            if (areBothPointsOnGrid) {
+                const deltaX = vertex.x - neighbor.x;
+                const deltaY = vertex.y - neighbor.y;
+                const dx_grid = Math.round(deltaX / gridInterval);
+                const dy_grid = Math.round(deltaY / gridInterval);
+                const g2gSquaredSum = dx_grid * dx_grid + dy_grid * dy_grid;
+                if (g2gSquaredSum === 0) {
+                    distText = '0';
+                } else {
+                    const [coeff, radicand] = simplifySquareRoot(g2gSquaredSum);
+                    const finalCoeff = gridInterval * coeff;
+                    distText = formatSimplifiedRoot(finalCoeff, radicand);
+                }
+            } else {
+                distText = formatNumber(dist, distanceSigFigs);
+            }
+            
+            const vertexScreen = dataToScreen(vertex);
+            const neighborScreen = dataToScreen(neighbor);
+            const edgeAngleScreen = Math.atan2(neighborScreen.y - vertexScreen.y, neighborScreen.x - vertexScreen.x);
+            
+            const midX = (vertexScreen.x + neighborScreen.x) / 2;
+            const midY = (vertexScreen.y + neighborScreen.y) / 2;
+            
+            let textOffset = LABEL_OFFSET_DIST_SCREEN;
+            
+            const labelId = `drag-dist-${vertex.id}-${neighbor.id}`;
+            
+            if (Math.abs(Math.cos(edgeAngleScreen)) < 0.1) {
+                const distanceTextX = midX + textOffset;
+                const distanceTextY = midY;
+                updateHtmlLabel({
+                    id: labelId,
+                    content: distText,
+                    x: distanceTextX,
+                    y: distanceTextY,
+                    color: feedbackColor,
+                    fontSize: katexFontSize,
+                    options: { 
+                        textAlign: 'center', 
+                        textBaseline: 'middle',
+                        rotation: 90
+                    }
+                });
+            } else {
+                let textPerpAngle = edgeAngleScreen - Math.PI / 2;
+                if (Math.sin(textPerpAngle) > 0) {
+                    textPerpAngle += Math.PI;
+                }
+                const distanceTextX = midX + Math.cos(textPerpAngle) * textOffset;
+                const distanceTextY = midY + Math.sin(textPerpAngle) * textOffset;
+                
+                let rotationDeg = edgeAngleScreen * (180 / Math.PI);
+                if (rotationDeg > 90 || rotationDeg < -90) {
+                    rotationDeg += 180;
+                }
+                
+                updateHtmlLabel({
+                    id: labelId,
+                    content: distText,
+                    x: distanceTextX,
+                    y: distanceTextY,
+                    color: feedbackColor,
+                    fontSize: katexFontSize,
+                    options: { 
+                        textAlign: 'center', 
+                        textBaseline: 'middle',
+                        rotation: rotationDeg
+                    }
+                });
+            }
+        }
+    });
+
+    if (neighbors.length >= 2) {
+        const sortedNeighbors = [...neighbors].sort((a, b) => {
+            const angleA = Math.atan2(a.y - vertex.y, a.x - vertex.x);
+            const angleB = Math.atan2(b.y - vertex.y, b.x - vertex.x);
+            return angleA - angleB;
+        });
+
+        for (let i = 0; i < sortedNeighbors.length; i++) {
+            const p1 = sortedNeighbors[i];
+            const p2 = sortedNeighbors[(i + 1) % sortedNeighbors.length];
+            const v1 = { x: p1.x - vertex.x, y: p1.y - vertex.y };
+            const v2 = { x: p2.x - vertex.x, y: p2.y - vertex.y };
+            const angle1_data = Math.atan2(v1.y, v1.x);
+            const angle2_data = Math.atan2(v2.y, v2.x);
+            let angleToDisplayRad = angle2_data - angle1_data;
+            if (angleToDisplayRad < 0) {
+                angleToDisplayRad += 2 * Math.PI;
+            }
+            if (angleToDisplayRad < 1e-6) continue;
+            const LABEL_RADIUS_SCREEN = 75;
+            const bisectorAngle = angle1_data + (angleToDisplayRad / 2);
+            ctx.save();
+            ctx.strokeStyle = feedbackColor;
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.arc(vertexScreen.x, vertexScreen.y, ARC_RADIUS_SCREEN, -angle1_data, -angle2_data, false);
+            ctx.stroke();
+            ctx.restore();
+            const labelRadiusData = LABEL_RADIUS_SCREEN / viewTransform.scale;
+            const angleLabelDataPos = {
+                x: vertex.x + labelRadiusData * Math.cos(bisectorAngle),
+                y: vertex.y + labelRadiusData * Math.sin(bisectorAngle)
+            };
+            const angleLabelScreenPos = dataToScreen(angleLabelDataPos);
+            const angleText = `${formatNumber(angleToDisplayRad * (180 / Math.PI), angleSigFigs)}^{\\circ}`;
+            const labelId = `drag-angle-${vertex.id}-${p1.id}-${p2.id}`;
+            updateHtmlLabel({
+                id: labelId,
+                content: angleText,
+                x: angleLabelScreenPos.x,
+                y: angleLabelScreenPos.y,
+                color: feedbackColor,
+                fontSize: katexFontSize,
+                options: { textAlign: 'center', textBaseline: 'middle' }
+            });
+        }
+    }
+}
+
+function getDrawingContext(currentDrawStartPointId) {
+    let offsetAngleRad = 0;
+    let currentSegmentReferenceD = DEFAULT_REFERENCE_DISTANCE;
+    let currentSegmentReferenceA_for_display = Math.PI / 2;
+    let isFirstSegmentBeingDrawn = true;
+
+    const p_current = findPointById(currentDrawStartPointId);
+    if (!p_current) {
+        return {
+            offsetAngleRad,
+            currentSegmentReferenceD,
+            currentSegmentReferenceA_for_display,
+            isFirstSegmentBeingDrawn,
+            displayAngleA_valueRad_for_A_equals_label: null,
+            displayAngleA_originPointData_for_A_equals_label: null,
+            frozen_A_baseRad_to_display: null,
+            frozen_D_du_to_display: null,
+            frozen_D_g2g_to_display: null,
+            frozen_Origin_Data_to_display: null
+        };
+    }
+
+    const segment1_prev_to_current = getPrecedingSegment(p_current.id);
+
+    if (segment1_prev_to_current) {
+        isFirstSegmentBeingDrawn = false;
+        offsetAngleRad = segment1_prev_to_current.angleRad;
+        currentSegmentReferenceD = frozenReference_D_du !== null ? frozenReference_D_du : segment1_prev_to_current.length;
+
+        if (frozenReference_A_rad !== null) {
+            if (Math.abs(frozenReference_A_rad) < 0.001) {
+                currentSegmentReferenceA_for_display = DEFAULT_REFERENCE_ANGLE_RAD;
+            } else {
+                currentSegmentReferenceA_for_display = Math.abs(frozenReference_A_rad);
+            }
+        }
+    } else {
+        offsetAngleRad = 0;
+        currentSegmentReferenceD = DEFAULT_REFERENCE_DISTANCE;
+        currentSegmentReferenceA_for_display = DEFAULT_REFERENCE_ANGLE_RAD;
+    }
+
+    return {
+        offsetAngleRad,
+        currentSegmentReferenceD,
+        currentSegmentReferenceA_for_display,
+        isFirstSegmentBeingDrawn,
+        displayAngleA_valueRad_for_A_equals_label: null,
+        displayAngleA_originPointData_for_A_equals_label: null,
+        frozen_A_baseRad_to_display: null,
+        frozen_D_du_to_display: null,
+        frozen_D_g2g_to_display: null,
+        frozen_Origin_Data_to_display: null
+    };
+}
+
 
 function drawReferenceElementsGeometry(context, shiftPressed) {
     if ((!showAngles && !showDistances) || !context.frozen_Origin_Data_to_display) return;
@@ -315,3 +2569,669 @@ function redrawAll() {
     cleanupHtmlLabels();
     drawCanvasUI(ctx);
 }
+
+function getCompletedSegmentProperties(startPoint, endPoint, existingEdges) {
+    if (!startPoint || !endPoint) return null;
+
+    const angle = Math.atan2(endPoint.y - startPoint.y, endPoint.x - startPoint.x);
+    const length = distance(startPoint, endPoint);
+
+    let precedingSegmentAngle = 0;
+    let isFirstSegmentOfLine = true;
+
+    for (let i = existingEdges.length - 1; i >= 0; i--) {
+        const edge = existingEdges[i];
+        let otherPointId = null;
+        if (edge.id1 === startPoint.id && findPointById(edge.id2)?.type === 'regular') otherPointId = edge.id2;
+        else if (edge.id2 === startPoint.id && findPointById(edge.id1)?.type === 'regular') otherPointId = edge.id1;
+
+        if (otherPointId && otherPointId !== endPoint.id) {
+            const prevPoint = findPointById(otherPointId);
+            if (prevPoint) {
+                precedingSegmentAngle = Math.atan2(startPoint.y - prevPoint.y, startPoint.x - prevPoint.x);
+                isFirstSegmentOfLine = false;
+                break;
+            }
+        }
+    }
+
+    const angleTurn = normalizeAngleToPi(angle - precedingSegmentAngle);
+
+    return {
+        startPoint,
+        endPoint,
+        absoluteAngleRad: angle,
+        length: length,
+        precedingSegmentAbsoluteAngleRad: precedingSegmentAngle,
+        turnAngleRad: angleTurn,
+        isFirstSegmentOfLine: isFirstSegmentOfLine
+    };
+}
+
+
+canvas.addEventListener('mouseenter', () => {
+    isMouseOverCanvas = true;
+});
+
+
+
+
+canvas.addEventListener('mouseleave', () => {
+    isMouseOverCanvas = false;
+    redrawAll(); // To hide the mouse coordinates
+});
+
+canvas.addEventListener('contextmenu', (event) => event.preventDefault());
+
+
+function completeGraphOnSelectedPoints() {
+    if (selectedPointIds.length < 2) return;
+    
+    const regularPointIds = selectedPointIds.filter(id => {
+        const point = findPointById(id);
+        return point && point.type === 'regular';
+    });
+    
+    if (regularPointIds.length < 2) return;
+    
+    saveStateForUndo();
+    
+    let edgesAdded = 0;
+    
+    for (let i = 0; i < regularPointIds.length; i++) {
+        for (let j = i + 1; j < regularPointIds.length; j++) {
+            const id1 = regularPointIds[i];
+            const id2 = regularPointIds[j];
+            
+            const edgeExists = allEdges.some(edge => 
+                (edge.id1 === id1 && edge.id2 === id2) || 
+                (edge.id1 === id2 && edge.id2 === id1)
+            );
+            
+            if (!edgeExists) {
+                allEdges.push({ id1: id1, id2: id2 });
+                edgesAdded++;
+            }
+        }
+    }
+}
+
+canvas.addEventListener('mousemove', (event) => {
+    mousePos = getMousePosOnCanvas(event, canvas);
+    currentShiftPressed = event.shiftKey;
+    lastSnapResult = null;
+    ghostPointPosition = null;
+
+    if (isPlacingTransform) {
+        placingSnapPos = null;
+        if (currentShiftPressed && lastGridState.interval1) {
+            const mouseDataPos = screenToData(mousePos);
+            const gridInterval = (lastGridState.alpha2 > lastGridState.alpha1 && lastGridState.interval2) ? lastGridState.interval2 : lastGridState.interval1;
+            if (gridInterval > 0) {
+                const snappedDataX = Math.round(mouseDataPos.x / gridInterval) * gridInterval;
+                const snappedDataY = Math.round(mouseDataPos.y / gridInterval) * gridInterval;
+                placingSnapPos = dataToScreen({ x: snappedDataX, y: snappedDataY });
+            }
+        }
+    }
+
+    if (currentShiftPressed && !isActionInProgress && !isDrawingMode) {
+        if (lastGridState.interval1) {
+            const mouseDataPos = screenToData(mousePos);
+            const gridInterval = (lastGridState.alpha2 > lastGridState.alpha1 && lastGridState.interval2) ? lastGridState.interval2 : lastGridState.interval1;
+            if (gridInterval > 0) {
+                ghostPointPosition = {
+                    x: Math.round(mouseDataPos.x / gridInterval) * gridInterval,
+                    y: Math.round(mouseDataPos.y / gridInterval) * gridInterval
+                };
+            }
+        }
+    }
+
+    if (!isActionInProgress) {
+        return;
+    }
+
+    if (!isDragConfirmed && distance(mousePos, actionStartPos) > DRAG_THRESHOLD) {
+        isDragConfirmed = true;
+        if (currentMouseButton === 2) {
+            isRectangleSelecting = true;
+            return;
+        }
+        const { target, shiftKey, ctrlKey } = actionContext;
+        if (target !== 'canvas') {
+            actionTargetPoint = actionContext.targetPoint;
+            if (actionTargetPoint?.type !== 'regular') {
+                handleCenterSelection(actionTargetPoint.id, shiftKey, ctrlKey);
+            } else if (actionTargetPoint && !selectedPointIds.includes(actionTargetPoint.id)) {
+                applySelectionLogic([actionTargetPoint.id], [], shiftKey, ctrlKey, false);
+            } else if (actionContext.targetEdge && !selectedEdgeIds.includes(getEdgeId(actionContext.targetEdge))) {
+                applySelectionLogic([], [getEdgeId(actionContext.targetEdge)], shiftKey, ctrlKey, false);
+            }
+            
+            let pointsToDragIds = new Set([...selectedPointIds, ...selectedCenterIds]);
+            if (actionTargetPoint && !pointsToDragIds.has(actionTargetPoint.id)) {
+                 pointsToDragIds = new Set([actionTargetPoint.id]);
+                 if (actionTargetPoint.type === 'regular') {
+                    selectedPointIds = [actionTargetPoint.id];
+                    selectedCenterIds = [];
+                 } else {
+                    selectedPointIds = [];
+                    selectedCenterIds = [actionTargetPoint.id];
+                 }
+                 activeCenterId = selectedCenterIds.at(-1) ?? null;
+            }
+            
+            const pointsToDrag = Array.from(pointsToDragIds).map(id => findPointById(id)).filter(Boolean);
+            if (pointsToDrag.length > 0) {
+                initialDragPointStates = JSON.parse(JSON.stringify(pointsToDrag));
+                dragPreviewPoints = JSON.parse(JSON.stringify(pointsToDrag));
+                canvas.style.cursor = 'grabbing';
+            }
+        } else {
+            isPanningBackground = true;
+            backgroundPanStartOffset = { x: viewTransform.offsetX, y: viewTransform.offsetY };
+            canvas.style.cursor = 'move';
+        }
+    }
+    
+    if (isDragConfirmed) {
+        const isTransforming = activeCenterId && selectedPointIds.length > 0;
+
+        if (isPanningBackground) {
+            const deltaX_css = mousePos.x - actionStartPos.x;
+            const deltaY_css = mousePos.y - actionStartPos.y;
+            viewTransform.offsetX = backgroundPanStartOffset.x + (deltaX_css * dpr);
+            viewTransform.offsetY = backgroundPanStartOffset.y - (deltaY_css * dpr);
+        } else if (isTransforming) {
+            const center = findPointById(activeCenterId);
+            const referencePoint = actionTargetPoint?.type === 'regular' ? actionTargetPoint : initialDragPointStates.find(p => selectedPointIds.includes(p.id));
+            if (!center || !referencePoint) return;
+        
+            const mouseData = screenToData(mousePos);
+            const startReferencePoint = initialDragPointStates.find(p => p.id === referencePoint.id) || referencePoint;
+            const centerType = center.type;
+            let rotation, scale, finalMouseData, isSnapping, snappedScaleValue;
+            isSnapping = false;
+            snappedScaleValue = null;
+            finalMouseData = mouseData;
+
+            if (currentShiftPressed) {
+                const snapResult = getTransformSnap(center, mouseData, startReferencePoint, centerType);
+                if (snapResult.snapped) {
+                    isSnapping = true;
+                    finalMouseData = snapResult.pos;
+                    rotation = snapResult.rotation;
+                    scale = snapResult.scale;
+                    snappedScaleValue = snapResult.pureScaleForDisplay;
+                }
+            }
+            
+            if (!isSnapping) {
+                const startVector = { x: startReferencePoint.x - center.x, y: startReferencePoint.y - center.y };
+                const currentVector = { x: mouseData.x - center.x, y: mouseData.y - center.y };
+                const startDist = Math.hypot(startVector.x, startVector.y);
+                const currentDist = Math.hypot(currentVector.x, currentVector.y);
+                const startAngle = Math.atan2(startVector.y, startVector.x);
+                const currentAngle = Math.atan2(currentVector.y, currentVector.x);
+                rotation = normalizeAngleToPi(currentAngle - startAngle);
+                scale = (startDist < 1e-9) ? 1 : currentDist / startDist;
+            }
+        
+            if (centerType === 'center_rotate_only') scale = 1.0;
+            if (centerType === 'center_scale_only') rotation = 0.0;
+        
+            transformIndicatorData = { center, startPos: startReferencePoint, currentPos: finalMouseData, rotation, scale, isSnapping, snappedScaleValue, transformType: centerType };
+        
+            initialDragPointStates.forEach(p_initial => {
+                if (p_initial.type !== 'regular') return;
+                const p_preview = dragPreviewPoints.find(p => p.id === p_initial.id);
+                if (!p_preview) return;
+                
+                const initialPointVector = { x: p_initial.x - center.x, y: p_initial.y - center.y };
+                let transformedVector = { ...initialPointVector };
+                
+                if (centerType !== 'center_rotate_only') {
+                    transformedVector.x *= scale;
+                    transformedVector.y *= scale;
+                }
+                if (centerType !== 'center_scale_only') {
+                    const x = transformedVector.x;
+                    const y = transformedVector.y;
+                    transformedVector.x = x * Math.cos(rotation) - y * Math.sin(rotation);
+                    transformedVector.y = x * Math.sin(rotation) + y * Math.cos(rotation);
+                }
+                p_preview.x = center.x + transformedVector.x;
+                p_preview.y = center.y + transformedVector.y;
+            });
+
+        } else if (dragPreviewPoints.length > 0) {
+            const mouseData = screenToData(mousePos);
+            const startMouseData = screenToData(actionStartPos);
+            let finalDelta = { x: mouseData.x - startMouseData.x, y: mouseData.y - startMouseData.y };
+
+            if (currentShiftPressed && actionTargetPoint) {
+                const dragOrigin = initialDragPointStates.find(p => p.id === actionTargetPoint.id);
+                const targetSnapPos = { x: dragOrigin.x + finalDelta.x, y: dragOrigin.y + finalDelta.y };
+                const snapResult = getDragSnapPosition(dragOrigin, targetSnapPos);
+                if (snapResult.snapped) {
+                    finalDelta = { x: snapResult.point.x - dragOrigin.x, y: snapResult.point.y - dragOrigin.y };
+                }
+                lastSnapResult = snapResult;
+            }
+
+            initialDragPointStates.forEach(originalPointState => {
+                const previewPointToUpdate = dragPreviewPoints.find(dp => dp.id === originalPointState.id);
+                if (previewPointToUpdate) {
+                    previewPointToUpdate.x = originalPointState.x + finalDelta.x;
+                    previewPointToUpdate.y = originalPointState.y + finalDelta.y;
+                }
+            });
+        }
+    }
+});
+
+canvas.addEventListener('mousedown', (event) => {
+    mousePos = getMousePosOnCanvas(event, canvas);
+
+    if (handleCanvasUIClick(mousePos)) {
+        return;
+    }
+
+    if (isDrawingMode && event.button === 2) {
+        performEscapeAction();
+        return;
+    }
+
+    if (isPlacingTransform) {
+        if (event.button === 0) {
+            const finalPlacePos = placingSnapPos || mousePos;
+            const dataPos = screenToData(finalPlacePos);
+            const newCenter = {
+                id: generateUniqueId(),
+                x: dataPos.x,
+                y: dataPos.y,
+                type: placingTransformType,
+                color: currentColor
+            };
+            allPoints.push(newCenter);
+            saveStateForUndo();
+        }
+        isPlacingTransform = false;
+        placingTransformType = null;
+        placingSnapPos = null;
+        return;
+    }
+
+    isActionInProgress = true;
+    isDragConfirmed = false;
+    isPanningBackground = false;
+    isRectangleSelecting = false;
+    initialDragPointStates = [];
+    dragPreviewPoints = [];
+    currentMouseButton = event.button;
+    actionStartPos = mousePos;
+    rectangleSelectStartPos = actionStartPos;
+
+    const targetPoint = findClickedPoint(actionStartPos);
+    const targetEdge = targetPoint ? null : findClickedEdge(actionStartPos);
+
+    actionContext = {
+        targetPoint,
+        targetEdge,
+        target: targetPoint || targetEdge || 'canvas',
+        shiftKey: event.shiftKey,
+        ctrlKey: event.ctrlKey || event.metaKey,
+    };
+
+    if (event.altKey) {
+        if (targetPoint && targetPoint.type === 'regular') {
+            saveStateForUndo();
+            performEscapeAction();
+            isDrawingMode = true;
+            previewLineStartPointId = targetPoint.id;
+            isActionInProgress = false;
+            return;
+        } else if (targetEdge) {
+            saveStateForUndo();
+            performEscapeAction();
+            const p1 = findPointById(targetEdge.id1);
+            const p2 = findPointById(targetEdge.id2);
+            const closest = getClosestPointOnLineSegment(screenToData(actionStartPos), p1, p2);
+            const newPoint = { id: generateUniqueId(), x: closest.x, y: closest.y, type: 'regular', color: currentColor };
+            allPoints.push(newPoint);
+            allEdges = allEdges.filter(e => getEdgeId(e) !== getEdgeId(targetEdge));
+            allEdges.push({ id1: p1.id, id2: newPoint.id });
+            allEdges.push({ id1: newPoint.id, id2: p2.id });
+            isDrawingMode = true;
+            previewLineStartPointId = newPoint.id;
+            isActionInProgress = false;
+            return;
+        }
+    }
+});
+
+canvas.addEventListener('mouseup', (event) => {
+    if (!isActionInProgress) return;
+
+    const { shiftKey, ctrlKey } = actionContext;
+
+    if (isDragConfirmed) {
+        if (isRectangleSelecting) {
+            const dataP1 = screenToData({ x: Math.min(actionStartPos.x, mousePos.x), y: Math.min(actionStartPos.y, mousePos.y) });
+            const dataP2 = screenToData({ x: Math.max(actionStartPos.x, mousePos.x), y: Math.max(actionStartPos.y, mousePos.y) });
+            const minX = Math.min(dataP1.x, dataP2.x),
+                maxX = Math.max(dataP1.x, dataP2.x);
+            const minY = Math.min(dataP1.y, dataP2.y),
+                maxY = Math.max(dataP1.y, dataP2.y);
+
+            const pointsInRect = allPoints.filter(p => p.type === 'regular' && p.x >= minX && p.x <= maxX && p.y >= minY && p.y <= maxY).map(p => p.id);
+            const centersInRect = allPoints.filter(p => p.type !== 'regular' && p.x >= minX && p.x <= maxX && p.y >= minY && p.y <= maxY).map(p => p.id);
+
+            if (!shiftKey && !ctrlKey) {
+                selectedPointIds = pointsInRect;
+                selectedEdgeIds = allEdges.filter(e => pointsInRect.includes(e.id1) && pointsInRect.includes(e.id2)).map(e => getEdgeId(e));
+                selectedCenterIds = centersInRect;
+            } else {
+                if (shiftKey) {
+                    selectedPointIds = [...new Set([...selectedPointIds, ...pointsInRect])];
+                    const edgesInRect = allEdges.filter(e => pointsInRect.includes(e.id1) && pointsInRect.includes(e.id2)).map(e => getEdgeId(e));
+                    selectedEdgeIds = [...new Set([...selectedEdgeIds, ...edgesInRect])];
+                    selectedCenterIds = [...new Set([...selectedCenterIds, ...centersInRect])];
+                } else { // ctrlKey
+                    pointsInRect.forEach(id => { const i = selectedPointIds.indexOf(id); if (i > -1) selectedPointIds.splice(i, 1); else selectedPointIds.push(id); });
+                    centersInRect.forEach(id => { const i = selectedCenterIds.indexOf(id); if (i > -1) selectedCenterIds.splice(i, 1); else selectedCenterIds.push(id); });
+                }
+            }
+            activeCenterId = selectedCenterIds.at(-1) ?? null;
+
+        } else if (dragPreviewPoints.length > 0) {
+            let didMerge = false;
+            if (actionTargetPoint && dragPreviewPoints.length === 1 && actionTargetPoint.type === 'regular') {
+                const finalDropPos = dragPreviewPoints[0];
+                let targetPoint = null;
+                const mergeRadiusData = POINT_SELECT_RADIUS / viewTransform.scale;
+
+                for (const p of allPoints) {
+                    if (p.id !== actionTargetPoint.id && p.type === 'regular' && distance(finalDropPos, p) < mergeRadiusData) {
+                        targetPoint = p;
+                        break;
+                    }
+                }
+
+                if (targetPoint) {
+                    didMerge = true;
+                    saveStateForUndo();
+                    const pointToDeleteId = actionTargetPoint.id;
+                    const pointToKeepId = targetPoint.id;
+                    const edgesToRewire = allEdges.filter(edge => edge.id1 === pointToDeleteId || edge.id2 === pointToDeleteId);
+                    const newEdges = [];
+                    for (const edge of edgesToRewire) {
+                        const otherEndId = (edge.id1 === pointToDeleteId) ? edge.id2 : edge.id1;
+                        if (otherEndId !== pointToKeepId) {
+                            const edgeAlreadyExists = allEdges.some(e => (e.id1 === pointToKeepId && e.id2 === otherEndId) || (e.id2 === pointToKeepId && e.id1 === otherEndId));
+                            if (!edgeAlreadyExists) newEdges.push({ id1: pointToKeepId, id2: otherEndId });
+                        }
+                    }
+                    allEdges = allEdges.filter(edge => edge.id1 !== pointToDeleteId && edge.id2 !== pointToDeleteId);
+                    allPoints = allPoints.filter(p => p.id !== pointToDeleteId);
+                    allEdges.push(...newEdges);
+                    selectedPointIds = selectedPointIds.filter(id => id !== pointToDeleteId);
+                }
+            }
+            if (!didMerge) {
+                saveStateForUndo();
+                dragPreviewPoints.forEach(dp => { const p = findPointById(dp.id); if (p) { p.x = dp.x; p.y = dp.y; } });
+            }
+        }
+    } else {
+        const { targetPoint, targetEdge } = actionContext;
+        if (currentMouseButton === 0) {
+            const startPoint = findPointById(previewLineStartPointId);
+            if (isDrawingMode && startPoint) {
+                saveStateForUndo();
+                let newPoint = null;
+                const snappedDataForCompletedSegment = getSnappedPosition(startPoint, mousePos, shiftKey);
+
+                if (targetPoint && targetPoint.type === 'regular' && targetPoint.id !== startPoint.id) {
+                    const edgeExists = allEdges.some(e => (e.id1 === startPoint.id && e.id2 === targetPoint.id) || (e.id2 === startPoint.id && e.id1 === targetPoint.id));
+                    if (!edgeExists) allEdges.push({ id1: startPoint.id, id2: targetPoint.id });
+                    newPoint = targetPoint;
+                } else if (targetEdge) {
+                    const p1 = findPointById(targetEdge.id1),
+                        p2 = findPointById(targetEdge.id2);
+                    if (p1 && p2) {
+                        const closest = getClosestPointOnLineSegment(screenToData(mousePos), p1, p2);
+                        newPoint = { id: generateUniqueId(), x: closest.x, y: closest.y, type: 'regular', color: currentColor };
+                        allPoints.push(newPoint);
+                        allEdges = allEdges.filter(e => getEdgeId(e) !== getEdgeId(targetEdge));
+                        allEdges.push({ id1: p1.id, id2: newPoint.id }, { id1: newPoint.id, id2: p2.id }, { id1: startPoint.id, id2: newPoint.id });
+                    }
+                } else {
+                    newPoint = { id: generateUniqueId(), x: snappedDataForCompletedSegment.x, y: snappedDataForCompletedSegment.y, type: 'regular', color: currentColor };
+                    allPoints.push(newPoint);
+                    allEdges.push({ id1: startPoint.id, id2: newPoint.id });
+                }
+
+                if (shiftKey && newPoint && snappedDataForCompletedSegment) {
+                    const completedSegmentProps = getCompletedSegmentProperties(startPoint, newPoint, allEdges);
+
+                    if (completedSegmentProps) {
+                        frozenReference_Origin_Data = completedSegmentProps.startPoint; 
+                        frozenReference_D_du = completedSegmentProps.length;
+                        frozenReference_D_g2g = snappedDataForCompletedSegment.gridToGridSquaredSum > 0 ? { g2gSquaredSum: snappedDataForCompletedSegment.gridToGridSquaredSum, interval: snappedDataForCompletedSegment.gridInterval } : null;
+
+                        frozenReference_A_rad = completedSegmentProps.turnAngleRad;
+                        frozenReference_A_baseRad = completedSegmentProps.precedingSegmentAbsoluteAngleRad;
+
+                    } else {
+                        frozenReference_D_du = null;
+                        frozenReference_D_g2g = null;
+                        frozenReference_A_rad = null;
+                        frozenReference_A_baseRad = null;
+                        frozenReference_Origin_Data = null;
+                    }
+                } else {
+                    frozenReference_D_du = null;
+                    frozenReference_D_g2g = null;
+                    frozenReference_A_rad = null;
+                    frozenReference_A_baseRad = null;
+                    frozenReference_Origin_Data = null;
+                }
+                if (newPoint) previewLineStartPointId = newPoint.id;
+                else isDrawingMode = false;
+                clickData.count = 0;
+            } else {
+                const now = Date.now();
+                const target = targetPoint || targetEdge;
+                if (target) {
+                    if (targetPoint?.type !== 'regular') {
+                        handleCenterSelection(targetPoint.id, shiftKey, ctrlKey);
+                    } else {
+                        const targetId = targetPoint ? targetPoint.id : getEdgeId(targetEdge);
+                        const targetType = targetPoint ? 'point' : 'edge';
+                        if (clickData.targetId === targetId && (now - clickData.timestamp) < DOUBLE_CLICK_MS) {
+                            clickData.count++;
+                        } else {
+                            clickData.count = 1;
+                            clickData.targetId = targetId;
+                            clickData.type = targetType;
+                        }
+                        clickData.timestamp = now;
+                        switch (clickData.count) {
+                            case 1:
+                                applySelectionLogic([targetId], targetEdge ? [getEdgeId(targetEdge)] : [], shiftKey, ctrlKey, false);
+                                break;
+                            case 2:
+                                if (clickData.type === 'point') {
+                                    const neighbors = findNeighbors(clickData.targetId);
+                                    applySelectionLogic([clickData.targetId, ...neighbors], [], false, false);
+                                } else {
+                                    const edge = allEdges.find(e => getEdgeId(e) === clickData.targetId);
+                                    if (edge) {
+                                        const edges = new Set([...findNeighborEdges(edge.id1), ...findNeighborEdges(edge.id2)]);
+                                        applySelectionLogic([], Array.from(edges).map(e => getEdgeId(e)), false, false);
+                                    }
+                                }
+                                break;
+                            case 3:
+                                if (clickData.type === 'point') {
+                                    const pointsInSubgraph = findAllPointsInSubgraph(clickData.targetId);
+                                    applySelectionLogic(pointsInSubgraph, [], false, false);
+                                } else {
+                                    const edge = allEdges.find(e => getEdgeId(e) === clickData.targetId);
+                                    if (edge) {
+                                        const pointsInSubgraph = new Set(findAllPointsInSubgraph(edge.id1));
+                                        const edgesInSubgraph = allEdges.filter(e => pointsInSubgraph.has(e.id1) && pointsInSubgraph.has(e.id2));
+                                        applySelectionLogic([], edgesInSubgraph.map(e => getEdgeId(e)), false, false);
+                                    }
+                                }
+                                clickData.count = 0;
+                                break;
+                        }
+                    }
+                } else {
+                    clickData.count = 0;
+                    saveStateForUndo();
+                    performEscapeAction();
+                    const startCoords = ghostPointPosition ? ghostPointPosition : screenToData(mousePos);
+                    const newPoint = { id: generateUniqueId(), ...startCoords, type: 'regular', color: currentColor };
+                    allPoints.push(newPoint);
+                    isDrawingMode = true;
+                    previewLineStartPointId = newPoint.id;
+                    frozenReference_D_du = null;
+                    frozenReference_D_g2g = null;
+                    frozenReference_A_rad = null;
+                    frozenReference_A_baseRad = null;
+                    frozenReference_Origin_Data = null;
+                }
+            }
+        }
+    }
+
+    isActionInProgress = false;
+    isDragConfirmed = false;
+    isPanningBackground = false;
+    isRectangleSelecting = false;
+    actionContext = null;
+    actionTargetPoint = null;
+    dragBoundaryContext = null;
+    transformIndicatorData = null;
+    canvas.style.cursor = 'crosshair';
+});
+
+window.addEventListener('keydown', (event) => {
+    const isCtrlOrCmd = event.ctrlKey || event.metaKey;
+    if (event.key === 'Shift') {
+        currentShiftPressed = true;
+        if (!isActionInProgress && !isDrawingMode && lastGridState.interval1) {
+            const mouseDataPos = screenToData(mousePos);
+            const gridInterval = (lastGridState.alpha2 > lastGridState.alpha1 && lastGridState.interval2)
+                                   ? lastGridState.interval2
+                                   : lastGridState.interval1;
+            if (gridInterval > 0) {
+                ghostPointPosition = {
+                    x: Math.round(mouseDataPos.x / gridInterval) * gridInterval,
+                    y: Math.round(mouseDataPos.y / gridInterval) * gridInterval
+                };
+            }
+        }
+    }
+
+    const allowedDuringAction = ['Shift', 'Control', 'Meta', 'Alt', 'Escape', 'Delete', 'Backspace'];
+    if (isActionInProgress && !allowedDuringAction.includes(event.key) && !(isCtrlOrCmd && ['c','x','v','z','y','a','=','-'].includes(event.key.toLowerCase()))) return;
+
+    if (isMouseOverCanvas && isCtrlOrCmd && (event.key === '=' || event.key === '+')) {
+        event.preventDefault();
+        const centerScreen = { x: (canvas.width/dpr)/2, y: (canvas.height/dpr)/2 };
+        zoomAt(centerScreen, 1.15);
+        return;
+    }
+    if (isMouseOverCanvas && isCtrlOrCmd && event.key === '-') {
+        event.preventDefault();
+        const centerScreen = { x: (canvas.width/dpr)/2, y: (canvas.height/dpr)/2 };
+        zoomAt(centerScreen, 1/1.15);
+        return;
+    }
+
+    if (event.key === ' ') {
+        event.preventDefault();
+        completeGraphOnSelectedPoints();
+    } else if (event.key === 'Escape') {
+        performEscapeAction();
+    } else if (event.key === 'Delete' || event.key === 'Backspace') {
+        deleteSelectedItems();
+    } else if (isCtrlOrCmd && event.key.toLowerCase() === 'c') {
+        event.preventDefault();
+        handleCopy();
+    } else if (isCtrlOrCmd && event.key.toLowerCase() === 'x') {
+        event.preventDefault();
+        handleCut();
+    } else if (isCtrlOrCmd && event.key.toLowerCase() === 'v') {
+        event.preventDefault();
+        handlePaste();
+    } else if (isCtrlOrCmd && event.key.toLowerCase() === 'z' && !event.shiftKey) {
+        event.preventDefault();
+        handleUndo();
+    } else if (isCtrlOrCmd && (event.key.toLowerCase() === 'y' || (event.shiftKey && event.key.toLowerCase() === 'z'))) {
+        event.preventDefault();
+        handleRedo();
+    } else if (isCtrlOrCmd && event.key.toLowerCase() === 'a') {
+        event.preventDefault();
+        selectedPointIds = allPoints.filter(p => p.type === 'regular').map(p => p.id);
+        selectedEdgeIds = allEdges.map(edge => getEdgeId(edge));
+        
+        if (!activeCenterId) {
+             const firstCenter = allPoints.find(p => p.type !== 'regular');
+             if (firstCenter) {
+                 activeCenterId = firstCenter.id;
+             }
+        }
+        
+    } else if (['c', 'r', 's'].includes(event.key.toLowerCase()) && !isCtrlOrCmd && !isActionInProgress) {
+        event.preventDefault();
+        saveStateForUndo();
+        performEscapeAction();
+        
+        let type;
+        if (event.key.toLowerCase() === 'c') type = 'center_rotate_scale';
+        else if (event.key.toLowerCase() === 'r') type = 'center_rotate_only';
+        else if (event.key.toLowerCase() === 's') type = 'center_scale_only';
+        
+        const mouseDataPos = screenToData(mousePos);
+        const newCenter = { id: generateUniqueId(), x: mouseDataPos.x, y: mouseDataPos.y, type: type, color: currentColor };
+        allPoints.push(newCenter);
+        activeCenterId = newCenter.id;
+    }
+});
+
+window.addEventListener('keyup', (event) => {
+    if (event.key === 'Shift') {
+        currentShiftPressed = false;
+        ghostPointPosition = null;
+    }
+});
+
+window.addEventListener('resize', resizeCanvas);
+
+colorPicker.addEventListener('change', (e) => {
+    setCurrentColor(e.target.value);
+});
+
+function gameLoop() {
+    redrawAll();
+    requestAnimationFrame(gameLoop);
+}
+
+// In your 'load' event listener
+window.addEventListener('load', () => {
+    if (typeof window.katex === 'undefined') {
+        console.error("KaTeX library failed to load or initialize. Math rendering will be broken.");
+    }
+    initializeCanvasUI();
+    resizeCanvas();
+    setCurrentColor(currentColor);
+    saveStateForUndo();
+    // redrawAll(); // DELETE THIS LINE
+    gameLoop();   // AND ADD THIS LINE to start the loop
+});
