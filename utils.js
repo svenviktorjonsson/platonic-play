@@ -192,6 +192,15 @@ export function formatFraction(decimal, tolerance = 0.015, maxDisplayDenominator
     return originalSign + absDecimal.toFixed(fixedPrecision);
 }
 
+export function formatCoordinateValue(value, decimalPlaces) {
+    if (typeof value !== 'number' || isNaN(value)) {
+        return '...';
+    }
+    const sign = value < 0 ? "-" : "\\phantom{-}";
+    const fixedValue = Math.abs(value).toFixed(decimalPlaces);
+    return sign + fixedValue;
+}
+
 export function normalize(v) {
     const mag = Math.hypot(v.x, v.y);
     if (mag === 0) return { x: 0, y: 0 };
