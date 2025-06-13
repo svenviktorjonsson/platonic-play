@@ -3182,10 +3182,11 @@ function drawGrid(ctx) {
         const topLeftData = screenToData({ x: 0, y: 0 });
         const bottomRightData = screenToData({ x: canvasWidth, y: canvasHeight });
         const maxRadius = Math.hypot(Math.max(Math.abs(topLeftData.x), Math.abs(bottomRightData.x)), Math.max(Math.abs(topLeftData.y), Math.abs(bottomRightData.y)));
-
+        
+        console.log(maxRadius)
         for (let r = dominantRadius; r < maxRadius; r += dominantRadius) {
             ctx.beginPath();
-            ctx.arc(origin.x, origin.y, r * viewTransform.scale, 0, 2 * Math.PI);
+            ctx.arc(origin.x, origin.y, r * viewTransform.scale * 0.8, 0, 2 * Math.PI);
             ctx.stroke();
         }
 
@@ -3306,7 +3307,7 @@ function drawPolarReferenceCircle(ctx, radius, alpha, axisArrowSize, axisNameFon
     if (alpha < 0.01) return;
 
     const origin = dataToScreen({ x: 0, y: 0 });
-    const screenRadius = radius * viewTransform.scale;
+    const screenRadius = radius * viewTransform.scale * 0.8;
     const circleColor = `rgba(255, 255, 255, ${alpha * 0.8})`;
     const tickSize = 5;
     const katexFontSize = 10;
