@@ -900,37 +900,7 @@ function initializeCanvasUI() {
     };
 }
 
-function calculateGridIntervals(viewTransformScale) {
-    const targetScreenSpacing = 140;
-    const effectiveDataInterval = targetScreenSpacing / viewTransformScale;
 
-    const logInterval = Math.log10(effectiveDataInterval);
-    const lowerPowerOf10 = Math.pow(10, Math.floor(logInterval));
-    const higherPowerOf10 = Math.pow(10, Math.ceil(logInterval));
-
-    let grid1Interval = lowerPowerOf10;
-    let grid2Interval = higherPowerOf10;
-    let alpha1 = 1;
-    let alpha2 = 0;
-
-    if (Math.abs(higherPowerOf10 - lowerPowerOf10) > lowerPowerOf10 * 0.0001) {
-        const logInterpFactor = (logInterval - Math.log10(lowerPowerOf10)) / (Math.log10(higherPowerOf10) - Math.log10(lowerPowerOf10));
-
-        const transitionZoneStart = 0.4;
-        const transitionZoneEnd = 0.9;
-
-        let interpValue = (logInterpFactor - transitionZoneStart) / (transitionZoneEnd - transitionZoneStart);
-        interpValue = Math.max(0, Math.min(1, interpValue));
-        interpValue = interpValue * interpValue * (3 - 2 * interpValue);
-
-        alpha1 = 1 - interpValue;
-        alpha2 = interpValue;
-    } else {
-        grid2Interval = null;
-    }
-
-    return { grid1Interval, grid2Interval, alpha1, alpha2 };
-}
 
 const canvasUI = {
     toolbarButton: null,
@@ -3160,96 +3130,7 @@ function applySelectionLogic(pointIdsToSelect, edgeIdsToSelect, wantsShift, want
     }
 }
 
-function drawGrid(ctx) {
-    if (gridDisplayMode === 'none') return;
-    
-    const baseGridColor = [136, 136, 136]; // Corresponds to #888888
-    ctx.save();
-    
-    const origin = dataToScreen({ x: 0, y: 0 });
-    const canvasWidth = canvas.width / dpr;
-    const canvasHeight = canvas.height / dpr;
 
-    if (gridDisplayMode === 'polar') {
-        const gridColor = `rgba(${baseGridColor.join(',')}, ${gridAlpha})`;
-        ctx.strokeStyle = gridColor;
-        ctx.lineWidth = GRID_LINEWIDTH;
-
-        const idealScreenDistance = 100;
-        const idealDataRadius = idealScreenDistance / viewTransform.scale;
-        const dominantRadius = Math.pow(10, Math.round(Math.log10(idealDataRadius)));
-        
-        const topLeftData = screenToData({ x: 0, y: 0 });
-        const bottomRightData = screenToData({ x: canvasWidth, y: canvasHeight });
-        const maxRadius = Math.hypot(Math.max(Math.abs(topLeftData.x), Math.abs(bottomRightData.x)), Math.max(Math.abs(topLeftData.y), Math.abs(bottomRightData.y)));
-        
-        console.log(maxRadius)
-        for (let r = dominantRadius; r < maxRadius; r += dominantRadius) {
-            ctx.beginPath();
-            ctx.arc(origin.x, origin.y, r * viewTransform.scale * 0.8, 0, 2 * Math.PI);
-            ctx.stroke();
-        }
-
-        const dominantAngularInterval = (lastAngularGridState.alpha2 > lastAngularGridState.alpha1) ? lastAngularGridState.angle2 : lastAngularGridState.angle1;
-        if (dominantAngularInterval > 0) {
-            for (let angle = 0; angle < 360; angle += dominantAngularInterval) {
-                if (angle % 90 === 0) continue;
-                const rad = angle * Math.PI / 180;
-                const endX = origin.x + (maxRadius * viewTransform.scale) * Math.cos(rad);
-                const endY = origin.y + (maxRadius * viewTransform.scale) * Math.sin(rad);
-                ctx.beginPath();
-                ctx.moveTo(origin.x, origin.y);
-                ctx.lineTo(endX, endY);
-                ctx.stroke();
-            }
-        }
-    } else { // Rectilinear grid
-        const drawGridElements = (interval, alpha) => {
-            if (!interval || alpha < 0.01) return;
-            const gridElementColor = `rgba(${baseGridColor.join(',')}, ${alpha * gridAlpha})`;
-            
-            const start = screenToData({ x: 0, y: canvasHeight });
-            const end = screenToData({ x: canvasWidth, y: 0 });
-            const startTickX = Math.floor(start.x / interval) * interval;
-            const endTickX = Math.ceil(end.x / interval) * interval;
-            const startTickY = Math.floor(start.y / interval) * interval;
-            const endTickY = Math.ceil(end.y / interval) * interval;
-
-            if (gridDisplayMode === 'lines') {
-                ctx.strokeStyle = gridElementColor;
-                ctx.lineWidth = GRID_LINEWIDTH;
-                for (let x = startTickX; x <= endTickX; x += interval) {
-                    const screenX = dataToScreen({ x: x, y: 0 }).x;
-                    ctx.beginPath();
-                    ctx.moveTo(screenX, 0);
-                    ctx.lineTo(screenX, canvasHeight);
-                    ctx.stroke();
-                }
-                for (let y = startTickY; y <= endTickY; y += interval) {
-                    const screenY = dataToScreen({ x: 0, y: y }).y;
-                    ctx.beginPath();
-                    ctx.moveTo(0, screenY);
-                    ctx.lineTo(canvasWidth, screenY);
-                    ctx.stroke();
-                }
-            } else if (gridDisplayMode === 'points') {
-                ctx.fillStyle = gridElementColor;
-                const pointRadius = 1.5 * dpr; // Adjust point size
-                for (let x = startTickX; x <= endTickX; x += interval) {
-                    for (let y = startTickY; y <= endTickY; y += interval) {
-                        const screenPos = dataToScreen({ x: x, y: y });
-                        ctx.beginPath();
-                        ctx.arc(screenPos.x, screenPos.y, pointRadius, 0, 2 * Math.PI);
-                        ctx.fill();
-                    }
-                }
-            }
-        };
-        drawGridElements(lastGridState.interval1, lastGridState.alpha1);
-        drawGridElements(lastGridState.interval2, lastGridState.alpha2);
-    }
-    ctx.restore();
-}
 
 function drawGridIcon(ctx, rect, mode, isSelected) {
     const colorStrong = isSelected ? '#F9FAFB' : '#9CA3AF';
@@ -3303,11 +3184,118 @@ function drawGridIcon(ctx, rect, mode, isSelected) {
     ctx.restore();
 }
 
+function drawGrid(ctx) {
+    if (gridDisplayMode === 'none') return;
+    
+    const baseGridColor = [136, 136, 136];
+    ctx.save();
+    
+    const origin = dataToScreen({ x: 0, y: 0 });
+    const canvasWidth = canvas.width / dpr;
+    const canvasHeight = canvas.height / dpr;
+
+    if (gridDisplayMode === 'polar') {
+        const topLeftData = screenToData({ x: 0, y: 0 });
+        const bottomRightData = screenToData({ x: canvasWidth, y: canvasHeight });
+        const maxDataRadius = Math.hypot(Math.max(Math.abs(topLeftData.x), Math.abs(bottomRightData.x)), Math.max(Math.abs(topLeftData.y), Math.abs(bottomRightData.y)));
+
+        const drawPolarCircles = (interval, alpha) => {
+            if (!interval || alpha < 0.01) return;
+            ctx.strokeStyle = `rgba(${baseGridColor.join(',')}, ${alpha * gridAlpha})`;
+            ctx.lineWidth = GRID_LINEWIDTH;
+            for (let r = interval; r <= maxDataRadius; r += interval) {
+                const screenRadius = r * viewTransform.scale / dpr;
+                ctx.beginPath();
+                ctx.arc(origin.x, origin.y, screenRadius, 0, 2 * Math.PI);
+                ctx.stroke();
+            }
+        };
+
+        drawPolarCircles(lastGridState.interval1, lastGridState.alpha1);
+        drawPolarCircles(lastGridState.interval2, lastGridState.alpha2);
+        
+        const dominantAngularInterval = (lastAngularGridState.alpha2 > lastAngularGridState.alpha1) ? lastAngularGridState.angle2 : lastAngularGridState.angle1;
+        if (dominantAngularInterval > 0) {
+            ctx.strokeStyle = `rgba(${baseGridColor.join(',')}, ${gridAlpha})`;
+            ctx.lineWidth = GRID_LINEWIDTH;
+            const screenRadiusForSpokes = maxDataRadius * viewTransform.scale / dpr;
+            for (let angle = 0; angle < 360; angle += dominantAngularInterval) {
+                if (angle % 90 === 0) continue;
+                const rad = angle * Math.PI / 180;
+                const endX = origin.x + screenRadiusForSpokes * Math.cos(rad);
+                const endY = origin.y + screenRadiusForSpokes * Math.sin(rad);
+                ctx.beginPath();
+                ctx.moveTo(origin.x, origin.y);
+                ctx.lineTo(endX, endY);
+                ctx.stroke();
+            }
+        }
+
+    } else {
+        const drawGridElements = (interval, alpha) => {
+            if (!interval || alpha < 0.01) return;
+            const gridElementColor = `rgba(${baseGridColor.join(',')}, ${alpha * gridAlpha})`;
+            
+            const start = screenToData({ x: 0, y: canvasHeight });
+            const end = screenToData({ x: canvasWidth, y: 0 });
+            const startTickX = Math.floor(start.x / interval) * interval;
+            const endTickX = Math.ceil(end.x / interval) * interval;
+            const startTickY = Math.floor(start.y / interval) * interval;
+            const endTickY = Math.ceil(end.y / interval) * interval;
+
+            if (gridDisplayMode === 'lines') {
+                ctx.strokeStyle = gridElementColor;
+                ctx.lineWidth = GRID_LINEWIDTH;
+                for (let x = startTickX; x <= endTickX; x += interval) {
+                    const screenX = dataToScreen({ x: x, y: 0 }).x;
+                    ctx.beginPath();
+                    ctx.moveTo(screenX, 0);
+                    ctx.lineTo(screenX, canvasHeight);
+                    ctx.stroke();
+                }
+                for (let y = startTickY; y <= endTickY; y += interval) {
+                    const screenY = dataToScreen({ x: 0, y: y }).y;
+                    ctx.beginPath();
+                    ctx.moveTo(0, screenY);
+                    ctx.lineTo(canvasWidth, screenY);
+                    ctx.stroke();
+                }
+            } else if (gridDisplayMode === 'points') {
+                ctx.fillStyle = gridElementColor;
+                const pointRadius = 1.5 * dpr;
+                for (let x = startTickX; x <= endTickX; x += interval) {
+                    for (let y = startTickY; y <= endTickY; y += interval) {
+                        const screenPos = dataToScreen({ x: x, y: y });
+                        ctx.beginPath();
+                        ctx.arc(screenPos.x, screenPos.y, pointRadius, 0, 2 * Math.PI);
+                        ctx.fill();
+                    }
+                }
+            }
+        };
+        drawGridElements(lastGridState.interval1, lastGridState.alpha1);
+        drawGridElements(lastGridState.interval2, lastGridState.alpha2);
+    }
+    ctx.restore();
+}
+
 function drawPolarReferenceCircle(ctx, radius, alpha, axisArrowSize, axisNameFontSize) {
     if (alpha < 0.01) return;
 
     const origin = dataToScreen({ x: 0, y: 0 });
-    const screenRadius = radius * viewTransform.scale * 0.8;
+    const screenRadius = radius * viewTransform.scale / dpr;
+
+    const canvasWidthCSS = canvas.width / dpr;
+    const canvasHeightCSS = canvas.height / dpr;
+
+    const closestX = Math.max(0, Math.min(origin.x, canvasWidthCSS));
+    const closestY = Math.max(0, Math.min(origin.y, canvasHeightCSS));
+    const distanceToClosestCanvasPointSq = (origin.x - closestX)**2 + (origin.y - closestY)**2;
+
+    if (distanceToClosestCanvasPointSq > screenRadius**2) {
+        return;
+    }
+
     const circleColor = `rgba(255, 255, 255, ${alpha * 0.8})`;
     const tickSize = 5;
     const katexFontSize = 10;
@@ -3322,29 +3310,27 @@ function drawPolarReferenceCircle(ctx, radius, alpha, axisArrowSize, axisNameFon
         if (deg === 0) continue;
 
         const angleRad = deg * Math.PI / 180;
-        const pointOnCircle = { x: origin.x + screenRadius * Math.cos(angleRad), y: origin.y - screenRadius * Math.sin(angleRad) };
         const tickStart = { x: origin.x + (screenRadius - tickSize / 2) * Math.cos(angleRad), y: origin.y - (screenRadius - tickSize / 2) * Math.sin(angleRad) };
         const tickEnd = { x: origin.x + (screenRadius + tickSize / 2) * Math.cos(angleRad), y: origin.y - (screenRadius + tickSize / 2) * Math.sin(angleRad) };
         
-        ctx.strokeStyle = circleColor;
         ctx.beginPath();
         ctx.moveTo(tickStart.x, tickStart.y);
         ctx.lineTo(tickEnd.x, tickEnd.y);
         ctx.stroke();
         
-        if (deg === 180) { // This is the block you want to keep
+        if (deg === 180) {
             const tangentAngle = angleRad - Math.PI / 2;
             ctx.fillStyle = circleColor;
             ctx.beginPath();
-            ctx.moveTo(pointOnCircle.x, pointOnCircle.y);
-            ctx.lineTo(pointOnCircle.x - axisArrowSize * Math.cos(tangentAngle - Math.PI / 6), pointOnCircle.y - axisArrowSize * Math.sin(tangentAngle - Math.PI / 6));
-            ctx.lineTo(pointOnCircle.x - axisArrowSize * Math.cos(tangentAngle + Math.PI / 6), pointOnCircle.y - axisArrowSize * Math.sin(tangentAngle + Math.PI / 6));
+            ctx.moveTo(tickEnd.x, tickEnd.y);
+            ctx.lineTo(tickEnd.x - axisArrowSize * Math.cos(tangentAngle - Math.PI / 6), tickEnd.y - axisArrowSize * Math.sin(tangentAngle - Math.PI / 6));
+            ctx.lineTo(tickEnd.x - axisArrowSize * Math.cos(tangentAngle + Math.PI / 6), tickEnd.y - axisArrowSize * Math.sin(tangentAngle + Math.PI / 6));
             ctx.closePath();
             ctx.fill();
             
-            const labelPos = { x: pointOnCircle.x - axisArrowSize - 10, y: pointOnCircle.y - axisArrowSize - 10 };
+            const labelPos = { x: tickEnd.x - axisArrowSize - 10, y: tickEnd.y - axisArrowSize - 10 };
             updateHtmlLabel({ id: `theta-label-${radius}`, content: '\\theta', x: labelPos.x, y: labelPos.y, color: circleColor, fontSize: axisNameFontSize, options: { textAlign: 'right', textBaseline: 'bottom' }});
-            labelsToKeepThisFrame.add(`theta-label-${radius}`); // Ensure this is marked to be kept
+            labelsToKeepThisFrame.add(`theta-label-${radius}`);
         } else {
             let angleText = '';
             if (angleDisplayMode === 'degrees') {
@@ -3352,16 +3338,60 @@ function drawPolarReferenceCircle(ctx, radius, alpha, axisArrowSize, axisNameFon
             } else {
                 const frac = formatFraction(deg/180, 0.001, 6);
                 if (frac !== '0') {
-                   angleText = frac === '1' ? `\\pi` : (frac === '-1' ? `-\\pi` : `${frac}\\pi`);
+                    angleText = frac === '1' ? `\\pi` : (frac === '-1' ? `-\\pi` : `${frac}\\pi`);
                 }
             }
+            
             if (angleText) {
                 const labelRadius = screenRadius + 15;
                 const labelPos = { x: origin.x + labelRadius * Math.cos(angleRad), y: origin.y - labelRadius * Math.sin(angleRad) };
-                updateHtmlLabel({ id: `circ-label-${deg}-${radius}`, content: angleText, x: labelPos.x, y: labelPos.y, color: circleColor, fontSize: katexFontSize, options: { textAlign: 'center', textBaseline: 'middle' }});
+                updateHtmlLabel({ id: `circ-label-${deg}-${radius.toExponential(15)}`, content: angleText, x: labelPos.x, y: labelPos.y, color: circleColor, fontSize: katexFontSize, options: { textAlign: 'center', textBaseline: 'middle' }});
+                labelsToKeepThisFrame.add(`circ-label-${deg}-${radius.toExponential(15)}`);
             }
         }
     }
+}
+
+function calculateGridIntervals(viewTransformScale) {
+    const targetScreenSpacing = 140;
+    const effectiveDataInterval = targetScreenSpacing / viewTransformScale;
+
+    let lowerPowerOf10 = Math.pow(10, Math.floor(Math.log10(effectiveDataInterval)));
+    let higherPowerOf10 = Math.pow(10, Math.ceil(Math.log10(effectiveDataInterval)));
+
+    if (Math.abs(lowerPowerOf10 - higherPowerOf10) < 1e-9 || lowerPowerOf10 === 0) {
+        higherPowerOf10 = lowerPowerOf10 === 0 ? 0.001 : lowerPowerOf10 * 10;
+        if (lowerPowerOf10 === 0) lowerPowerOf10 = 0.0001;
+    }
+
+    const grid1Interval = lowerPowerOf10;
+    const grid2Interval = higherPowerOf10;
+
+    let logInterpFactor = 0;
+    if (grid2Interval > grid1Interval && grid1Interval > 0) {
+        logInterpFactor = (Math.log10(effectiveDataInterval) - Math.log10(grid1Interval)) / (Math.log10(grid2Interval) - Math.log10(grid1Interval));
+    }
+
+    const transitionZoneStart = 0.4;
+    const transitionZoneEnd = 0.9;
+
+    let interpValue = (logInterpFactor - transitionZoneStart) / (transitionZoneEnd - transitionZoneStart);
+    interpValue = Math.max(0, Math.min(1, interpValue));
+    interpValue = interpValue * interpValue * (3 - 2 * interpValue);
+
+    let alpha1 = 1 - interpValue;
+    let alpha2 = interpValue;
+
+    if (alpha1 < 0.05) alpha1 = 0; else if (alpha1 > 0.95) alpha1 = 1;
+    if (alpha2 < 0.05) alpha2 = 0; else if (alpha2 > 0.95) alpha2 = 1;
+
+    const totalAlpha = alpha1 + alpha2;
+    if (totalAlpha > 0 && totalAlpha !== 2) {
+        alpha1 /= totalAlpha;
+        alpha2 /= totalAlpha;
+    }
+
+    return { grid1Interval, grid2Interval, alpha1, alpha2 };
 }
 
 function drawAxes(ctx) {
@@ -3399,162 +3429,159 @@ function drawAxes(ctx) {
     ctx.fillStyle = axisColor;
 
     if (coordsDisplayMode === 'polar') {
-        const idealScreenRadius = 150;
-        const idealDataRadius = idealScreenRadius / viewTransform.scale;
-        const logIdeal = Math.log10(idealDataRadius);
-        const dominantRadius = Math.pow(10, Math.round(logIdeal));
+        // Clear rectilinear labels (if any from previous frames)
+        labelsToKeepThisFrame.delete('axis-label-x');
+        labelsToKeepThisFrame.delete('axis-label-y');
 
+        const { interval1, interval2, alpha1, alpha2 } = lastGridState;
         const tickColor = `rgba(${baseTickLabelColor.join(',')}, ${baseTickLabelAlpha})`;
         ctx.strokeStyle = tickColor;
         ctx.lineWidth = tickLineWidth;
 
         const topLeftData = screenToData({ x: 0, y: 0 });
         const bottomRightData = screenToData({ x: canvasWidth, y: canvasHeight });
-        const maxRadiusData = Math.hypot(Math.max(Math.abs(topLeftData.x), Math.abs(bottomRightData.x)), Math.max(Math.abs(topLeftData.y), Math.abs(bottomRightData.y)));
-
-        // Clean up labels from previous frames
-        labelsToKeepThisFrame.delete('axis-label-x');
-        labelsToKeepThisFrame.delete('axis-label-y');
-        labelsToKeepThisFrame.delete('axis-label-r-posx');
-        labelsToKeepThisFrame.delete('axis-label-r-negx');
-        labelsToKeepThisFrame.delete('axis-label-r-posy');
-        labelsToKeepThisFrame.delete('axis-label-r-negy');
-        labelsToKeepThisFrame.delete('theta-label'); // Removed the main theta label near origin
-        for (let r = 0; r <= maxRadiusData + dominantRadius; r += dominantRadius) {
-            labelsToKeepThisFrame.delete(`polartick-r-x-${r}`);
-            labelsToKeepThisFrame.delete(`polartick-r-negx-${r}`);
-            labelsToKeepThisFrame.delete(`polartick-r-posy-${r}`);
-            labelsToKeepThisFrame.delete(`polartick-r-negy-${r}`);
-            labelsToKeepThisFrame.delete(`circ-label-0-${r}`);
-            labelsToKeepThisFrame.delete(`circ-label-90-${r}`);
-            labelsToKeepThisFrame.delete(`circ-label-180-${r}`);
-            labelsToKeepThisFrame.delete(`circ-label-270-${r}`);
-            labelsToKeepThisFrame.delete(`circ-label-360-${r}`);
-            // This line is now handled by the specific block in drawPolarReferenceCircle
-            // labelsToKeepThisFrame.delete(`theta-label-${r}`); 
-        }
+        const maxRadiusData = Math.hypot(Math.max(Math.abs(topLeftData.x), Math.abs(bottomRightData.x)), Math.max(Math.abs(topLeftData.y), Math.abs(bottomRightData.y))) * 1.1;
 
         // Draw and label all four main radial axes with arrows
-        // Positive X-axis (0 degrees)
         drawAxisWithArrows(origin.x, origin.y, canvasWidth, origin.y);
         updateHtmlLabel({ id: 'axis-label-r-posx', content: 'r', x: canvasWidth - axisArrowSize - 20, y: origin.y + 25, color: axisColor, fontSize: axisNameFontSize, options: { textAlign: 'center', textBaseline: 'top' } });
         labelsToKeepThisFrame.add('axis-label-r-posx');
 
-        // Negative X-axis (180 degrees)
         drawAxisWithArrows(origin.x, origin.y, 0, origin.y);
         updateHtmlLabel({ id: 'axis-label-r-negx', content: 'r', x: axisArrowSize + 20, y: origin.y + 25, color: axisColor, fontSize: axisNameFontSize, options: { textAlign: 'center', textBaseline: 'top' } });
         labelsToKeepThisFrame.add('axis-label-r-negx');
 
-        // Positive Y-axis (90 degrees)
         drawAxisWithArrows(origin.x, origin.y, origin.x, 0);
         updateHtmlLabel({ id: 'axis-label-r-posy', content: 'r', x: origin.x - 25, y: axisArrowSize + 20, color: axisColor, fontSize: axisNameFontSize, options: { textAlign: 'right', textBaseline: 'middle' } });
         labelsToKeepThisFrame.add('axis-label-r-posy');
 
-        // Negative Y-axis (270 degrees)
         drawAxisWithArrows(origin.x, origin.y, origin.x, canvasHeight);
         updateHtmlLabel({ id: 'axis-label-r-negy', content: 'r', x: origin.x - 25, y: canvasHeight - axisArrowSize - 20, color: axisColor, fontSize: axisNameFontSize, options: { textAlign: 'right', textBaseline: 'middle' } });
         labelsToKeepThisFrame.add('axis-label-r-negy');
         
-        // The previous block for the single theta label near the origin is now removed.
-
         const labelOffset = 8;
-        const axisLength = Math.max(canvasWidth, canvasHeight);
-        const dataLength = axisLength / viewTransform.scale;
+        const zeroThreshold = 1e-6; // Threshold for checking against zero
 
-        for (let r_data = dominantRadius; r_data <= dataLength; r_data += dominantRadius) {
-            const labelText = formatNumber(r_data, 3);
-            
-            // Positive X axis ticks and labels
-            const p = dataToScreen({ x: r_data, y: 0 });
-            ctx.beginPath();
-            ctx.moveTo(p.x, origin.y - tickSize / 2);
-            ctx.lineTo(p.x, origin.y + tickSize / 2);
-            ctx.stroke();
-            updateHtmlLabel({
-                id: `polartick-r-x-${r_data}`,
-                content: labelText,
-                x: p.x,
-                y: origin.y + tickSize + labelOffset,
-                color: tickColor,
-                fontSize: katexFontSize,
-                options: { textAlign: 'center', textBaseline: 'top' }
-            });
-            labelsToKeepThisFrame.add(`polartick-r-x-${r_data}`);
+        const drawTicksAndLabelsPolar = (interval, alpha) => {
+            if (!interval || alpha < 0.01) return;
+            const currentTickLabelColor = `rgba(${baseTickLabelColor.join(',')}, ${baseTickLabelAlpha * alpha})`;
+            ctx.strokeStyle = currentTickLabelColor;
+            const screenSpacing = interval * viewTransform.scale;
+            let sigFigsForLabel = 0;
+            if (screenSpacing > 80) sigFigsForLabel = 3;
+            else if (screenSpacing > 40) sigFigsForLabel = 2;
+            else if (screenSpacing > 20) sigFigsForLabel = 1;
+            else sigFigsForLabel = 0;
+            const decimalPlacesInInterval = interval > 0 ? -Math.floor(Math.log10(interval)) : 0;
+            if (decimalPlacesInInterval > 0) {
+                sigFigsForLabel = Math.max(sigFigsForLabel, decimalPlacesInInterval + 1);
+            }
 
-            // Negative X axis ticks and labels
-            const pNegX = dataToScreen({ x: -r_data, y: 0 });
-            ctx.beginPath();
-            ctx.moveTo(pNegX.x, origin.y - tickSize / 2);
-            ctx.lineTo(pNegX.x, origin.y + tickSize / 2);
-            ctx.stroke();
-            updateHtmlLabel({
-                id: `polartick-r-negx-${r_data}`,
-                content: labelText,
-                x: pNegX.x,
-                y: origin.y + tickSize + labelOffset,
-                color: tickColor,
-                fontSize: katexFontSize,
-                options: { textAlign: 'center', textBaseline: 'top' }
-            });
-            labelsToKeepThisFrame.add(`polartick-r-negx-${r_data}`);
+            for (let r_data = interval; r_data <= maxRadiusData; r_data += interval) {
+                if (Math.abs(r_data) < zeroThreshold) continue;
 
-            // Positive Y axis ticks and labels
-            const pPosY = dataToScreen({ x: 0, y: r_data });
-            ctx.beginPath();
-            ctx.moveTo(origin.x - tickSize / 2, pPosY.y);
-            ctx.lineTo(origin.x + tickSize / 2, pPosY.y);
-            ctx.stroke();
-            updateHtmlLabel({
-                id: `polartick-r-posy-${r_data}`,
-                content: labelText,
-                x: origin.x - tickSize - labelOffset, // Left side
-                y: pPosY.y,
-                color: tickColor,
-                fontSize: katexFontSize,
-                options: { textAlign: 'right', textBaseline: 'middle' }
-            });
-            labelsToKeepThisFrame.add(`polartick-r-posy-${r_data}`);
+                const labelText = formatNumber(r_data, sigFigsForLabel);
+                
+                // Positive X axis ticks and labels
+                const p = dataToScreen({ x: r_data, y: 0 });
+                ctx.beginPath();
+                ctx.moveTo(p.x, origin.y - tickSize / 2);
+                ctx.lineTo(p.x, origin.y + tickSize / 2);
+                ctx.stroke();
+                updateHtmlLabel({
+                    id: `polartick-r-x-${r_data.toExponential(15)}`, // Use exponential for stable ID
+                    content: labelText,
+                    x: p.x,
+                    y: origin.y + tickSize + labelOffset,
+                    color: currentTickLabelColor,
+                    fontSize: katexFontSize,
+                    options: { textAlign: 'center', textBaseline: 'top' }
+                });
+                labelsToKeepThisFrame.add(`polartick-r-x-${r_data.toExponential(15)}`);
 
-            // Negative Y axis ticks and labels
-            const pNegY = dataToScreen({ x: 0, y: -r_data });
-            ctx.beginPath();
-            ctx.moveTo(origin.x - tickSize / 2, pNegY.y);
-            ctx.lineTo(origin.x + tickSize / 2, pNegY.y);
-            ctx.stroke();
-            updateHtmlLabel({
-                id: `polartick-r-negy-${r_data}`,
-                content: labelText,
-                x: origin.x - tickSize - labelOffset, // Left side
-                y: pNegY.y,
-                color: tickColor,
-                fontSize: katexFontSize,
-                options: { textAlign: 'right', textBaseline: 'middle' }
-            });
-            labelsToKeepThisFrame.add(`polartick-r-negy-${r_data}`);
+                // Negative X axis ticks and labels
+                const pNegX = dataToScreen({ x: -r_data, y: 0 });
+                ctx.beginPath();
+                ctx.moveTo(pNegX.x, origin.y - tickSize / 2);
+                ctx.lineTo(pNegX.x, origin.y + tickSize / 2);
+                ctx.stroke();
+                updateHtmlLabel({
+                    id: `polartick-r-negx-${r_data.toExponential(15)}`,
+                    content: labelText,
+                    x: pNegX.x,
+                    y: origin.y + tickSize + labelOffset,
+                    color: currentTickLabelColor,
+                    fontSize: katexFontSize,
+                    options: { textAlign: 'center', textBaseline: 'top' }
+                });
+                labelsToKeepThisFrame.add(`polartick-r-negx-${r_data.toExponential(15)}`);
+
+                // Positive Y axis ticks and labels
+                const pPosY = dataToScreen({ x: 0, y: r_data });
+                ctx.beginPath();
+                ctx.moveTo(origin.x - tickSize / 2, pPosY.y);
+                ctx.lineTo(origin.x + tickSize / 2, pPosY.y);
+                ctx.stroke();
+                updateHtmlLabel({
+                    id: `polartick-r-posy-${r_data.toExponential(15)}`,
+                    content: labelText,
+                    x: origin.x - tickSize - labelOffset, // Left side
+                    y: pPosY.y,
+                    color: currentTickLabelColor,
+                    fontSize: katexFontSize,
+                    options: { textAlign: 'right', textBaseline: 'middle' }
+                });
+                labelsToKeepThisFrame.add(`polartick-r-posy-${r_data.toExponential(15)}`);
+
+                // Negative Y axis ticks and labels
+                const pNegY = dataToScreen({ x: 0, y: -r_data });
+                ctx.beginPath();
+                ctx.moveTo(origin.x - tickSize / 2, pNegY.y);
+                ctx.lineTo(origin.x + tickSize / 2, pNegY.y);
+                ctx.stroke();
+                updateHtmlLabel({
+                    id: `polartick-r-negy-${r_data.toExponential(15)}`,
+                    content: labelText,
+                    x: origin.x - tickSize - labelOffset, // Left side
+                    y: pNegY.y,
+                    color: currentTickLabelColor,
+                    fontSize: katexFontSize,
+                    options: { textAlign: 'right', textBaseline: 'middle' }
+                });
+                labelsToKeepThisFrame.add(`polartick-r-negy-${r_data.toExponential(15)}`);
+            }
+        };
+
+        // Draw radial ticks and labels for both intervals (as before)
+        drawTicksAndLabelsPolar(interval1, alpha1);
+        drawTicksAndLabelsPolar(interval2, alpha2);
+
+        // MODIFICATION FOR POLAR REFERENCE CIRCLE FADING:
+        // Draw the finer reference circle, it will fade in/out based on alpha1
+        drawPolarReferenceCircle(ctx, interval1, alpha1, axisArrowSize, axisNameFontSize);
+        
+        // Draw the coarser reference circle, always fully opaque (alpha = 1)
+        if (interval2) { // Ensure interval2 is a valid, distinct interval
+            drawPolarReferenceCircle(ctx, interval2, 1, axisArrowSize, axisNameFontSize);
         }
 
-        const radius1 = lastGridState.interval1;
-        const radius2 = lastGridState.interval2;
-        // The theta label on the circle is handled inside this function now
-        drawPolarReferenceCircle(ctx, radius1, lastGridState.alpha1, axisArrowSize, axisNameFontSize);
-        if (radius2) {
-            drawPolarReferenceCircle(ctx, radius2, lastGridState.alpha2, axisArrowSize, axisNameFontSize);
-        }
-
-    } else { // Rectilinear grid
+    } else { // Rectilinear grid (no changes here from previous iteration)
         // Clear polar-specific labels if switching to rectilinear mode
         labelsToKeepThisFrame.delete('axis-label-r-posx');
         labelsToKeepThisFrame.delete('axis-label-r-negx');
         labelsToKeepThisFrame.delete('axis-label-r-posy');
         labelsToKeepThisFrame.delete('axis-label-r-negy');
-        labelsToKeepThisFrame.delete('theta-label'); // Ensure this is also cleared in non-polar mode
-        const tempMaxRadiusCheck = Math.max(canvasWidth, canvasHeight) / viewTransform.scale;
-        const tempDominantRadiusCheck = Math.pow(10, Math.round(Math.log10(tempMaxRadiusCheck)));
-        for (let r = 0; r <= tempMaxRadiusCheck + tempDominantRadiusCheck; r += tempDominantRadiusCheck) {
-            labelsToKeepThisFrame.delete(`polartick-r-x-${r}`);
-            labelsToKeepThisFrame.delete(`polartick-r-negx-${r}`);
-            labelsToKeepThisFrame.delete(`polartick-r-posy-${r}`);
-            labelsToKeepThisFrame.delete(`polartick-r-negy-${r}`);
+        labelsToKeepThisFrame.delete('theta-label');
+        for (let r = 0; r <= (Math.max(canvasWidth, canvasHeight) / viewTransform.scale) + lastGridState.interval2; r += lastGridState.interval2) {
+            labelsToKeepThisFrame.delete(`polartick-r-x-${r.toExponential(15)}`);
+            labelsToKeepThisFrame.delete(`polartick-r-negx-${r.toExponential(15)}`);
+            labelsToKeepThisFrame.delete(`polartick-r-posy-${r.toExponential(15)}`);
+            labelsToKeepThisFrame.delete(`polartick-r-negy-${r.toExponential(15)}`);
+            labelsToKeepThisFrame.delete(`circ-label-0-${r.toExponential(15)}`);
+            labelsToKeepThisFrame.delete(`circ-label-90-${r.toExponential(15)}`);
+            labelsToKeepThisFrame.delete(`circ-label-180-${r.toExponential(15)}`);
+            labelsToKeepThisFrame.delete(`circ-label-270-${r.toExponential(15)}`);
+            labelsToKeepThisFrame.delete(`circ-label-360-${r.toExponential(15)}`);
         }
 
         if (origin.y > 0 && origin.y < canvasHeight) drawAxisWithArrows(0, origin.y, canvasWidth, origin.y);
@@ -3562,30 +3589,30 @@ function drawAxes(ctx) {
 
         let xLabel = 'x';
         let yLabel = 'y';
-
         if (coordsDisplayMode === 'complex') {
             xLabel = '\\mathrm{Re}';
             yLabel = '\\mathrm{Im}';
         }
-
         updateHtmlLabel({ id: 'axis-label-x', content: xLabel, x: canvasWidth - axisArrowSize - 20, y: origin.y + 25, color: axisColor, fontSize: axisNameFontSize, options: { textAlign: 'center', textBaseline: 'top' } });
-        updateHtmlLabel({ id: 'axis-label-y', content: yLabel, x: origin.x - 25, y: axisArrowSize + 20, color: axisColor, fontSize: axisNameFontSize, options: { textAlign: 'right', textBaseline: 'middle' } });
         labelsToKeepThisFrame.add('axis-label-x');
+        updateHtmlLabel({ id: 'axis-label-y', content: yLabel, x: origin.x - 25, y: axisArrowSize + 20, color: axisColor, fontSize: axisNameFontSize, options: { textAlign: 'right', textBaseline: 'middle' } });
         labelsToKeepThisFrame.add('axis-label-y');
 
-
-        const drawTicksAndLabels = (interval, alpha) => {
+        const drawTicksAndLabelsRectilinear = (interval, alpha) => {
             if (!interval || alpha < 0.01) return;
             const tickLabelColor = `rgba(${baseTickLabelColor.join(',')}, ${baseTickLabelAlpha * alpha})`;
             ctx.strokeStyle = tickLabelColor;
             ctx.lineWidth = tickLineWidth;
             const screenSpacing = interval * viewTransform.scale;
-            let sigFigs = 1;
-            if (screenSpacing > 80) sigFigs = 3;
-            else if (screenSpacing > 40) sigFigs = 2;
-            else if (screenSpacing > 20) sigFigs = 1;
-            else sigFigs = 0; 
-            
+            let sigFigsForLabel = 0;
+            if (screenSpacing > 80) sigFigsForLabel = 3;
+            else if (screenSpacing > 40) sigFigsForLabel = 2;
+            else if (screenSpacing > 20) sigFigsForLabel = 1;
+            else sigFigsForLabel = 0;
+            const decimalPlacesInInterval = interval > 0 ? -Math.floor(Math.log10(interval)) : 0;
+            if (decimalPlacesInInterval > 0) {
+                sigFigsForLabel = Math.max(sigFigsForLabel, decimalPlacesInInterval + 1);
+            }
             const topLeftData = screenToData({ x: 0, y: 0 });
             const bottomRightData = screenToData({ x: canvasWidth, y: canvasHeight });
             const getStableId = (prefix, num) => `${prefix}-${num.toExponential(15)}`;
@@ -3594,26 +3621,26 @@ function drawAxes(ctx) {
             const endTickX = Math.ceil(bottomRightData.x / interval) * interval;
             const startTickY = Math.floor(bottomRightData.y / interval) * interval;
             const endTickY = Math.ceil(topLeftData.y / interval) * interval;
-
             for (let x_data = startTickX; x_data <= endTickX; x_data += interval) {
                 if (Math.abs(x_data) < zeroThreshold) continue;
                 const screenX = dataToScreen({ x: x_data, y: 0 }).x;
                 ctx.beginPath(); ctx.moveTo(screenX, origin.y); ctx.lineTo(screenX, origin.y + tickSize); ctx.stroke();
-                updateHtmlLabel({ id: getStableId('tick-label-x', x_data), content: formatNumber(x_data, sigFigs), x: screenX, y: origin.y + tickSize + 8, color: tickLabelColor, fontSize: katexFontSize, options: { textAlign: 'center', textBaseline: 'top' } });
+                updateHtmlLabel({ id: getStableId('tick-label-x', x_data), content: formatNumber(x_data, sigFigsForLabel), x: screenX, y: origin.y + tickSize + 8, color: tickLabelColor, fontSize: katexFontSize, options: { textAlign: 'center', textBaseline: 'top' } });
+                labelsToKeepThisFrame.add(getStableId('tick-label-x', x_data));
             }
             for (let y_data = startTickY; y_data <= endTickY; y_data += interval) {
                 if (Math.abs(y_data) < zeroThreshold) continue;
                 const screenY = dataToScreen({ x: 0, y: y_data }).y;
-                let yLabelContent = formatNumber(y_data, sigFigs);
+                let yLabelContent = formatNumber(y_data, sigFigsForLabel);
                 if (coordsDisplayMode === 'complex' && yLabelContent !== "0") yLabelContent += 'i';
                 ctx.beginPath(); ctx.moveTo(origin.x, screenY); ctx.lineTo(origin.x - tickSize, screenY); ctx.stroke();
                 updateHtmlLabel({ id: getStableId('tick-label-y', y_data), content: yLabelContent, x: origin.x - tickSize - 5, y: screenY, color: tickLabelColor, fontSize: katexFontSize, options: { textAlign: 'right', textBaseline: 'middle' } });
+                labelsToKeepThisFrame.add(getStableId('tick-label-y', y_data));
             }
         };
-        drawTicksAndLabels(lastGridState.interval1, lastGridState.alpha1);
-        drawTicksAndLabels(lastGridState.interval2, lastGridState.alpha2);
+        drawTicksAndLabelsRectilinear(lastGridState.interval1, lastGridState.alpha1);
+        drawTicksAndLabelsRectilinear(lastGridState.interval2, lastGridState.alpha2);
     }
-
     ctx.restore();
 }
 
