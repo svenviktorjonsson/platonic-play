@@ -51,6 +51,28 @@ export function generateAngleSnapFractions(maxDenominator, maxResultingMultipleO
     return Array.from(fractionsSet).sort((a, b) => a - b);
 }
 
+export function solveForPoint(N1, N2, d1, alpha) {
+    const d_n = distance(N1, N2);
+    if (d_n < 1e-6 || Math.sin(alpha) < 1e-6) return [];
+    const solutions = [];
+    const A = 1,
+        B = -2 * d1 * Math.cos(alpha),
+        C = d1 * d1 - d_n * d_n;
+    const discriminant = B * B - 4 * A * C;
+    if (discriminant < 0) return [];
+
+    [(-B + Math.sqrt(discriminant)) / (2 * A), (-B - Math.sqrt(discriminant)) / (2 * A)].forEach(d2 => {
+        if (d2 <= 0) return;
+        const a = (d1 * d1 - d2 * d2 + d_n * d_n) / (2 * d_n);
+        const h = Math.sqrt(Math.max(0, d1 * d1 - a * a));
+        const x_mid = N1.x + a * (N2.x - N1.x) / d_n;
+        const y_mid = N1.y + a * (N2.y - N1.y) / d_n;
+        solutions.push({ x: x_mid + h * (N2.y - N1.y) / d_n, y: y_mid - h * (N2.x - N1.x) / d_n, dist: d1, angle: alpha });
+        solutions.push({ x: x_mid - h * (N2.y - N1.y) / d_n, y: y_mid + h * (N2.x - N1.x) / d_n, dist: d1, angle: alpha });
+    });
+    return solutions;
+}
+
 export function generateDistanceSnapFactors() {
     const fractionsSet = new Set();
     fractionsSet.add(0);
@@ -70,10 +92,7 @@ export function generateDistanceSnapFactors() {
     return Array.from(fractionsSet).sort((a, b) => a - b);
 }
 
-
 export function generateUniqueId() { return crypto.randomUUID(); }
-
-
 
 export function normalizeAngle(angleRad) {
     while (angleRad < 0) angleRad += 2 * Math.PI;

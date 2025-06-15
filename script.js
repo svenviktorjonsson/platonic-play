@@ -2,6 +2,7 @@ import {
     formatNumber,
     formatCoordinateValue,
     generateAngleSnapFractions,
+    solveForPoint,
     generateUniqueId,
     normalize,
     normalizeAngleToPi,
@@ -35,6 +36,7 @@ const DRAG_THRESHOLD = 3;
 const EDGE_CLICK_THRESHOLD = 7;
 const dpr = window.devicePixelRatio || 1;
 const FROZEN_REFERENCE_COLOR = 'rgba(240, 240, 130, 0.95)'
+const BACKGROUND_COLOR = 'rgba(0,0,0, 1)'
 
 const DEFAULT_CALIBRATION_VIEW_SCALE = 80.0;
 const DEFAULT_REFERENCE_DISTANCE = 1.0;
@@ -44,6 +46,31 @@ const DEFAULT_POLAR_ANGLE_DIFF = 30
 const UI_BUTTON_PADDING = 10;
 const UI_TOOLBAR_WIDTH = 56;
 const UI_SWATCH_SIZE = 30;
+
+const FEEDBACK_COLOR_SNAPPED = 'rgba(240, 240, 130, 0.95)';
+const FEEDBACK_COLOR_DEFAULT = 'rgba(230, 230, 230, 0.95)';
+const FEEDBACK_LABEL_FONT_SIZE = 12;
+const FEEDBACK_ARC_RADIUS_SCREEN = 30;
+const FEEDBACK_DISTANCE_LABEL_OFFSET_SCREEN = 18;
+const GEOMETRY_CALCULATION_EPSILON = 1e-6; // Small numerical tolerance for floating-point comparisons in geometry
+const VERTICAL_LINE_COS_THRESHOLD = 0.1; // Cosine value threshold to visually determine if a line is vertical for label placement
+const ANGLE_LABEL_RADIUS_SCREEN = 75; // Screen radius for positioning angle labels around a vertex
+const FEEDBACK_LINE_VISUAL_WIDTH = 1; // Line width for drawing visual feedback elements like arcs
+
+const SNAP_STICKINESS_RADIUS_SCREEN = 30;
+const LINE_TO_SNAP_RADIUS_SCREEN = 10;
+const POINT_ON_LINE_SNAP_RADIUS_SCREEN = 15;
+const DRAG_SNAP_GEOMETRIC_DISTANCE_FACTORS = [0.5, 1, 1.5, 2, 3, 4, 5];
+const DRAW_SNAP_CANDIDATE_COUNT_PER_SIDE = 2;
+const DRAW_SNAP_DISTANCE_FACTOR_STEP = 0.5;
+const DRAW_SNAP_DISTANCE_FACTOR_LIMIT = 50;
+const GHOST_SNAP_RADIUS_SCREEN = 30;
+
+const REF_TEXT_SCREEN_PIXEL_THRESHOLD = 1.5; // Minimum screen distance in pixels for reference text to appear
+const REF_TEXT_KATEX_FONT_SIZE = 11; // Font size for reference labels rendered with KaTeX
+const REF_TEXT_DISTANCE_LABEL_OFFSET_SCREEN = 18; // Screen offset for distance labels from the line midpoint
+const REF_TEXT_ANGLE_LABEL_OFFSET_SCREEN = 50; // Screen offset for angle labels from the vertex (35 + 15)
+
 
 let frozenReference_A_rad = null;
 let frozenReference_A_baseRad = null;
@@ -203,28 +230,6 @@ const SORTED_SNAP_ANGLES = [...new Set(NINETY_DEG_ANGLE_SNAP_FRACTIONS.flatMap(f
 
 let lastSnapResult = null;
 
-function solveForPoint(N1, N2, d1, alpha) {
-    const d_n = distance(N1, N2);
-    if (d_n < 1e-6 || Math.sin(alpha) < 1e-6) return [];
-    const solutions = [];
-    const A = 1,
-        B = -2 * d1 * Math.cos(alpha),
-        C = d1 * d1 - d_n * d_n;
-    const discriminant = B * B - 4 * A * C;
-    if (discriminant < 0) return [];
-
-    [(-B + Math.sqrt(discriminant)) / (2 * A), (-B - Math.sqrt(discriminant)) / (2 * A)].forEach(d2 => {
-        if (d2 <= 0) return;
-        const a = (d1 * d1 - d2 * d2 + d_n * d_n) / (2 * d_n);
-        const h = Math.sqrt(Math.max(0, d1 * d1 - a * a));
-        const x_mid = N1.x + a * (N2.x - N1.x) / d_n;
-        const y_mid = N1.y + a * (N2.y - N1.y) / d_n;
-        solutions.push({ x: x_mid + h * (N2.y - N1.y) / d_n, y: y_mid - h * (N2.x - N1.x) / d_n, dist: d1, angle: alpha });
-        solutions.push({ x: x_mid - h * (N2.y - N1.y) / d_n, y: y_mid + h * (N2.x - N1.x) / d_n, dist: d1, angle: alpha });
-    });
-    return solutions;
-}
-
 const activeHtmlLabels = new Map();
 let labelsToKeepThisFrame = new Set();
 
@@ -253,6 +258,53 @@ function handleCenterSelection(centerId, shiftKey, ctrlKey) {
     activeCenterId = selectedCenterIds.length > 0 ? selectedCenterIds[selectedCenterIds.length - 1] : null;
 }
 
+function getBestSnapPosition(mouseDataPos) {
+    const candidates = [];
+    const distanceSq = (p1, p2) => (p1.x - p2.x)**2 + (p1.y - p2.y)**2;
+    const snapRadiusDataSq = Math.pow(GHOST_SNAP_RADIUS_SCREEN / viewTransform.scale, 2);
+    
+    if (gridDisplayMode !== 'none') {
+        if (gridDisplayMode === 'polar') {
+            const dominantRadialInterval = (lastGridState.alpha2 > lastGridState.alpha1 && lastGridState.interval2) ? lastGridState.interval2 : lastGridState.interval1;
+            if (dominantRadialInterval > 0) {
+                const mouseAngleDeg = (Math.atan2(mouseDataPos.y, mouseDataPos.x) * 180 / Math.PI + 360) % 360;
+                const mouseRadius = Math.hypot(mouseDataPos.x, mouseDataPos.y);
+                const snappedRadius = Math.round(mouseRadius / dominantRadialInterval) * dominantRadialInterval;
+
+                lastAngularGridState.forEach(level => {
+                    if (level.alpha > 0.01 && level.angle > 0) {
+                        const angularInterval = level.angle;
+                        const snappedAngleDeg = Math.round(mouseAngleDeg / angularInterval) * angularInterval;
+                        const snappedAngleRad = snappedAngleDeg * Math.PI / 180;
+                        const gridPoint = { x: snappedRadius * Math.cos(snappedAngleRad), y: snappedRadius * Math.sin(snappedAngleRad) };
+                        candidates.push({ pos: gridPoint, distSq: distanceSq(mouseDataPos, gridPoint) });
+                    }
+                });
+            }
+        } else {
+            const gridInterval = (lastGridState.alpha2 > lastGridState.alpha1 && lastGridState.interval2) ? lastGridState.interval2 : lastGridState.interval1;
+            if (gridInterval > 0) {
+                const gridPoint = { x: Math.round(mouseDataPos.x / gridInterval) * gridInterval, y: Math.round(mouseDataPos.y / gridInterval) * gridInterval };
+                candidates.push({ pos: gridPoint, distSq: distanceSq(mouseDataPos, gridPoint) });
+            }
+        }
+    }
+
+    allPoints.forEach(p => { if (p.type === 'regular') candidates.push({ pos: p, distSq: distanceSq(mouseDataPos, p) }); });
+    allEdges.forEach(edge => {
+        const p1 = findPointById(edge.id1);
+        const p2 = findPointById(edge.id2);
+        if (p1 && p2 && p1.type === 'regular' && p2.type === 'regular') {
+            const midpoint = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+            candidates.push({ pos: midpoint, distSq: distanceSq(mouseDataPos, midpoint) });
+        }
+    });
+    if (candidates.length === 0) return null;
+    const bestCandidate = candidates.sort((a, b) => a.distSq - b.distSq)[0];
+    if (bestCandidate.distSq < snapRadiusDataSq) return bestCandidate.pos;
+    return null;
+}
+
 function getTransformSnap(center, mouseDataPos, startReferencePoint, transformType) {
     const allCandidates = [];
     const startVector = { x: startReferencePoint.x - center.x, y: startReferencePoint.y - center.y };
@@ -260,46 +312,47 @@ function getTransformSnap(center, mouseDataPos, startReferencePoint, transformTy
     const startAngle = Math.atan2(startVector.y, startVector.x);
 
     if (gridDisplayMode !== 'none') {
+        const mouseRelativeToCenter = { x: mouseDataPos.x - center.x, y: mouseDataPos.y - center.y };
+
         if (gridDisplayMode === 'polar') {
-            const radialInterval = (lastGridState.alpha2 > lastGridState.alpha1 && lastGridState.interval2) ? lastGridState.interval2 : lastGridState.interval1;
-            const angularInterval = (lastAngularGridState.alpha2 > lastAngularGridState.alpha1) ? lastAngularGridState.angle2 : lastAngularGridState.angle1;
-            if (radialInterval > 0 && angularInterval > 0) {
-                const mouseAngleDeg = (Math.atan2(mouseDataPos.y, mouseDataPos.x) * 180 / Math.PI + 360) % 360;
-                const mouseRadius = Math.hypot(mouseDataPos.x, mouseDataPos.y);
-                const snappedAngleDeg = Math.round(mouseAngleDeg / angularInterval) * angularInterval;
-                const snappedRadius = Math.round(mouseRadius / radialInterval) * radialInterval;
-                const snappedAngleRad = snappedAngleDeg * Math.PI / 180;
-                allCandidates.push({
-                    pos: { x: snappedRadius * Math.cos(snappedAngleRad), y: snappedRadius * Math.sin(snappedAngleRad) },
-                    type: 'grid', pureRotation: null, pureScale: null
+            const dominantRadialInterval = (lastGridState.alpha2 > lastGridState.alpha1 && lastGridState.interval2) ? lastGridState.interval2 : lastGridState.interval1;
+            if (dominantRadialInterval > 0) {
+                const mouseAngleDeg = (Math.atan2(mouseRelativeToCenter.y, mouseRelativeToCenter.x) * 180 / Math.PI + 360) % 360;
+                const mouseRadius = Math.hypot(mouseRelativeToCenter.x, mouseRelativeToCenter.y);
+                const snappedRadius = Math.round(mouseRadius / dominantRadialInterval) * dominantRadialInterval;
+                
+                lastAngularGridState.forEach(level => {
+                    if (level.alpha > 0.01 && level.angle > 0) {
+                        const angularInterval = level.angle;
+                        const snappedAngleDeg = Math.round(mouseAngleDeg / angularInterval) * angularInterval;
+                        const snappedAngleRad = snappedAngleDeg * Math.PI / 180;
+                        allCandidates.push({
+                            pos: { x: center.x + snappedRadius * Math.cos(snappedAngleRad), y: center.y + snappedRadius * Math.sin(snappedAngleRad) },
+                            type: 'grid', pureRotation: null, pureScale: null
+                        });
+                    }
                 });
             }
         } else {
             const gridInterval = (lastGridState.alpha2 > lastGridState.alpha1 && lastGridState.interval2) ? lastGridState.interval2 : lastGridState.interval1;
             if (gridInterval > 0) {
-                const baseGridX = Math.round(mouseDataPos.x / gridInterval) * gridInterval;
-                const baseGridY = Math.round(mouseDataPos.y / gridInterval) * gridInterval;
-                for (let dx = -2; dx <= 2; dx++) {
-                    for (let dy = -2; dy <= 2; dy++) {
-                        allCandidates.push({
-                            pos: { x: baseGridX + dx * gridInterval, y: baseGridY + dy * gridInterval },
-                            type: 'grid', pureRotation: null, pureScale: null
-                        });
-                    }
-                }
+                const snappedRelativeX = Math.round(mouseRelativeToCenter.x / gridInterval) * gridInterval;
+                const snappedRelativeY = Math.round(mouseRelativeToCenter.y / gridInterval) * gridInterval;
+                allCandidates.push({
+                    pos: { x: center.x + snappedRelativeX, y: center.y + snappedRelativeY },
+                    type: 'grid', pureRotation: null, pureScale: null
+                });
             }
         }
     }
 
-    if (startDist > 1e-9 && gridDisplayMode !== 'polar') {
+    if (startDist > GEOMETRY_CALCULATION_EPSILON) {
         const scaleSnapFactors = SNAP_FACTORS.filter(f => f > 0);
         const angleSnapFractions = NINETY_DEG_ANGLE_SNAP_FRACTIONS;
         const useAngleSnaps = transformType !== 'center_scale_only';
         const useScaleSnaps = transformType !== 'center_rotate_only';
-
         const rotationSnaps = useAngleSnaps ? angleSnapFractions.flatMap(f => (f === 0 ? [0] : [f * Math.PI / 2, -f * Math.PI / 2])) : [0];
         const scaleSnaps = useScaleSnaps ? scaleSnapFactors : [1];
-
         for (const rot of rotationSnaps) {
             for (const factor of scaleSnaps) {
                 const dist = startDist * factor;
@@ -319,30 +372,290 @@ function getTransformSnap(center, mouseDataPos, startReferencePoint, transformTy
     });
 
     const finalVec = { x: bestCandidate.pos.x - center.x, y: bestCandidate.pos.y - center.y };
-    const finalScale = (startDist > 1e-9) ? Math.hypot(finalVec.x, finalVec.y) / startDist : 1;
-    
+    const finalScale = (startDist > GEOMETRY_CALCULATION_EPSILON) ? Math.hypot(finalVec.x, finalVec.y) / startDist : 1;
     let finalRotation;
-
     if (bestCandidate.pureRotation !== null) {
         const rawMouseRotation = normalizeAngleToPi(Math.atan2(mouseDataPos.y - center.y, mouseDataPos.x - center.x) - startAngle);
         const pureRot = bestCandidate.pureRotation;
-        
         const rotationsToTest = [pureRot, pureRot + 2 * Math.PI, pureRot - 2 * Math.PI];
-
         finalRotation = rotationsToTest.reduce((best, current) => {
             return Math.abs(current - rawMouseRotation) < Math.abs(best - rawMouseRotation) ? current : best;
         });
     } else {
         finalRotation = normalizeAngleToPi(Math.atan2(finalVec.y, finalVec.x) - startAngle);
     }
-
     return {
-        snapped: true,
-        pos: bestCandidate.pos,
-        rotation: finalRotation,
+        snapped: true, pos: bestCandidate.pos, rotation: finalRotation,
         scale: bestCandidate.pureScale ?? finalScale,
         pureScaleForDisplay: bestCandidate.pureScale
     };
+}
+
+function getSnappedPosition(startPoint, mouseScreenPos, shiftPressed) {
+    const mouseDataPos = screenToData(mouseScreenPos);
+    const drawingContext = getDrawingContext(startPoint.id);
+    const snapStickinessRadius = SNAP_STICKINESS_RADIUS_SCREEN / viewTransform.scale;
+    const snapRadiusData = POINT_SELECT_RADIUS / viewTransform.scale;
+    for (const p of allPoints) {
+        if (p.id !== startPoint.id && p.type === "regular" && distance(mouseDataPos, p) < snapRadiusData) {
+            const finalAngleRad = Math.atan2(p.y - startPoint.y, p.x - startPoint.x) || 0;
+            return { x: p.x, y: p.y, angle: finalAngleRad * (180 / Math.PI), distance: distance(startPoint, p), snapped: true, gridSnapped: false, lengthSnapFactor: null, angleSnapFactor: null, angleTurn: normalizeAngleToPi(finalAngleRad, 0), gridToGridSquaredSum: null, gridInterval: null };
+        }
+    }
+    const segmentSnapThresholdData = EDGE_CLICK_THRESHOLD / viewTransform.scale;
+    for (const edge of allEdges) {
+        const p1 = findPointById(edge.id1);
+        const p2 = findPointById(edge.id2);
+        if (p1 && p2 && p1.type === "regular" && p2.type === "regular" && p1.id !== startPoint.id && p2.id !== startPoint.id) {
+            const closest = getClosestPointOnLineSegment(mouseDataPos, p1, p2);
+            if (closest.distance < segmentSnapThresholdData && closest.onSegmentStrict) {
+                const finalAngleRad = Math.atan2(closest.y - startPoint.y, closest.x - startPoint.x) || 0;
+                return { x: closest.x, y: closest.y, angle: finalAngleRad * (180 / Math.PI), distance: distance(startPoint, closest), snapped: true, gridSnapped: false, lengthSnapFactor: null, angleSnapFactor: null, angleTurn: normalizeAngleToPi(finalAngleRad, 0), gridToGridSquaredSum: null, gridInterval: null };
+            }
+        }
+    }
+    if (isDrawingMode && shiftPressed) {
+        const allCandidates = [];
+        if (gridDisplayMode !== 'none' && lastGridState.interval1) {
+            if (gridDisplayMode === 'polar') {
+                const dominantRadialInterval = (lastGridState.alpha2 > lastGridState.alpha1 && lastGridState.interval2) ? lastGridState.interval2 : lastGridState.interval1;
+                if (dominantRadialInterval > 0) {
+                    const mouseAngleDeg = (Math.atan2(mouseDataPos.y, mouseDataPos.x) * 180 / Math.PI + 360) % 360;
+                    const mouseRadius = Math.hypot(mouseDataPos.x, mouseDataPos.y);
+                    const snappedRadius = Math.round(mouseRadius / dominantRadialInterval) * dominantRadialInterval;
+                    lastAngularGridState.forEach(level => {
+                        if (level.alpha > 0.01 && level.angle > 0) {
+                            const angularInterval = level.angle;
+                            const snappedAngleDeg = Math.round(mouseAngleDeg / angularInterval) * angularInterval;
+                            const snappedAngleRad = snappedAngleDeg * Math.PI / 180;
+                            allCandidates.push({
+                                x: snappedRadius * Math.cos(snappedAngleRad),
+                                y: snappedRadius * Math.sin(snappedAngleRad),
+                                isGridPoint: true
+                            });
+                        }
+                    });
+                }
+            } else {
+                const dominantGridInterval = (lastGridState.alpha2 > lastGridState.alpha1 && lastGridState.interval2) ? lastGridState.interval2 : lastGridState.interval1;
+                const baseGridX = Math.round(mouseDataPos.x / dominantGridInterval) * dominantGridInterval;
+                const baseGridY = Math.round(mouseDataPos.y / dominantGridInterval) * dominantGridInterval;
+                allCandidates.push({ x: baseGridX, y: baseGridY, isGridPoint: true });
+            }
+        }
+        const rawAngle = normalizeAngleToPi(Math.atan2(mouseDataPos.y - startPoint.y, mouseDataPos.x - startPoint.x));
+        const rawDist = distance(startPoint, mouseDataPos);
+        const referenceAngleForSnapping = drawingContext.currentSegmentReferenceA_for_display;
+        const baseUnitDistance = drawingContext.currentSegmentReferenceD;
+        const symmetricalAngleFractions = new Set([0, ...NINETY_DEG_ANGLE_SNAP_FRACTIONS.flatMap(f => [f, -f])]);
+        const sortedSymmetricalFractions = Array.from(symmetricalAngleFractions).sort((a, b) => a - b);
+        const allSnapAngles = sortedSymmetricalFractions.map(f => ({ factor: f, angle: normalizeAngleToPi(drawingContext.offsetAngleRad + (f * referenceAngleForSnapping)), turn: normalizeAngleToPi(f * referenceAngleForSnapping) }));
+        const allSnapDistances = [];
+        for (let i = 1; i <= DRAW_SNAP_DISTANCE_FACTOR_LIMIT / DRAW_SNAP_DISTANCE_FACTOR_STEP; i++) {
+            const factor = i * DRAW_SNAP_DISTANCE_FACTOR_STEP;
+            allSnapDistances.push({ factor: factor, dist: factor * baseUnitDistance });
+        }
+        if (allSnapAngles.length > 0 && allSnapDistances.length > 0) {
+            const closestAngleIndex = allSnapAngles.reduce((bestI, current, i) => Math.abs(normalizeAngleToPi(current.angle - rawAngle)) < Math.abs(normalizeAngleToPi(allSnapAngles[bestI].angle - rawAngle)) ? i : bestI, 0);
+            const closestDistIndex = allSnapDistances.reduce((bestI, current, i) => Math.abs(current.dist - rawDist) < Math.abs(allSnapDistances[bestI].dist - rawDist) ? i : bestI, 0);
+            const candidateAngles = [];
+            for (let i = -DRAW_SNAP_CANDIDATE_COUNT_PER_SIDE; i <= DRAW_SNAP_CANDIDATE_COUNT_PER_SIDE; i++) {
+                const index = (closestAngleIndex + i + allSnapAngles.length) % allSnapAngles.length;
+                candidateAngles.push(allSnapAngles[index]);
+            }
+            const candidateDistances = [];
+            for (let i = -DRAW_SNAP_CANDIDATE_COUNT_PER_SIDE; i <= DRAW_SNAP_CANDIDATE_COUNT_PER_SIDE; i++) {
+                const index = closestDistIndex + i;
+                if (index >= 0 && index < allSnapDistances.length) { candidateDistances.push(allSnapDistances[index]); }
+            }
+            candidateAngles.forEach(angleData => {
+                candidateDistances.forEach(distData => {
+                    allCandidates.push({ x: startPoint.x + distData.dist * Math.cos(angleData.angle), y: startPoint.y + distData.dist * Math.sin(angleData.angle), isGridPoint: false, lengthSnapFactor: distData.factor, angleSnapFactor: angleData.factor, angleTurn: angleData.turn });
+                });
+            });
+        }
+        if (allCandidates.length > 0) {
+            const bestSnapPoint = allCandidates.reduce((best, current) => distance(mouseDataPos, current) < distance(mouseDataPos, best) ? current : best);
+            if (distance(mouseDataPos, bestSnapPoint) < snapStickinessRadius) {
+                const finalAngle = Math.atan2(bestSnapPoint.y - startPoint.y, bestSnapPoint.x - startPoint.x);
+                let gridToGridSquaredSum = null;
+                let finalGridInterval = null;
+                if (bestSnapPoint.isGridPoint && gridDisplayMode !== 'polar') {
+                    const gridInterval = (lastGridState.alpha2 > lastGridState.alpha1 && lastGridState.interval2) ? lastGridState.interval2 : lastGridState.interval1;
+                    const epsilon = gridInterval * GEOMETRY_CALCULATION_EPSILON;
+                    const startIsOnGridX = Math.abs(startPoint.x / gridInterval - Math.round(startPoint.x / gridInterval)) < epsilon;
+                    const startIsOnGridY = Math.abs(startPoint.y / gridInterval - Math.round(startPoint.y / gridInterval)) < epsilon;
+                    if (startIsOnGridX && startIsOnGridY) {
+                        const deltaX = bestSnapPoint.x - startPoint.x;
+                        const deltaY = bestSnapPoint.y - startPoint.y;
+                        const dx_grid = Math.round(deltaX / gridInterval);
+                        const dy_grid = Math.round(deltaY / gridInterval);
+                        gridToGridSquaredSum = dx_grid * dx_grid + dy_grid * dy_grid;
+                        finalGridInterval = gridInterval;
+                    }
+                }
+                return {
+                    x: bestSnapPoint.x, y: bestSnapPoint.y,
+                    angle: finalAngle * (180 / Math.PI),
+                    distance: distance(startPoint, bestSnapPoint),
+                    snapped: true, gridSnapped: !!bestSnapPoint.isGridPoint,
+                    lengthSnapFactor: bestSnapPoint.lengthSnapFactor || null,
+                    angleSnapFactor: bestSnapPoint.angleSnapFactor || null,
+                    angleTurn: bestSnapPoint.angleTurn ?? normalizeAngleToPi(finalAngle, 0),
+                    gridToGridSquaredSum: gridToGridSquaredSum, gridInterval: finalGridInterval,
+                };
+            }
+        }
+    }
+    const finalAngleRad = Math.atan2(mouseDataPos.y - startPoint.y, mouseDataPos.x - startPoint.x) || 0;
+    return {
+        x: mouseDataPos.x, y: mouseDataPos.y,
+        angle: finalAngleRad * (180 / Math.PI),
+        distance: distance(startPoint, mouseDataPos),
+        snapped: false, gridSnapped: false, lengthSnapFactor: null, angleSnapFactor: null,
+        angleTurn: normalizeAngleToPi(finalAngleRad, 0),
+        gridToGridSquaredSum: null, gridInterval: null
+    };
+}
+
+function getDragSnapPosition(dragOrigin, mouseDataPos) {
+    const neighbors = findNeighbors(dragOrigin.id).map(id => allPoints.find(p => p.id === id)).filter(Boolean);
+    const distanceSq = (p1, p2) => (p1.x - p2.x) ** 2 + (p1.y - p2.y) ** 2;
+    const lineToSnapRadius = LINE_TO_SNAP_RADIUS_SCREEN / viewTransform.scale;
+    const pointOnLineSnapRadius = POINT_ON_LINE_SNAP_RADIUS_SCREEN / viewTransform.scale;
+    let bestBisector = null;
+    let minDistToBisector = Infinity;
+    let bestBisectorNeighbors = null;
+    for (let i = 0; i < neighbors.length; i++) {
+        for (let j = i + 1; j < neighbors.length; j++) {
+            const p1 = neighbors[i];
+            const p2 = neighbors[j];
+            const midPoint = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+            const perpVec = { x: -(p2.y - p1.y), y: p2.x - p1.x };
+            if (Math.hypot(perpVec.x, perpVec.y) < GEOMETRY_CALCULATION_EPSILON) continue;
+            const bisectorP1 = { x: midPoint.x - perpVec.x * 100000, y: midPoint.y - perpVec.y * 100000 };
+            const bisectorP2 = { x: midPoint.x + perpVec.x * 100000, y: midPoint.y + perpVec.y * 100000 };
+            const closestPointOnLine = getClosestPointOnLineSegment(mouseDataPos, bisectorP1, bisectorP2);
+            if (closestPointOnLine.distance < minDistToBisector) {
+                minDistToBisector = closestPointOnLine.distance;
+                bestBisector = { p1: bisectorP1, p2: bisectorP2, projection: closestPointOnLine };
+                bestBisectorNeighbors = [p1, p2];
+            }
+        }
+    }
+    if (bestBisector && minDistToBisector < lineToSnapRadius) {
+        const secondOrderCandidates = [];
+        const [p1, p2] = bestBisectorNeighbors;
+        const midPoint = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+        const d_half = distance(p1, midPoint);
+        const perpVec = { x: -(p2.y - p1.y), y: p2.x - p1.x };
+        const perpVecMag = Math.hypot(perpVec.x, perpVec.y);
+        if (d_half > GEOMETRY_CALCULATION_EPSILON && perpVecMag > GEOMETRY_CALCULATION_EPSILON) {
+            const normPerpVec = { x: perpVec.x / perpVecMag, y: perpVec.y / perpVecMag };
+            const geometricSnapAnglesRad = NINETY_DEG_ANGLE_SNAP_FRACTIONS
+                .map(f => f * (Math.PI / 2))
+                .filter(angle => angle > GEOMETRY_CALCULATION_EPSILON && angle < Math.PI);
+            geometricSnapAnglesRad.forEach(angleRad => {
+                const tanHalfTheta = Math.tan(angleRad / 2);
+                if (Math.abs(tanHalfTheta) > GEOMETRY_CALCULATION_EPSILON) {
+                    const h = d_half / tanHalfTheta;
+                    secondOrderCandidates.push({ x: midPoint.x + h * normPerpVec.x, y: midPoint.y + h * normPerpVec.y });
+                }
+            });
+        }
+        if (gridDisplayMode !== 'none') {
+            const topLeftData = screenToData({ x: 0, y: 0 });
+            const bottomRightData = screenToData({ x: canvas.width / dpr, y: canvas.height / dpr });
+            const maxViewDim = Math.max(Math.abs(bottomRightData.x - topLeftData.x), Math.abs(topLeftData.y - bottomRightData.y));
+            if (gridDisplayMode === 'polar') {
+                const dominantRadialInterval = (lastGridState.alpha2 > lastGridState.alpha1 && lastGridState.interval2) ? lastGridState.interval2 : lastGridState.interval1;
+                for(let r = dominantRadialInterval; r < maxViewDim; r += dominantRadialInterval) {
+                    secondOrderCandidates.push(...getLineCircleIntersection(bestBisector, { center: {x:0, y:0}, radius: r }));
+                }
+                lastAngularGridState.forEach(level => {
+                    if (level.alpha > 0.01 && level.angle > 0) {
+                        for (let angle = 0; angle < 360; angle += level.angle) {
+                            const rad = angle * Math.PI / 180;
+                            const rayLine = { p1: {x:0, y:0}, p2: {x: Math.cos(rad), y: Math.sin(rad)} };
+                            const intersection = getLineLineIntersection(bestBisector, rayLine);
+                            if(intersection) secondOrderCandidates.push(intersection);
+                        }
+                    }
+                });
+            } else {
+                const dominantGridInterval = (lastGridState.alpha2 > lastGridState.alpha1 && lastGridState.interval2) ? lastGridState.interval2 : lastGridState.interval1;
+                const startX = Math.floor(topLeftData.x / dominantGridInterval) * dominantGridInterval;
+                const endX = Math.ceil(bottomRightData.x / dominantGridInterval) * dominantGridInterval;
+                const startY = Math.floor(bottomRightData.y / dominantGridInterval) * dominantGridInterval;
+                const endY = Math.ceil(topLeftData.y / dominantGridInterval) * dominantGridInterval;
+                for (let x = startX; x <= endX; x += dominantGridInterval) {
+                    const intersection = getLineLineIntersection(bestBisector, { p1: { x: x, y: -100000 }, p2: { x: x, y: 100000 } });
+                    if (intersection) secondOrderCandidates.push(intersection);
+                }
+                for (let y = startY; y <= endY; y += dominantGridInterval) {
+                    const intersection = getLineLineIntersection(bestBisector, { p1: { x: -100000, y: y }, p2: { x: 100000, y: y } });
+                    if (intersection) secondOrderCandidates.push(intersection);
+                }
+            }
+        }
+        if (secondOrderCandidates.length > 0) {
+            const projectedPos = { x: bestBisector.projection.x, y: bestBisector.projection.y };
+            const bestOnLineCandidate = secondOrderCandidates.reduce((best, current) => distanceSq(projectedPos, current) < distanceSq(projectedPos, best) ? current : best);
+            if (distance(projectedPos, bestOnLineCandidate) < pointOnLineSnapRadius) {
+                return { point: bestOnLineCandidate, snapped: true, constraints: null };
+            }
+        }
+        return { point: { x: bestBisector.projection.x, y: bestBisector.projection.y }, snapped: true, constraints: null };
+    }
+    let allCandidates = [];
+    if (gridDisplayMode !== 'none') {
+        if(gridDisplayMode === 'polar') {
+            const dominantRadialInterval = (lastGridState.alpha2 > lastGridState.alpha1 && lastGridState.interval2) ? lastGridState.interval2 : lastGridState.interval1;
+            if (dominantRadialInterval > 0) {
+                const mouseAngleDeg = (Math.atan2(mouseDataPos.y, mouseDataPos.x) * 180/Math.PI + 360) % 360;
+                const mouseRadius = Math.hypot(mouseDataPos.x, mouseDataPos.y);
+                const snappedRadius = Math.round(mouseRadius / dominantRadialInterval) * dominantRadialInterval;
+                lastAngularGridState.forEach(level => {
+                    if (level.alpha > 0.01 && level.angle > 0) {
+                        const angularInterval = level.angle;
+                        const snappedAngleDeg = Math.round(mouseAngleDeg / angularInterval) * angularInterval;
+                        const snappedAngleRad = snappedAngleDeg * Math.PI / 180;
+                        allCandidates.push({x: snappedRadius * Math.cos(snappedAngleRad), y: snappedRadius * Math.sin(snappedAngleRad)});
+                    }
+                });
+            }
+        } else {
+            const dominantGridInterval = (lastGridState.alpha2 > lastGridState.alpha1 && lastGridState.interval2) ? lastGridState.interval2 : lastGridState.interval1;
+            const baseGridX = Math.round(mouseDataPos.x / dominantGridInterval) * dominantGridInterval;
+            const baseGridY = Math.round(mouseDataPos.y / dominantGridInterval) * dominantGridInterval;
+            allCandidates.push({ x: baseGridX, y: baseGridY});
+        }
+    }
+    for (const p of allPoints) {
+        if (p.id !== dragOrigin.id && p.type === 'regular') {
+            allCandidates.push({ x: p.x, y: p.y });
+        }
+    }
+    if (gridDisplayMode !== 'polar') {
+        const majorSnapAnglesRad = NINETY_DEG_ANGLE_SNAP_FRACTIONS.map(f => f * (Math.PI / 2)).filter(angle => angle > GEOMETRY_CALCULATION_EPSILON && angle < Math.PI);
+        const majorSortedSnapDistances = DRAG_SNAP_GEOMETRIC_DISTANCE_FACTORS.map(f => f * DEFAULT_REFERENCE_DISTANCE);
+        for (let i = 0; i < neighbors.length; i++) {
+            for (let j = i + 1; j < neighbors.length; j++) {
+                for (const d1 of majorSortedSnapDistances) {
+                    for (const alpha of majorSnapAnglesRad) {
+                        allCandidates.push(...solveForPoint(neighbors[i], neighbors[j], d1, alpha));
+                    }
+                }
+            }
+        }
+    }
+    if (allCandidates.length === 0) return { point: mouseDataPos, snapped: false };
+    const bestCandidate = allCandidates.reduce((best, current) => distanceSq(mouseDataPos, current) < distanceSq(mouseDataPos, best) ? current : best);
+    const snapStickinessRadius = SNAP_STICKINESS_RADIUS_SCREEN / viewTransform.scale;
+    if (distance(mouseDataPos, bestCandidate) < snapStickinessRadius) {
+        return { point: bestCandidate, snapped: true, constraints: { dist: bestCandidate.dist || null, angle: bestCandidate.angle || null } };
+    }
+    return { point: mouseDataPos, snapped: false };
 }
 
 function getLineCircleIntersection(line, circle) {
@@ -382,203 +695,12 @@ function getLineLineIntersection(line1, line2) {
     return null;
 }
 
-function getSnappedPosition(startPoint, mouseScreenPos, shiftPressed) {
-    const mouseDataPos = screenToData(mouseScreenPos);
-    const drawingContext = getDrawingContext(startPoint.id);
-
-    // 1. Snap to existing points (highest priority, not grid-related)
-    const snapRadiusData = POINT_SELECT_RADIUS / viewTransform.scale;
-    for (const p of allPoints) {
-        if (p.id !== startPoint.id && p.type === "regular" && distance(mouseDataPos, p) < snapRadiusData) {
-            const finalAngleRad = Math.atan2(p.y - startPoint.y, p.x - startPoint.x) || 0;
-            return { x: p.x, y: p.y, angle: finalAngleRad * (180 / Math.PI), distance: distance(startPoint, p), snapped: true, gridSnapped: false, lengthSnapFactor: null, angleSnapFactor: null, angleTurn: normalizeAngleToPi(finalAngleRad, 0), gridToGridSquaredSum: null, gridInterval: null };
-        }
-    }
-
-    // 2. Snap to existing edges
-    const segmentSnapThresholdData = EDGE_CLICK_THRESHOLD / viewTransform.scale;
-    for (const edge of allEdges) {
-        const p1 = findPointById(edge.id1);
-        const p2 = findPointById(edge.id2);
-        if (p1 && p2 && p1.type === "regular" && p2.type === "regular" && p1.id !== startPoint.id && p2.id !== startPoint.id) {
-            const closest = getClosestPointOnLineSegment(mouseDataPos, p1, p2);
-            if (closest.distance < segmentSnapThresholdData && closest.onSegmentStrict) {
-                const finalAngleRad = Math.atan2(closest.y - startPoint.y, closest.x - startPoint.x) || 0;
-                return { x: closest.x, y: closest.y, angle: finalAngleRad * (180 / Math.PI), distance: distance(startPoint, closest), snapped: true, gridSnapped: false, lengthSnapFactor: null, angleSnapFactor: null, angleTurn: normalizeAngleToPi(finalAngleRad, 0), gridToGridSquaredSum: null, gridInterval: null };
-            }
-        }
-    }
-
-    // 3. Handle Shift-Snapping
-    if (isDrawingMode && shiftPressed) {
-        const allCandidates = [];
-
-        // Add candidates for the active grid, calculated from the absolute origin
-        if (gridDisplayMode !== 'none' && lastGridState.interval1) {
-            const dominantGridInterval = (lastGridState.alpha2 > lastGridState.alpha1 && lastGridState.interval2) ? lastGridState.interval2 : lastGridState.interval1;
-            if (gridDisplayMode === 'polar') {
-                const dominantAngularInterval = (lastAngularGridState.alpha2 > lastAngularGridState.alpha1) ? lastAngularGridState.angle2 : lastAngularGridState.angle1;
-                if (dominantGridInterval > 0 && dominantAngularInterval > 0) {
-                    const mouseAngleDeg = (Math.atan2(mouseDataPos.y, mouseDataPos.x) * 180 / Math.PI + 360) % 360;
-                    const mouseRadius = Math.hypot(mouseDataPos.x, mouseDataPos.y);
-                    const snappedAngleDeg = Math.round(mouseAngleDeg / dominantAngularInterval) * dominantAngularInterval;
-                    const snappedRadius = Math.round(mouseRadius / dominantGridInterval) * dominantGridInterval;
-                    const snappedAngleRad = snappedAngleDeg * Math.PI / 180;
-                    allCandidates.push({
-                        x: snappedRadius * Math.cos(snappedAngleRad),
-                        y: snappedRadius * Math.sin(snappedAngleRad),
-                        isGridPoint: true
-                    });
-                }
-            } else { 
-                const baseGridX = Math.round(mouseDataPos.x / dominantGridInterval) * dominantGridInterval;
-                const baseGridY = Math.round(mouseDataPos.y / dominantGridInterval) * dominantGridInterval;
-                allCandidates.push({ x: baseGridX, y: baseGridY, isGridPoint: true });
-            }
-        }
-
-        // Always add candidates for relative angles and distances
-        const NUM_CANDIDATES_EACH_SIDE = 2;
-        const rawAngle = normalizeAngleToPi(Math.atan2(mouseDataPos.y - startPoint.y, mouseDataPos.x - startPoint.x));
-        const rawDist = distance(startPoint, mouseDataPos);
-        const referenceAngleForSnapping = drawingContext.currentSegmentReferenceA_for_display;
-        const baseUnitDistance = drawingContext.currentSegmentReferenceD;
-        const symmetricalAngleFractions = new Set([0, ...NINETY_DEG_ANGLE_SNAP_FRACTIONS.flatMap(f => [f, -f])]);
-        const sortedSymmetricalFractions = Array.from(symmetricalAngleFractions).sort((a, b) => a - b);
-        const allSnapAngles = sortedSymmetricalFractions.map(f => ({ factor: f, angle: normalizeAngleToPi(drawingContext.offsetAngleRad + (f * referenceAngleForSnapping)), turn: normalizeAngleToPi(f * referenceAngleForSnapping) }));
-        const allSnapDistances = [];
-        for (let i = 1; i <= 100; i++) {
-            const factor = i * 0.5;
-            allSnapDistances.push({ factor: factor, dist: factor * baseUnitDistance });
-        }
-        if (allSnapAngles.length > 0 && allSnapDistances.length > 0) {
-            const closestAngleIndex = allSnapAngles.reduce((bestI, current, i) => Math.abs(normalizeAngleToPi(current.angle - rawAngle)) < Math.abs(normalizeAngleToPi(allSnapAngles[bestI].angle - rawAngle)) ? i : bestI, 0);
-            const closestDistIndex = allSnapDistances.reduce((bestI, current, i) => Math.abs(current.dist - rawDist) < Math.abs(allSnapDistances[bestI].dist - rawDist) ? i : bestI, 0);
-            const candidateAngles = [];
-            for (let i = -NUM_CANDIDATES_EACH_SIDE; i <= NUM_CANDIDATES_EACH_SIDE; i++) {
-                const index = (closestAngleIndex + i + allSnapAngles.length) % allSnapAngles.length;
-                candidateAngles.push(allSnapAngles[index]);
-            }
-            const candidateDistances = [];
-            for (let i = -NUM_CANDIDATES_EACH_SIDE; i <= NUM_CANDIDATES_EACH_SIDE; i++) {
-                const index = closestDistIndex + i;
-                if (index >= 0 && index < allSnapDistances.length) { candidateDistances.push(allSnapDistances[index]); }
-            }
-            candidateAngles.forEach(angleData => {
-                candidateDistances.forEach(distData => {
-                    allCandidates.push({ x: startPoint.x + distData.dist * Math.cos(angleData.angle), y: startPoint.y + distData.dist * Math.sin(angleData.angle), isGridPoint: false, lengthSnapFactor: distData.factor, angleSnapFactor: angleData.factor, angleTurn: angleData.turn });
-                });
-            });
-        }
-        
-        // Find the single best candidate from the combined list
-        if (allCandidates.length > 0) {
-            const bestSnapPoint = allCandidates.reduce((best, current) => distance(mouseDataPos, current) < distance(mouseDataPos, best) ? current : best);
-            
-            const snapStickinessRadius = 30 / viewTransform.scale;
-            if (distance(mouseDataPos, bestSnapPoint) < snapStickinessRadius) {
-                const finalAngle = Math.atan2(bestSnapPoint.y - startPoint.y, bestSnapPoint.x - startPoint.x);
-                let gridToGridSquaredSum = null;
-                let finalGridInterval = null;
-                if (bestSnapPoint.isGridPoint && gridDisplayMode !== 'polar') {
-                    const gridInterval = (lastGridState.alpha2 > lastGridState.alpha1 && lastGridState.interval2) ? lastGridState.interval2 : lastGridState.interval1;
-                    const epsilon = gridInterval * 1e-6;
-                    const startIsOnGridX = Math.abs(startPoint.x / gridInterval - Math.round(startPoint.x / gridInterval)) < epsilon;
-                    const startIsOnGridY = Math.abs(startPoint.y / gridInterval - Math.round(startPoint.y / gridInterval)) < epsilon;
-                    if (startIsOnGridX && startIsOnGridY) {
-                        const deltaX = bestSnapPoint.x - startPoint.x;
-                        const deltaY = bestSnapPoint.y - startPoint.y;
-                        const dx_grid = Math.round(deltaX / gridInterval);
-                        const dy_grid = Math.round(deltaY / gridInterval);
-                        gridToGridSquaredSum = dx_grid * dx_grid + dy_grid * dy_grid;
-                        finalGridInterval = gridInterval;
-                    }
-                }
-                return {
-                    x: bestSnapPoint.x, y: bestSnapPoint.y,
-                    angle: finalAngle * (180 / Math.PI),
-                    distance: distance(startPoint, bestSnapPoint),
-                    snapped: true,
-                    gridSnapped: !!bestSnapPoint.isGridPoint,
-                    lengthSnapFactor: bestSnapPoint.lengthSnapFactor || null,
-                    angleSnapFactor: bestSnapPoint.angleSnapFactor || null,
-                    angleTurn: bestSnapPoint.angleTurn ?? normalizeAngleToPi(finalAngle, 0),
-                    gridToGridSquaredSum: gridToGridSquaredSum,
-                    gridInterval: finalGridInterval,
-                };
-            }
-        }
-    }
-
-    // 4. Fallback to no snapping
-    const finalAngleRad = Math.atan2(mouseDataPos.y - startPoint.y, mouseDataPos.x - startPoint.x) || 0;
-    return {
-        x: mouseDataPos.x, y: mouseDataPos.y,
-        angle: finalAngleRad * (180 / Math.PI),
-        distance: distance(startPoint, mouseDataPos),
-        snapped: false, gridSnapped: false, lengthSnapFactor: null, angleSnapFactor: null,
-        angleTurn: normalizeAngleToPi(finalAngleRad, 0),
-        gridToGridSquaredSum: null, gridInterval: null
-    };
-}
-
-function getDynamicAngularIntervals(viewTransform, canvasWidth, canvasHeight, dominantInterval) {
-    const ANGULAR_GRID_LEVELS = [30, 15, 5, 1, 0.1, 0.01, 0.001, 0.0001];
-    const targetScreenSpacing = 80;
-
-    const originScreen = dataToScreen({ x: 0, y: 0 });
-
-    let targetAngleDeg;
-
-    const screenCenter = { x: canvasWidth / 2, y: canvasHeight / 2 };
-    const radiusToCenterScreen = distance(originScreen, screenCenter);
-    
-    if (radiusToCenterScreen < 1) {
-        targetAngleDeg = 90;
-    } else {
-        const targetAngleRad = targetScreenSpacing / radiusToCenterScreen;
-        targetAngleDeg = targetAngleRad * (180 / Math.PI);
-    }
-    
-    if (isNaN(targetAngleDeg)) {
-        return { angle1: 30, angle2: 15, alpha1: 1, alpha2: 0 };
-    }
-    
-    let upperLevel = ANGULAR_GRID_LEVELS[0];
-    let lowerLevel = ANGULAR_GRID_LEVELS[1];
-    for (let i = 0; i < ANGULAR_GRID_LEVELS.length - 1; i++) {
-        if (targetAngleDeg <= ANGULAR_GRID_LEVELS[i] && targetAngleDeg > ANGULAR_GRID_LEVELS[i + 1]) {
-            upperLevel = ANGULAR_GRID_LEVELS[i];
-            lowerLevel = ANGULAR_GRID_LEVELS[i + 1];
-            break;
-        }
-    }
-     if (targetAngleDeg <= ANGULAR_GRID_LEVELS[ANGULAR_GRID_LEVELS.length -1]) {
-         upperLevel = ANGULAR_GRID_LEVELS[ANGULAR_GRID_LEVELS.length - 2];
-         lowerLevel = ANGULAR_GRID_LEVELS[ANGULAR_GRID_LEVELS.length - 1];
-    }
-
-    const logUpper = Math.log10(upperLevel);
-    const logLower = Math.log10(lowerLevel);
-    const logTarget = Math.log10(targetAngleDeg);
-
-    let interpValue = (logUpper - logTarget) / (logUpper - logLower);
-    interpValue = Math.max(0, Math.min(1, interpValue));
-    interpValue = interpValue * interpValue * (3 - 2 * interpValue);
-
-    return {
-        angle1: upperLevel,
-        angle2: lowerLevel,
-        alpha1: 1 - interpValue,
-        alpha2: interpValue
-    };
-}
 
 function drawDragFeedback(targetPointId, currentPointStates, isSnapping = false, excludedEdgeId = null) {
-    const feedbackColor = isSnapping ? 'rgba(240, 240, 130, 0.95)' : 'rgba(230, 230, 230, 0.95)';
-    const katexFontSize = 12;
-    const ARC_RADIUS_SCREEN = 30;
-    const LABEL_OFFSET_DIST_SCREEN = 18;
+    const feedbackColor = isSnapping ? FEEDBACK_COLOR_SNAPPED : FEEDBACK_COLOR_DEFAULT;
+    const katexFontSize = FEEDBACK_LABEL_FONT_SIZE;
+    const ARC_RADIUS_SCREEN = FEEDBACK_ARC_RADIUS_SCREEN;
+    const LABEL_OFFSET_DIST_SCREEN = FEEDBACK_DISTANCE_LABEL_OFFSET_SCREEN;
 
     const livePoints = new Map(currentPointStates.map(p => [p.id, { ...p }]));
     const getLivePoint = (id) => livePoints.get(id);
@@ -593,7 +715,7 @@ function drawDragFeedback(targetPointId, currentPointStates, isSnapping = false,
 
     const isPointOnGrid = (point, interval) => {
         if (!interval || interval <= 0) return false;
-        const epsilon = interval * 1e-6;
+        const epsilon = interval * GEOMETRY_CALCULATION_EPSILON; // Uses new epsilon constant
         const isOnGridX = Math.abs(point.x / interval - Math.round(point.x / interval)) < epsilon;
         const isOnGridY = Math.abs(point.y / interval - Math.round(point.y / interval)) < epsilon;
         return isOnGridX && isOnGridY;
@@ -603,7 +725,7 @@ function drawDragFeedback(targetPointId, currentPointStates, isSnapping = false,
 
     neighbors.forEach(neighbor => {
         const dist = distance(vertex, neighbor);
-        if (dist < 1e-6) return;
+        if (dist < GEOMETRY_CALCULATION_EPSILON) return; // Uses new epsilon constant
 
         const currentEdgeId = getEdgeId({ id1: vertex.id, id2: neighbor.id });
 
@@ -638,7 +760,7 @@ function drawDragFeedback(targetPointId, currentPointStates, isSnapping = false,
 
                 const labelId = `drag-dist-${vertex.id}-${neighbor.id}`;
 
-                if (Math.abs(Math.cos(edgeAngleScreen)) < 0.1) {
+                if (Math.abs(Math.cos(edgeAngleScreen)) < VERTICAL_LINE_COS_THRESHOLD) { // Uses new threshold constant
                     const distanceTextX = midX + textOffset;
                     const distanceTextY = midY;
                     updateHtmlLabel({
@@ -705,12 +827,12 @@ function drawDragFeedback(targetPointId, currentPointStates, isSnapping = false,
             if (angleToDisplayRad < 0) {
                 angleToDisplayRad += 2 * Math.PI;
             }
-            if (angleToDisplayRad < 1e-6) continue;
-            const LABEL_RADIUS_SCREEN = 75;
+            if (angleToDisplayRad < GEOMETRY_CALCULATION_EPSILON) continue; // Uses new epsilon constant
+            const LABEL_RADIUS_SCREEN = ANGLE_LABEL_RADIUS_SCREEN; // Uses new constant
             const bisectorAngle = angle1_data + (angleToDisplayRad / 2);
             ctx.save();
             ctx.strokeStyle = feedbackColor;
-            ctx.lineWidth = 1;
+            ctx.lineWidth = FEEDBACK_LINE_VISUAL_WIDTH; // Uses new line width constant
             ctx.beginPath();
             ctx.arc(vertexScreen.x, vertexScreen.y, ARC_RADIUS_SCREEN, -angle1_data, -angle2_data, false);
             ctx.stroke();
@@ -720,8 +842,8 @@ function drawDragFeedback(targetPointId, currentPointStates, isSnapping = false,
             if (angleDisplayMode === 'degrees') {
                 angleText = `${formatNumber(angleToDisplayRad * (180 / Math.PI), angleSigFigs)}^{\\circ}`;
             } else if (angleDisplayMode === 'radians') {
-                // FIX 1: Angle display in radians mode
                 if (currentShiftPressed) {
+                    // These values are parameters to a utility function; keeping them as literals here.
                     angleText = formatFraction(angleToDisplayRad / Math.PI, 0.001, 6) + '\\pi';
                     if (angleText.startsWith("1\\pi")) angleText = "\\pi";
                     if (angleText.startsWith("-1\\pi")) angleText = "-\\pi";
@@ -763,9 +885,11 @@ function drawDragFeedback(targetPointId, currentPointStates, isSnapping = false,
 }
 
 function prepareReferenceElementsTexts(context, shiftPressed) {
-    const screenPixelThreshold = 1.5;
+    // Replaced '1.5'
+    const screenPixelThreshold = REF_TEXT_SCREEN_PIXEL_THRESHOLD;
     const dataThreshold = screenPixelThreshold / viewTransform.scale;
-    const angleThreshold = 1e-6;
+    // Replaced '1e-6', re-using the general geometry epsilon
+    const angleThreshold = GEOMETRY_CALCULATION_EPSILON;
 
     let previewDistance = -1;
     if (context.frozen_Origin_Data_to_display) {
@@ -781,7 +905,8 @@ function prepareReferenceElementsTexts(context, shiftPressed) {
     }
 
     const refElementColor = FROZEN_REFERENCE_COLOR;
-    const katexFontSize = 11;
+    // Replaced '11'
+    const katexFontSize = REF_TEXT_KATEX_FONT_SIZE;
 
     const startPointData = context.frozen_Origin_Data_to_display;
     const turnAngleData = context.displayAngleA_valueRad_for_A_equals_label;
@@ -820,7 +945,8 @@ function prepareReferenceElementsTexts(context, shiftPressed) {
         const edgeAngleScreen = Math.atan2(endPointScreen.y - startPointScreen.y, endPointScreen.x - startPointScreen.x);
         const midX_screen = (startPointScreen.x + endPointScreen.x) / 2;
         const midY_screen = (startPointScreen.y + endPointScreen.y) / 2;
-        const textOffset = 18;
+        // Replaced '18'
+        const textOffset = REF_TEXT_DISTANCE_LABEL_OFFSET_SCREEN;
 
         let rotationDeg = edgeAngleScreen * (180 / Math.PI);
         if (rotationDeg > 90 || rotationDeg < -90) {
@@ -851,6 +977,7 @@ function prepareReferenceElementsTexts(context, shiftPressed) {
         labelsToKeepThisFrame.delete('ref-dist');
     }
 
+    // Replaced '1e-6' with the epsilon constant
     if (showAngles && turnAngleData !== null && Math.abs(turnAngleData) > angleThreshold) {
         const startAngleCanvas = -baseAngleData;
         const endAngleCanvas = -(baseAngleData + turnAngleData);
@@ -858,7 +985,8 @@ function prepareReferenceElementsTexts(context, shiftPressed) {
         const sumCos = Math.cos(startAngleCanvas) + Math.cos(endAngleCanvas);
         const sumSin = Math.sin(startAngleCanvas) + Math.sin(endAngleCanvas);
         let bisectorCanvasAngle = Math.atan2(sumSin, sumCos);
-        const angleLabelOffsetDistance = 35 + 15;
+        // Replaced '35 + 15' (which is 50)
+        const angleLabelOffsetDistance = REF_TEXT_ANGLE_LABEL_OFFSET_SCREEN;
 
         const textAngleLabelX_A = startPointScreen.x + Math.cos(bisectorCanvasAngle) * angleLabelOffsetDistance;
         const textAngleLabelY_A = startPointScreen.y + Math.sin(bisectorCanvasAngle) * angleLabelOffsetDistance;
@@ -899,8 +1027,6 @@ function initializeCanvasUI() {
         type: "menuButton"
     };
 }
-
-
 
 const canvasUI = {
     toolbarButton: null,
@@ -953,7 +1079,6 @@ function buildMainToolbarUI() {
         height: 40,
     };
 }
-
 
 function buildDisplayPanelUI() {
     canvasUI.displayIcons = [];
@@ -1037,7 +1162,6 @@ function buildColorPaletteUI() {
         height: UI_SWATCH_SIZE,
     };
 }
-
 
 function drawDisplayIcon(ctx, icon) {
     let isSelected = false;
@@ -1163,8 +1287,6 @@ function drawCoordsIcon(ctx, rect, mode, isSelected) {
     }
 }
 
-
-// UPDATED: Repositions the math label
 function drawAngleIcon(ctx, rect, mode, isSelected) {
     const colorStrong = isSelected ? '#F9FAFB' : '#9CA3AF';
     const center = { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
@@ -1219,7 +1341,6 @@ function drawAngleIcon(ctx, rect, mode, isSelected) {
     }
 }
 
-// UPDATED: Aligned to bottom
 function drawDistanceIcon(ctx, rect, mode, isSelected) {
     const colorStrong = isSelected ? '#F9FAFB' : '#9CA3AF';
     const center = { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
@@ -1264,7 +1385,6 @@ function drawDistanceIcon(ctx, rect, mode, isSelected) {
     }
 }
 
-// Replace your existing createColorWheelIcon function with this one
 function createColorWheelIcon(size) {
     const tempCanvas = document.createElement('canvas');
     tempCanvas.width = size * dpr;
@@ -1314,9 +1434,6 @@ function createColorWheelIcon(size) {
     return tempCanvas;
 }
 
-
-
-// Add this new function to your script
 function drawUITransformSymbol(ctx, icon) {
     const screenPos = { x: icon.x + icon.width / 2, y: icon.y + icon.height / 2 };
     const radius = icon.width / 2;
@@ -1903,7 +2020,6 @@ function dataToScreen(dataPos) {
     };
 }
 
-
 function resizeCanvas() {
     const canvasContainer = document.querySelector('.canvas-container');
     const canvasWrapper = document.querySelector('.canvas-wrapper-relative');
@@ -2011,8 +2127,6 @@ function drawCenterSymbol(point) {
     }
 }
 
-
-
 function getCircumcenter(p1, p2, p3) {
     const D = 2 * (p1.x * (p2.y - p3.y) + p2.x * (p3.y - p1.y) + p3.x * (p1.y - p2.y));
     if (Math.abs(D) < 1e-9) {
@@ -2029,10 +2143,6 @@ function getCircumcenter(p1, p2, p3) {
     return { x: Ux, y: Uy, type: 'equidistant-circumcenter' };
 }
 
-/**
- * Calculates the projection of a point 'p' onto the perpendicular bisector
- * of the segment defined by p1 and p2.
- */
 function getProjectionOnPerpendicularBisector(p, p1, p2) {
     const midPoint = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
     const p1p2_vec = { x: p2.x - p1.x, y: p2.y - p1.y };
@@ -2398,151 +2508,6 @@ function zoomAt(zoomCenterScreen_css_pixels, scaleFactor) {
     viewTransform.scale = newScale;
 }
 
-
-canvas.addEventListener('wheel', (event) => {
-    event.preventDefault();
-    const mouseScreen = getMousePosOnCanvas(event, canvas);
-    const scaleFactor = event.deltaY > 0 ? 1/1.15 : 1.15;
-    zoomAt(mouseScreen, scaleFactor);
-});
-
-function getDragSnapPosition(dragOrigin, mouseDataPos) {
-    const neighbors = findNeighbors(dragOrigin.id).map(id => allPoints.find(p => p.id === id)).filter(Boolean);
-    const distanceSq = (p1, p2) => (p1.x - p2.x) ** 2 + (p1.y - p2.y) ** 2;
-
-    const lineToSnapRadius = 5 / viewTransform.scale;
-    let bestBisector = null;
-    let minDistToBisector = Infinity;
-    let bestBisectorNeighbors = null;
-
-    for (let i = 0; i < neighbors.length; i++) {
-        for (let j = i + 1; j < neighbors.length; j++) {
-            const p1 = neighbors[i];
-            const p2 = neighbors[j];
-            const midPoint = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
-            const perpVec = { x: -(p2.y - p1.y), y: p2.x - p1.x };
-            const mag = Math.hypot(perpVec.x, perpVec.y);
-            if (mag < 1e-9) continue;
-            
-            const bisectorP1 = { x: midPoint.x - perpVec.x * 100000, y: midPoint.y - perpVec.y * 100000 };
-            const bisectorP2 = { x: midPoint.x + perpVec.x * 100000, y: midPoint.y + perpVec.y * 100000 };
-            
-            const closestPointOnLine = getClosestPointOnLineSegment(mouseDataPos, bisectorP1, bisectorP2);
-            if (closestPointOnLine.distance < minDistToBisector) {
-                minDistToBisector = closestPointOnLine.distance;
-                bestBisector = { p1: bisectorP1, p2: bisectorP2, projection: closestPointOnLine };
-                bestBisectorNeighbors = [p1, p2];
-            }
-        }
-    }
-    
-    if (bestBisector && minDistToBisector < lineToSnapRadius) {
-        const pointOnLineSnapRadius = 7 / viewTransform.scale;
-        const secondOrderCandidates = [];
-        
-        const [p1, p2] = bestBisectorNeighbors;
-        const midPoint = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
-        const d_half = distance(p1, midPoint);
-        const perpVec = { x: -(p2.y - p1.y), y: p2.x - p1.x };
-        const perpVecMag = Math.hypot(perpVec.x, perpVec.y);
-        const normPerpVec = { x: perpVec.x / perpVecMag, y: perpVec.y / perpVecMag };
-
-        if (d_half > 1e-6) {
-            const specialAnglesDeg = [15, 30, 45, 60, 75, 90, 105, 120, 135, 150, 165];
-            specialAnglesDeg.forEach(angleDeg => {
-                const tanHalfTheta = Math.tan(angleDeg * Math.PI / 180 / 2);
-                if (Math.abs(tanHalfTheta) > 1e-6) {
-                    const h = d_half / tanHalfTheta;
-                    secondOrderCandidates.push({ x: midPoint.x + h * normPerpVec.x, y: midPoint.y + h * normPerpVec.y });
-                }
-            });
-        }
-        
-        if (gridDisplayMode !== 'none') {
-            const dominantGridInterval = (lastGridState.alpha2 > lastGridState.alpha1 && lastGridState.interval2) ? lastGridState.interval2 : lastGridState.interval1;
-            const topLeftData = screenToData({ x: 0, y: 0 });
-            const bottomRightData = screenToData({ x: canvas.width / dpr, y: canvas.height / dpr });
-
-            if (gridDisplayMode === 'polar') {
-                const maxR = Math.hypot(Math.max(Math.abs(topLeftData.x), Math.abs(bottomRightData.x)), Math.max(Math.abs(topLeftData.y), Math.abs(bottomRightData.y)));
-                for(let r = dominantGridInterval; r < maxR; r += dominantGridInterval) {
-                    secondOrderCandidates.push(...getLineCircleIntersection(bestBisector, { center: {x:0, y:0}, radius: r }));
-                }
-            } else {
-                const startX = Math.floor(topLeftData.x / dominantGridInterval) * dominantGridInterval;
-                const endX = Math.ceil(bottomRightData.x / dominantGridInterval) * dominantGridInterval;
-                const startY = Math.floor(bottomRightData.y / dominantGridInterval) * dominantGridInterval;
-                const endY = Math.ceil(topLeftData.y / dominantGridInterval) * dominantGridInterval;
-
-                for (let x = startX; x <= endX; x += dominantGridInterval) {
-                    const intersection = getLineLineIntersection(bestBisector, { p1: { x: x, y: -100000 }, p2: { x: x, y: 100000 } });
-                    if (intersection) secondOrderCandidates.push(intersection);
-                }
-                for (let y = startY; y <= endY; y += dominantGridInterval) {
-                     const intersection = getLineLineIntersection(bestBisector, { p1: { x: -100000, y: y }, p2: { x: 100000, y: y } });
-                    if (intersection) secondOrderCandidates.push(intersection);
-                }
-            }
-        }
-
-        if (secondOrderCandidates.length > 0) {
-            const projectedPos = { x: bestBisector.projection.x, y: bestBisector.projection.y };
-            const bestOnLineCandidate = secondOrderCandidates.reduce((best, current) => distanceSq(projectedPos, current) < distanceSq(projectedPos, best) ? current : best);
-            if (distance(projectedPos, bestOnLineCandidate) < pointOnLineSnapRadius) {
-                return { point: bestOnLineCandidate, snapped: true, constraints: null };
-            }
-        }
-        return { point: { x: bestBisector.projection.x, y: bestBisector.projection.y }, snapped: true, constraints: null };
-    }
-
-    let gridCandidates = [];
-    let pointCandidates = [];
-    let geometricCandidates = [];
-
-    if (gridDisplayMode !== 'none') {
-        const dominantGridInterval = (lastGridState.alpha2 > lastGridState.alpha1 && lastGridState.interval2) ? lastGridState.interval2 : lastGridState.interval1;
-        if(gridDisplayMode === 'polar') {
-            const dominantAngularInterval = (lastAngularGridState.alpha2 > lastAngularGridState.alpha1) ? lastAngularGridState.angle2 : lastAngularGridState.angle1;
-            const mouseAngleDeg = (Math.atan2(mouseDataPos.y, mouseDataPos.x) * 180/Math.PI + 360) % 360;
-            const mouseRadius = Math.hypot(mouseDataPos.x, mouseDataPos.y);
-            const snappedAngleDeg = Math.round(mouseAngleDeg / dominantAngularInterval) * dominantAngularInterval;
-            const snappedRadius = Math.round(mouseRadius / dominantGridInterval) * dominantGridInterval;
-            const snappedAngleRad = snappedAngleDeg * Math.PI / 180;
-            gridCandidates.push({x: snappedRadius * Math.cos(snappedAngleRad), y: snappedRadius * Math.sin(snappedAngleRad)});
-        } else {
-            const baseGridX = Math.round(mouseDataPos.x / dominantGridInterval) * dominantGridInterval;
-            const baseGridY = Math.round(mouseDataPos.y / dominantGridInterval) * dominantGridInterval;
-            gridCandidates.push({ x: baseGridX, y: baseGridY});
-        }
-    }
-
-    for (const p of allPoints) {
-        if (p.id !== dragOrigin.id && p.type === 'regular') {
-            pointCandidates.push({ x: p.x, y: p.y });
-        }
-    }
-
-    if (gridDisplayMode !== 'polar') {
-        const MAJOR_SNAP_ANGLES_RAD = [Math.PI / 6, Math.PI / 4, Math.PI / 3, Math.PI / 2, 2 * Math.PI / 3, 3 * Math.PI / 4, 5 * Math.PI / 6, Math.PI];
-        const MAJOR_SORTED_SNAP_DISTANCES = [0.5, 1, 1.5, 2, 3, 4, 5].map(f => f * DEFAULT_REFERENCE_DISTANCE);
-        for (let i = 0; i < neighbors.length; i++) {
-            for (let j = i + 1; j < neighbors.length; j++) {
-                for (const d1 of MAJOR_SORTED_SNAP_DISTANCES) {
-                    for (const alpha of MAJOR_SNAP_ANGLES_RAD) {
-                        geometricCandidates.push(...solveForPoint(neighbors[i], neighbors[j], d1, alpha));
-                    }
-                }
-            }
-        }
-    }
-
-    const allCandidates = [ ...gridCandidates, ...pointCandidates, ...geometricCandidates ];
-    if (allCandidates.length === 0) return { point: mouseDataPos, snapped: false };
-
-    const bestCandidate = allCandidates.reduce((best, current) => distanceSq(mouseDataPos, current) < distanceSq(mouseDataPos, best) ? current : best);
-    return { point: bestCandidate, snapped: true, constraints: { dist: bestCandidate.dist || null, angle: bestCandidate.angle || null } };
-}
-
 function getDrawingContext(currentDrawStartPointId) {
     let offsetAngleRad = 0;
     let currentSegmentReferenceD = DEFAULT_REFERENCE_DISTANCE;
@@ -2598,8 +2563,6 @@ function getDrawingContext(currentDrawStartPointId) {
         frozen_Origin_Data_to_display: null
     };
 }
-
-
 
 function drawReferenceElementsGeometry(context, shiftPressed) {
     if ((!showAngles && !showDistances) || !context.frozen_Origin_Data_to_display) return;
@@ -2886,6 +2849,153 @@ function prepareSnapInfoTexts(startPointData, targetDataPos, snappedOutput, shif
     }
 }
 
+function getCompletedSegmentProperties(startPoint, endPoint, existingEdges) {
+    if (!startPoint || !endPoint) return null;
+
+    const angle = Math.atan2(endPoint.y - startPoint.y, endPoint.x - startPoint.x);
+    const length = distance(startPoint, endPoint);
+
+    let precedingSegmentAngle = 0;
+    let isFirstSegmentOfLine = true;
+
+    for (let i = existingEdges.length - 1; i >= 0; i--) {
+        const edge = existingEdges[i];
+        let otherPointId = null;
+        if (edge.id1 === startPoint.id && findPointById(edge.id2)?.type === 'regular') otherPointId = edge.id2;
+        else if (edge.id2 === startPoint.id && findPointById(edge.id1)?.type === 'regular') otherPointId = edge.id1;
+
+        if (otherPointId && otherPointId !== endPoint.id) {
+            const prevPoint = findPointById(otherPointId);
+            if (prevPoint) {
+                precedingSegmentAngle = Math.atan2(startPoint.y - prevPoint.y, startPoint.x - prevPoint.x);
+                isFirstSegmentOfLine = false;
+                break;
+            }
+        }
+    }
+
+    const angleTurn = normalizeAngleToPi(angle - precedingSegmentAngle);
+
+    return {
+        startPoint,
+        endPoint,
+        absoluteAngleRad: angle,
+        length: length,
+        precedingSegmentAbsoluteAngleRad: precedingSegmentAngle,
+        turnAngleRad: angleTurn,
+        isFirstSegmentOfLine: isFirstSegmentOfLine
+    };
+}
+
+function completeGraphOnSelectedPoints() {
+    if (selectedPointIds.length < 2) return;
+    
+    const regularPointIds = selectedPointIds.filter(id => {
+        const point = findPointById(id);
+        return point && point.type === 'regular';
+    });
+    
+    if (regularPointIds.length < 2) return;
+    
+    saveStateForUndo();
+    
+    let edgesAdded = 0;
+    
+    for (let i = 0; i < regularPointIds.length; i++) {
+        for (let j = i + 1; j < regularPointIds.length; j++) {
+            const id1 = regularPointIds[i];
+            const id2 = regularPointIds[j];
+            
+            const edgeExists = allEdges.some(edge => 
+                (edge.id1 === id1 && edge.id2 === id2) || 
+                (edge.id1 === id2 && edge.id2 === id1)
+            );
+            
+            if (!edgeExists) {
+                allEdges.push({ id1: id1, id2: id2 });
+                edgesAdded++;
+            }
+        }
+    }
+}
+
+function applySelectionLogic(pointIdsToSelect, edgeIdsToSelect, wantsShift, wantsCtrl, targetIsCenter = false) {
+    if (targetIsCenter) {
+        handleCenterSelection(pointIdsToSelect[0], wantsShift, wantsCtrl);
+    } else {
+        if (wantsShift) {
+            selectedPointIds = [...new Set([...selectedPointIds, ...pointIdsToSelect])];
+            selectedEdgeIds = [...new Set([...selectedEdgeIds, ...edgeIdsToSelect])];
+        } else if (wantsCtrl) {
+            pointIdsToSelect.forEach(id => {
+                const index = selectedPointIds.indexOf(id);
+                if (index > -1) selectedPointIds.splice(index, 1);
+                else selectedPointIds.push(id);
+            });
+            edgeIdsToSelect.forEach(id => {
+                const index = selectedEdgeIds.indexOf(id);
+                if (index > -1) selectedEdgeIds.splice(index, 1);
+                else selectedEdgeIds.push(id);
+            });
+        } else {
+            selectedPointIds = [...pointIdsToSelect];
+            selectedEdgeIds = [...edgeIdsToSelect];
+        }
+    }
+}
+
+function drawGridIcon(ctx, rect, mode, isSelected) {
+    const colorStrong = isSelected ? '#F9FAFB' : '#9CA3AF';
+    const center = { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+
+    ctx.save();
+    ctx.translate(center.x, center.y);
+    const scale = rect.width / 32;
+    ctx.scale(scale, scale);
+    ctx.translate(-16, -16);
+
+    ctx.strokeStyle = colorStrong;
+    ctx.fillStyle = colorStrong;
+    ctx.lineWidth = 1.5;
+
+    switch (mode) {
+        case 'lines':
+            ctx.strokeRect(2, 2, 28, 28);
+            ctx.beginPath();
+            ctx.moveTo(2, 16); ctx.lineTo(30, 16);
+            ctx.moveTo(16, 2); ctx.lineTo(16, 30);
+            ctx.stroke();
+            break;
+        case 'points':
+            ctx.strokeRect(2, 2, 28, 28);
+            ctx.beginPath();
+            [8, 16, 24].forEach(x => {
+                [8, 16, 24].forEach(y => {
+                    ctx.moveTo(x, y);
+                    ctx.arc(x, y, 1.5, 0, 2 * Math.PI);
+                });
+            });
+            ctx.fill();
+            break;
+        case 'polar':
+            ctx.beginPath();
+            ctx.arc(16, 16, 14, 0, 2 * Math.PI);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.arc(16, 16, 7, 0, 2 * Math.PI);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.moveTo(2, 16); ctx.lineTo(30, 16);
+            ctx.moveTo(16, 2); ctx.lineTo(16, 30);
+            ctx.stroke();
+            break;
+        case 'none':
+            ctx.strokeRect(2, 2, 28, 28);
+            break;
+    }
+    ctx.restore();
+}
+
 function redrawAll() {
     labelsToKeepThisFrame.clear();
     const actualCanvasWidth = canvas.width / dpr;
@@ -2899,9 +3009,8 @@ function redrawAll() {
     const { grid1Interval, grid2Interval, alpha1, alpha2 } = calculateGridIntervals(viewTransform.scale);
     lastGridState = { interval1: grid1Interval, interval2: grid2Interval, alpha1, alpha2, scale: viewTransform.scale };
     
-    // CORRECTLY CALL AND STORE DYNAMIC ANGULAR GRID STATE
-    const { angle1, angle2, alpha1: angularAlpha1, alpha2: angularAlpha2 } = getDynamicAngularIntervals(viewTransform, actualCanvasWidth, actualCanvasHeight, lastGridState.interval1);
-    lastAngularGridState = { angle1, angle2, alpha1: angularAlpha1, alpha2: angularAlpha2 };
+    // Correctly call and store the new angular grid state array
+    lastAngularGridState = getDynamicAngularIntervals(viewTransform, actualCanvasWidth, actualCanvasHeight);
     
     // Draw components
     drawGrid(ctx);
@@ -3018,172 +3127,6 @@ function redrawAll() {
     cleanupHtmlLabels();
 }
 
-function getCompletedSegmentProperties(startPoint, endPoint, existingEdges) {
-    if (!startPoint || !endPoint) return null;
-
-    const angle = Math.atan2(endPoint.y - startPoint.y, endPoint.x - startPoint.x);
-    const length = distance(startPoint, endPoint);
-
-    let precedingSegmentAngle = 0;
-    let isFirstSegmentOfLine = true;
-
-    for (let i = existingEdges.length - 1; i >= 0; i--) {
-        const edge = existingEdges[i];
-        let otherPointId = null;
-        if (edge.id1 === startPoint.id && findPointById(edge.id2)?.type === 'regular') otherPointId = edge.id2;
-        else if (edge.id2 === startPoint.id && findPointById(edge.id1)?.type === 'regular') otherPointId = edge.id1;
-
-        if (otherPointId && otherPointId !== endPoint.id) {
-            const prevPoint = findPointById(otherPointId);
-            if (prevPoint) {
-                precedingSegmentAngle = Math.atan2(startPoint.y - prevPoint.y, startPoint.x - prevPoint.x);
-                isFirstSegmentOfLine = false;
-                break;
-            }
-        }
-    }
-
-    const angleTurn = normalizeAngleToPi(angle - precedingSegmentAngle);
-
-    return {
-        startPoint,
-        endPoint,
-        absoluteAngleRad: angle,
-        length: length,
-        precedingSegmentAbsoluteAngleRad: precedingSegmentAngle,
-        turnAngleRad: angleTurn,
-        isFirstSegmentOfLine: isFirstSegmentOfLine
-    };
-}
-
-
-canvas.addEventListener('mouseenter', () => {
-    isMouseOverCanvas = true;
-});
-
-
-
-
-canvas.addEventListener('mouseleave', () => {
-    isMouseOverCanvas = false;
-    redrawAll(); // To hide the mouse coordinates
-});
-
-canvas.addEventListener('contextmenu', (event) => event.preventDefault());
-
-
-function completeGraphOnSelectedPoints() {
-    if (selectedPointIds.length < 2) return;
-    
-    const regularPointIds = selectedPointIds.filter(id => {
-        const point = findPointById(id);
-        return point && point.type === 'regular';
-    });
-    
-    if (regularPointIds.length < 2) return;
-    
-    saveStateForUndo();
-    
-    let edgesAdded = 0;
-    
-    for (let i = 0; i < regularPointIds.length; i++) {
-        for (let j = i + 1; j < regularPointIds.length; j++) {
-            const id1 = regularPointIds[i];
-            const id2 = regularPointIds[j];
-            
-            const edgeExists = allEdges.some(edge => 
-                (edge.id1 === id1 && edge.id2 === id2) || 
-                (edge.id1 === id2 && edge.id2 === id1)
-            );
-            
-            if (!edgeExists) {
-                allEdges.push({ id1: id1, id2: id2 });
-                edgesAdded++;
-            }
-        }
-    }
-}
-
-
-function applySelectionLogic(pointIdsToSelect, edgeIdsToSelect, wantsShift, wantsCtrl, targetIsCenter = false) {
-    if (targetIsCenter) {
-        handleCenterSelection(pointIdsToSelect[0], wantsShift, wantsCtrl);
-    } else {
-        if (wantsShift) {
-            selectedPointIds = [...new Set([...selectedPointIds, ...pointIdsToSelect])];
-            selectedEdgeIds = [...new Set([...selectedEdgeIds, ...edgeIdsToSelect])];
-        } else if (wantsCtrl) {
-            pointIdsToSelect.forEach(id => {
-                const index = selectedPointIds.indexOf(id);
-                if (index > -1) selectedPointIds.splice(index, 1);
-                else selectedPointIds.push(id);
-            });
-            edgeIdsToSelect.forEach(id => {
-                const index = selectedEdgeIds.indexOf(id);
-                if (index > -1) selectedEdgeIds.splice(index, 1);
-                else selectedEdgeIds.push(id);
-            });
-        } else {
-            selectedPointIds = [...pointIdsToSelect];
-            selectedEdgeIds = [...edgeIdsToSelect];
-        }
-    }
-}
-
-
-
-function drawGridIcon(ctx, rect, mode, isSelected) {
-    const colorStrong = isSelected ? '#F9FAFB' : '#9CA3AF';
-    const center = { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
-
-    ctx.save();
-    ctx.translate(center.x, center.y);
-    const scale = rect.width / 32;
-    ctx.scale(scale, scale);
-    ctx.translate(-16, -16);
-
-    ctx.strokeStyle = colorStrong;
-    ctx.fillStyle = colorStrong;
-    ctx.lineWidth = 1.5;
-
-    switch (mode) {
-        case 'lines':
-            ctx.strokeRect(2, 2, 28, 28);
-            ctx.beginPath();
-            ctx.moveTo(2, 16); ctx.lineTo(30, 16);
-            ctx.moveTo(16, 2); ctx.lineTo(16, 30);
-            ctx.stroke();
-            break;
-        case 'points':
-            ctx.strokeRect(2, 2, 28, 28);
-            ctx.beginPath();
-            [8, 16, 24].forEach(x => {
-                [8, 16, 24].forEach(y => {
-                    ctx.moveTo(x, y);
-                    ctx.arc(x, y, 1.5, 0, 2 * Math.PI);
-                });
-            });
-            ctx.fill();
-            break;
-        case 'polar':
-            ctx.beginPath();
-            ctx.arc(16, 16, 14, 0, 2 * Math.PI);
-            ctx.stroke();
-            ctx.beginPath();
-            ctx.arc(16, 16, 7, 0, 2 * Math.PI);
-            ctx.stroke();
-            ctx.beginPath();
-            ctx.moveTo(2, 16); ctx.lineTo(30, 16);
-            ctx.moveTo(16, 2); ctx.lineTo(16, 30);
-            ctx.stroke();
-            break;
-        case 'none':
-            ctx.strokeRect(2, 2, 28, 28);
-            break;
-    }
-    ctx.restore();
-}
-
 function drawGrid(ctx) {
     if (gridDisplayMode === 'none') return;
     
@@ -3214,13 +3157,19 @@ function drawGrid(ctx) {
         drawPolarCircles(lastGridState.interval1, lastGridState.alpha1);
         drawPolarCircles(lastGridState.interval2, lastGridState.alpha2);
         
-        const dominantAngularInterval = (lastAngularGridState.alpha2 > lastAngularGridState.alpha1) ? lastAngularGridState.angle2 : lastAngularGridState.angle1;
-        if (dominantAngularInterval > 0) {
-            ctx.strokeStyle = `rgba(${baseGridColor.join(',')}, ${gridAlpha})`;
+        const screenRadiusForSpokes = maxDataRadius * viewTransform.scale / dpr;
+        
+        const drawnAngles = new Set();
+
+        lastAngularGridState.forEach(level => {
+            if (level.alpha < 0.01) return;
+
+            ctx.strokeStyle = `rgba(${baseGridColor.join(',')}, ${level.alpha * gridAlpha})`;
             ctx.lineWidth = GRID_LINEWIDTH;
-            const screenRadiusForSpokes = maxDataRadius * viewTransform.scale / dpr;
-            for (let angle = 0; angle < 360; angle += dominantAngularInterval) {
-                if (angle % 90 === 0) continue;
+            
+            for (let angle = 0; angle < 360; angle += level.angle) {
+                if (drawnAngles.has(angle)) continue;
+
                 const rad = angle * Math.PI / 180;
                 const endX = origin.x + screenRadiusForSpokes * Math.cos(rad);
                 const endY = origin.y + screenRadiusForSpokes * Math.sin(rad);
@@ -3228,8 +3177,9 @@ function drawGrid(ctx) {
                 ctx.moveTo(origin.x, origin.y);
                 ctx.lineTo(endX, endY);
                 ctx.stroke();
+                drawnAngles.add(angle);
             }
-        }
+        });
 
     } else {
         const drawGridElements = (interval, alpha) => {
@@ -3279,8 +3229,8 @@ function drawGrid(ctx) {
     ctx.restore();
 }
 
-function drawPolarReferenceCircle(ctx, radius, alpha, axisArrowSize, axisNameFontSize) {
-    if (alpha < 0.01) return;
+function drawPolarReferenceCircle(ctx, radius, alpha, axisArrowSize, axisNameFontSize, isFadingCircle = true) {
+    if (alpha < 0.01 && isFadingCircle) return; // Only return if fading circle and too transparent
 
     const origin = dataToScreen({ x: 0, y: 0 });
     const screenRadius = radius * viewTransform.scale / dpr;
@@ -3288,11 +3238,8 @@ function drawPolarReferenceCircle(ctx, radius, alpha, axisArrowSize, axisNameFon
     const canvasWidthCSS = canvas.width / dpr;
     const canvasHeightCSS = canvas.height / dpr;
 
-    const closestX = Math.max(0, Math.min(origin.x, canvasWidthCSS));
-    const closestY = Math.max(0, Math.min(origin.y, canvasHeightCSS));
-    const distanceToClosestCanvasPointSq = (origin.x - closestX)**2 + (origin.y - closestY)**2;
-
-    if (distanceToClosestCanvasPointSq > screenRadius**2) {
+    // Check if the circle is within the canvas view
+    if (!isCircleInView(origin.x, origin.y, screenRadius, canvasWidthCSS, canvasHeightCSS)) {
         return;
     }
 
@@ -3306,50 +3253,74 @@ function drawPolarReferenceCircle(ctx, radius, alpha, axisArrowSize, axisNameFon
     ctx.arc(origin.x, origin.y, screenRadius, 0, 2 * Math.PI);
     ctx.stroke();
 
-    for (let deg = 0; deg < 360; deg += 30) {
-        if (deg === 0) continue;
+    const drawnAngles = new Set();
 
-        const angleRad = deg * Math.PI / 180;
-        const tickStart = { x: origin.x + (screenRadius - tickSize / 2) * Math.cos(angleRad), y: origin.y - (screenRadius - tickSize / 2) * Math.sin(angleRad) };
-        const tickEnd = { x: origin.x + (screenRadius + tickSize / 2) * Math.cos(angleRad), y: origin.y - (screenRadius + tickSize / 2) * Math.sin(angleRad) };
-        
-        ctx.beginPath();
-        ctx.moveTo(tickStart.x, tickStart.y);
-        ctx.lineTo(tickEnd.x, tickEnd.y);
-        ctx.stroke();
-        
-        if (deg === 180) {
-            const tangentAngle = angleRad - Math.PI / 2;
-            ctx.fillStyle = circleColor;
-            ctx.beginPath();
-            ctx.moveTo(tickEnd.x, tickEnd.y);
-            ctx.lineTo(tickEnd.x - axisArrowSize * Math.cos(tangentAngle - Math.PI / 6), tickEnd.y - axisArrowSize * Math.sin(tangentAngle - Math.PI / 6));
-            ctx.lineTo(tickEnd.x - axisArrowSize * Math.cos(tangentAngle + Math.PI / 6), tickEnd.y - axisArrowSize * Math.sin(tangentAngle + Math.PI / 6));
-            ctx.closePath();
-            ctx.fill();
+    lastAngularGridState.forEach(level => {
+        const tickAlpha = level.alpha * alpha;
+        if (tickAlpha < 0.01) return;
+
+        const finalColor = `rgba(255, 255, 255, ${tickAlpha * 0.8})`;
+
+        for (let deg = 0; deg < 360; deg += level.angle) {
+            if (deg === 0 || drawnAngles.has(deg)) continue;
+
+            const angleRad = deg * Math.PI / 180;
+            const tickStart = { x: origin.x + (screenRadius - tickSize / 2) * Math.cos(angleRad), y: origin.y - (screenRadius - tickSize / 2) * Math.sin(angleRad) };
+            const tickEnd = { x: origin.x + (screenRadius + tickSize / 2) * Math.cos(angleRad), y: origin.y - (screenRadius + tickSize / 2) * Math.sin(angleRad) };
             
-            const labelPos = { x: tickEnd.x - axisArrowSize - 10, y: tickEnd.y - axisArrowSize - 10 };
-            updateHtmlLabel({ id: `theta-label-${radius}`, content: '\\theta', x: labelPos.x, y: labelPos.y, color: circleColor, fontSize: axisNameFontSize, options: { textAlign: 'right', textBaseline: 'bottom' }});
-            labelsToKeepThisFrame.add(`theta-label-${radius}`);
-        } else {
-            let angleText = '';
-            if (angleDisplayMode === 'degrees') {
-                angleText = `${deg}^{\\circ}`;
+            ctx.strokeStyle = finalColor;
+            ctx.beginPath();
+            ctx.moveTo(tickStart.x, tickStart.y);
+            ctx.lineTo(tickEnd.x, tickEnd.y);
+            ctx.stroke();
+            
+            if (deg === 180) {
+                const tangentAngle = angleRad - Math.PI / 2;
+                ctx.fillStyle = finalColor;
+                ctx.beginPath();
+                ctx.moveTo(tickEnd.x, tickEnd.y);
+                ctx.lineTo(tickEnd.x - axisArrowSize * Math.cos(tangentAngle - Math.PI / 6), tickEnd.y - axisArrowSize * Math.sin(tangentAngle - Math.PI / 6));
+                ctx.lineTo(tickEnd.x - axisArrowSize * Math.cos(tangentAngle + Math.PI / 6), tickEnd.y - axisArrowSize * Math.sin(tangentAngle + Math.PI / 6));
+                ctx.closePath();
+                ctx.fill();
+                
+                const labelPos = { x: tickEnd.x - axisArrowSize - 10, y: tickEnd.y - axisArrowSize - 10 };
+                updateHtmlLabel({ id: `theta-label-${radius}`, content: '\\theta', x: labelPos.x, y: labelPos.y, color: finalColor, fontSize: axisNameFontSize, options: { textAlign: 'right', textBaseline: 'bottom' }});
+                labelsToKeepThisFrame.add(`theta-label-${radius}`);
             } else {
-                const frac = formatFraction(deg/180, 0.001, 6);
-                if (frac !== '0') {
-                    angleText = frac === '1' ? `\\pi` : (frac === '-1' ? `-\\pi` : `${frac}\\pi`);
+                let angleText = '';
+                if (angleDisplayMode === 'degrees') {
+                    angleText = `${deg}^{\\circ}`;
+                } else {
+                    const frac = formatFraction(deg/180, 0.001, 6);
+                    if (frac !== '0') {
+                        angleText = frac === '1' ? `\\pi` : (frac === '-1' ? `-\\pi` : `${frac}\\pi`);
+                    }
+                }
+                
+                if (angleText) {
+                    const labelRadius = screenRadius + 15;
+                    const labelPos = { x: origin.x + labelRadius * Math.cos(angleRad), y: origin.y - labelRadius * Math.sin(angleRad) };
+                    updateHtmlLabel({ id: `circ-label-${deg}-${radius.toExponential(15)}`, content: angleText, x: labelPos.x, y: labelPos.y, color: finalColor, fontSize: katexFontSize, options: { textAlign: 'center', textBaseline: 'middle' }});
+                    labelsToKeepThisFrame.add(`circ-label-${deg}-${radius.toExponential(15)}`);
                 }
             }
-            
-            if (angleText) {
-                const labelRadius = screenRadius + 15;
-                const labelPos = { x: origin.x + labelRadius * Math.cos(angleRad), y: origin.y - labelRadius * Math.sin(angleRad) };
-                updateHtmlLabel({ id: `circ-label-${deg}-${radius.toExponential(15)}`, content: angleText, x: labelPos.x, y: labelPos.y, color: circleColor, fontSize: katexFontSize, options: { textAlign: 'center', textBaseline: 'middle' }});
-                labelsToKeepThisFrame.add(`circ-label-${deg}-${radius.toExponential(15)}`);
-            }
+            drawnAngles.add(deg);
         }
+    });
+}
+
+function isCircleInView(circleX, circleY, circleRadius, canvasWidth, canvasHeight) {
+    // Check if the circle is completely outside the canvas bounds
+    if (circleX + circleRadius < 0 ||
+        circleX - circleRadius > canvasWidth ||
+        circleY + circleRadius < 0 ||
+        circleY - circleRadius > canvasHeight) {
+        return false;
     }
+
+    // Check if any part of the circle is inside the canvas
+    return true;
 }
 
 function calculateGridIntervals(viewTransformScale) {
@@ -3394,6 +3365,58 @@ function calculateGridIntervals(viewTransformScale) {
     return { grid1Interval, grid2Interval, alpha1, alpha2 };
 }
 
+function getDynamicAngularIntervals(viewTransform, canvasWidth, canvasHeight) {
+    const ANGULAR_GRID_LEVELS = [90, 30, 15, 5, 1, 0.1, 0.01];
+    const targetScreenSpacing = 80;
+    const originScreen = dataToScreen({ x: 0, y: 0 });
+    const screenCenter = { x: canvasWidth / 2, y: canvasHeight / 2 };
+    const radiusToCenterScreen = distance(originScreen, screenCenter);
+
+    let targetAngleDeg;
+    if (radiusToCenterScreen < 1) {
+        targetAngleDeg = 90;
+    } else {
+        const targetAngleRad = targetScreenSpacing / radiusToCenterScreen;
+        targetAngleDeg = targetAngleRad * (180 / Math.PI);
+    }
+    
+    if (isNaN(targetAngleDeg)) {
+        return [{ angle: 90, alpha: 1 }, { angle: 30, alpha: 1 }];
+    }
+
+    const results = [];
+    
+    // The 90-degree and 30-degree lines are always present as a subtle baseline
+    results.push({ angle: 90, alpha: 0.5 });
+    results.push({ angle: 30, alpha: 0.4 });
+
+    for (let i = 2; i < ANGULAR_GRID_LEVELS.length; i++) {
+        const upperLevel = ANGULAR_GRID_LEVELS[i - 1];
+        const lowerLevel = ANGULAR_GRID_LEVELS[i];
+
+        if (targetAngleDeg > upperLevel) continue;
+        
+        let alpha = 0;
+        if (targetAngleDeg <= lowerLevel) {
+            alpha = 1.0;
+        } else {
+            const logUpper = Math.log10(upperLevel);
+            const logLower = Math.log10(lowerLevel);
+            const logTarget = Math.log10(targetAngleDeg);
+            
+            let interpValue = (logUpper - logTarget) / (logUpper - logLower);
+            interpValue = Math.max(0, Math.min(1, interpValue));
+            alpha = interpValue * interpValue * (3 - 2 * interpValue);
+        }
+
+        if (alpha > 0.01) {
+            results.push({ angle: lowerLevel, alpha: alpha });
+        }
+    }
+    
+    return results;
+}
+
 function drawAxes(ctx) {
     const axisColor = 'rgba(255, 255, 255, 1)';
     const baseTickLabelColor = [255, 255, 255];
@@ -3429,7 +3452,6 @@ function drawAxes(ctx) {
     ctx.fillStyle = axisColor;
 
     if (coordsDisplayMode === 'polar') {
-        // Clear rectilinear labels (if any from previous frames)
         labelsToKeepThisFrame.delete('axis-label-x');
         labelsToKeepThisFrame.delete('axis-label-y');
 
@@ -3442,7 +3464,6 @@ function drawAxes(ctx) {
         const bottomRightData = screenToData({ x: canvasWidth, y: canvasHeight });
         const maxRadiusData = Math.hypot(Math.max(Math.abs(topLeftData.x), Math.abs(bottomRightData.x)), Math.max(Math.abs(topLeftData.y), Math.abs(bottomRightData.y))) * 1.1;
 
-        // Draw and label all four main radial axes with arrows
         drawAxisWithArrows(origin.x, origin.y, canvasWidth, origin.y);
         updateHtmlLabel({ id: 'axis-label-r-posx', content: 'r', x: canvasWidth - axisArrowSize - 20, y: origin.y + 25, color: axisColor, fontSize: axisNameFontSize, options: { textAlign: 'center', textBaseline: 'top' } });
         labelsToKeepThisFrame.add('axis-label-r-posx');
@@ -3460,7 +3481,7 @@ function drawAxes(ctx) {
         labelsToKeepThisFrame.add('axis-label-r-negy');
         
         const labelOffset = 8;
-        const zeroThreshold = 1e-6; // Threshold for checking against zero
+        const zeroThreshold = 1e-6;
 
         const drawTicksAndLabelsPolar = (interval, alpha) => {
             if (!interval || alpha < 0.01) return;
@@ -3482,14 +3503,13 @@ function drawAxes(ctx) {
 
                 const labelText = formatNumber(r_data, sigFigsForLabel);
                 
-                // Positive X axis ticks and labels
                 const p = dataToScreen({ x: r_data, y: 0 });
                 ctx.beginPath();
                 ctx.moveTo(p.x, origin.y - tickSize / 2);
                 ctx.lineTo(p.x, origin.y + tickSize / 2);
                 ctx.stroke();
                 updateHtmlLabel({
-                    id: `polartick-r-x-${r_data.toExponential(15)}`, // Use exponential for stable ID
+                    id: `polartick-r-x-${r_data.toExponential(15)}`,
                     content: labelText,
                     x: p.x,
                     y: origin.y + tickSize + labelOffset,
@@ -3499,7 +3519,6 @@ function drawAxes(ctx) {
                 });
                 labelsToKeepThisFrame.add(`polartick-r-x-${r_data.toExponential(15)}`);
 
-                // Negative X axis ticks and labels
                 const pNegX = dataToScreen({ x: -r_data, y: 0 });
                 ctx.beginPath();
                 ctx.moveTo(pNegX.x, origin.y - tickSize / 2);
@@ -3516,7 +3535,6 @@ function drawAxes(ctx) {
                 });
                 labelsToKeepThisFrame.add(`polartick-r-negx-${r_data.toExponential(15)}`);
 
-                // Positive Y axis ticks and labels
                 const pPosY = dataToScreen({ x: 0, y: r_data });
                 ctx.beginPath();
                 ctx.moveTo(origin.x - tickSize / 2, pPosY.y);
@@ -3525,7 +3543,7 @@ function drawAxes(ctx) {
                 updateHtmlLabel({
                     id: `polartick-r-posy-${r_data.toExponential(15)}`,
                     content: labelText,
-                    x: origin.x - tickSize - labelOffset, // Left side
+                    x: origin.x - tickSize - labelOffset,
                     y: pPosY.y,
                     color: currentTickLabelColor,
                     fontSize: katexFontSize,
@@ -3533,7 +3551,6 @@ function drawAxes(ctx) {
                 });
                 labelsToKeepThisFrame.add(`polartick-r-posy-${r_data.toExponential(15)}`);
 
-                // Negative Y axis ticks and labels
                 const pNegY = dataToScreen({ x: 0, y: -r_data });
                 ctx.beginPath();
                 ctx.moveTo(origin.x - tickSize / 2, pNegY.y);
@@ -3542,7 +3559,7 @@ function drawAxes(ctx) {
                 updateHtmlLabel({
                     id: `polartick-r-negy-${r_data.toExponential(15)}`,
                     content: labelText,
-                    x: origin.x - tickSize - labelOffset, // Left side
+                    x: origin.x - tickSize - labelOffset,
                     y: pNegY.y,
                     color: currentTickLabelColor,
                     fontSize: katexFontSize,
@@ -3552,21 +3569,16 @@ function drawAxes(ctx) {
             }
         };
 
-        // Draw radial ticks and labels for both intervals (as before)
         drawTicksAndLabelsPolar(interval1, alpha1);
         drawTicksAndLabelsPolar(interval2, alpha2);
 
-        // MODIFICATION FOR POLAR REFERENCE CIRCLE FADING:
-        // Draw the finer reference circle, it will fade in/out based on alpha1
-        drawPolarReferenceCircle(ctx, interval1, alpha1, axisArrowSize, axisNameFontSize);
+        const idealScreenRadius = Math.min(canvasWidth, canvasHeight) * 0.35;
+        const idealDataRadius = idealScreenRadius / viewTransform.scale;
+        const persistentRadius = Math.pow(10, Math.round(Math.log10(idealDataRadius)));
         
-        // Draw the coarser reference circle, always fully opaque (alpha = 1)
-        if (interval2) { // Ensure interval2 is a valid, distinct interval
-            drawPolarReferenceCircle(ctx, interval2, 1, axisArrowSize, axisNameFontSize);
-        }
-
-    } else { // Rectilinear grid (no changes here from previous iteration)
-        // Clear polar-specific labels if switching to rectilinear mode
+        drawPolarReferenceCircle(ctx, persistentRadius, 1.0, axisArrowSize, axisNameFontSize);
+        
+    } else {
         labelsToKeepThisFrame.delete('axis-label-r-posx');
         labelsToKeepThisFrame.delete('axis-label-r-negx');
         labelsToKeepThisFrame.delete('axis-label-r-posy');
@@ -3643,6 +3655,192 @@ function drawAxes(ctx) {
     }
     ctx.restore();
 }
+
+
+function performEscapeAction() {
+    selectedPointIds = [];
+    selectedEdgeIds = [];
+    selectedCenterIds = [];
+    activeCenterId = null;
+    isDrawingMode = false;
+    previewLineStartPointId = null;
+    frozenReference_A_rad = null;
+    frozenReference_A_baseRad = null;
+    frozenReference_D_du = null;
+    frozenReference_D_g2g = null;
+    frozenReference_Origin_Data = null;
+    currentDrawingFirstSegmentAbsoluteAngleRad = null;
+    isActionInProgress = false;
+    isDragConfirmed = false;
+    isRectangleSelecting = false;
+    isTransformDrag = false;
+    isEdgeTransformDrag = false;
+    isDraggingCenter = false;
+    isPanningBackground = false;
+    dragPreviewPoints = [];
+    actionTargetPoint = null;
+    currentMouseButton = -1;
+    clickData = { pointId: null, count: 0, timestamp: 0 };
+    canvas.style.cursor = 'crosshair';
+    transformIndicatorData = null;
+    drawingSequence = [];
+    currentSequenceIndex = 0;
+}
+
+function handleRepeat() {
+    if (!isDrawingMode || !previewLineStartPointId || drawingSequence.length === 0) {
+        return;
+    }
+
+    saveStateForUndo();
+
+    const lastPoint = findPointById(previewLineStartPointId);
+    if (!lastPoint) {
+        console.error("handleRepeat: Last point not found. Cannot repeat.");
+        performEscapeAction();
+        return;
+    }
+
+    const precedingSegmentOfLastPoint = getPrecedingSegment(lastPoint.id);
+    if (!precedingSegmentOfLastPoint) {
+        console.error("handleRepeat: No preceding segment found for lastPoint, but drawingSequence is not empty. Aborting repeat.");
+        performEscapeAction();
+        return;
+    }
+    const currentAbsoluteDirection = precedingSegmentOfLastPoint.angleRad;
+
+    // For the repeat pattern, we only use segments starting from index 1 (skipping the first segment)
+    // If we only have the first segment, we can't repeat yet
+    if (drawingSequence.length === 1) {
+        console.log("handleRepeat: Only first segment exists, cannot repeat pattern yet.");
+        return;
+    }
+
+    // Get the pattern step from the repeating portion (starting from index 1)
+    const repeatPatternLength = drawingSequence.length - 1;
+    const patternStepIndex = ((currentSequenceIndex - 1) % repeatPatternLength) + 1;
+    const patternStep = drawingSequence[patternStepIndex];
+    
+    console.log("=== REPEAT DEBUG ===");
+    console.log("drawingSequence:", drawingSequence);
+    console.log("currentSequenceIndex:", currentSequenceIndex);
+    console.log("repeatPatternLength:", repeatPatternLength);
+    console.log("patternStepIndex:", patternStepIndex);
+    console.log("patternStep:", patternStep);
+    
+    const lengthToDraw = patternStep.length;
+    // For repeating patterns, the last segment (which has turn=0 as placeholder) 
+    // should use the same turn as the first segment in the repeating cycle
+    let turnToApplyForNextSegment;
+    if (patternStepIndex === drawingSequence.length - 1) {
+        // We're at the last segment - its turn is just a placeholder 0
+        // Use the turn from the first segment of the repeating pattern (index 1, or index 0 if only 2 total)
+        const firstRepeatSegmentIndex = drawingSequence.length > 2 ? 1 : 0;
+        turnToApplyForNextSegment = drawingSequence[firstRepeatSegmentIndex].turn;
+        console.log("Last segment - using turn from segment", firstRepeatSegmentIndex, ":", turnToApplyForNextSegment, "radians");
+    } else {
+        // Use the established turn for this segment
+        turnToApplyForNextSegment = patternStep.turn;
+        console.log("Using established turn from pattern step:", turnToApplyForNextSegment, "radians");
+    }
+        
+    console.log("lengthToDraw:", lengthToDraw);
+    console.log("turnToApplyForNextSegment (radians):", turnToApplyForNextSegment);
+    console.log("turnToApplyForNextSegment (degrees):", turnToApplyForNextSegment * 180 / Math.PI);
+    
+    // Cycle through colors just like we cycle through angles
+    // For proper alternating pattern, determine which color position we should be at
+    let colorForNewPoint;
+    let colorForCurrentPoint;
+    
+    if (patternStepIndex === drawingSequence.length - 1) {
+        // We're at the last segment - figure out the proper alternating pattern
+        // Based on the established pattern (segments 0 and 1), determine what colors should be
+        const establishedColors = [drawingSequence[0].endPointColor, drawingSequence[1].endPointColor];
+        
+        // For the current point (where we're standing), use the alternating pattern
+        const currentColorIndex = (currentSequenceIndex - 1) % establishedColors.length;
+        colorForCurrentPoint = establishedColors[currentColorIndex];
+        
+        // For the new point, use the next color in the alternating pattern
+        const newColorIndex = currentSequenceIndex % establishedColors.length;
+        colorForNewPoint = establishedColors[newColorIndex];
+        
+        console.log("Last segment - alternating pattern:");
+        console.log("Current point color should be:", colorForCurrentPoint);
+        console.log("New point color should be:", colorForNewPoint);
+        
+        // Update the current point's color to match the pattern
+        lastPoint.color = colorForCurrentPoint;
+    } else {
+        // Use the color that corresponds to this pattern step's position
+        colorForNewPoint = patternStep.endPointColor;
+        console.log("Using color from current pattern step:", colorForNewPoint);
+    }
+
+    // Calculate the new point's absolute angle
+    const newSegmentAbsoluteAngle = normalizeAngle(currentAbsoluteDirection + turnToApplyForNextSegment);
+    
+    const targetX = lastPoint.x + lengthToDraw * Math.cos(newSegmentAbsoluteAngle);
+    const targetY = lastPoint.y + lengthToDraw * Math.sin(newSegmentAbsoluteAngle);
+
+    let newPoint = null;
+    let merged = false;
+    const mergeRadiusData = POINT_SELECT_RADIUS / viewTransform.scale;
+
+    for (const p of allPoints) {
+        if (p.type === 'regular' && distance({ x: targetX, y: targetY }, p) < mergeRadiusData) {
+            newPoint = p;
+            merged = true;
+            break;
+        }
+    }
+
+    if (!merged) {
+        newPoint = { id: generateUniqueId(), x: targetX, y: targetY, type: 'regular', color: colorForNewPoint };
+        allPoints.push(newPoint);
+    }
+
+    const edgeExists = allEdges.some(e => 
+        (e.id1 === lastPoint.id && e.id2 === newPoint.id) || 
+        (e.id2 === lastPoint.id && e.id1 === newPoint.id)
+    );
+    if (!edgeExists) {
+        allEdges.push({ id1: lastPoint.id, id2: newPoint.id });
+    }
+
+    previewLineStartPointId = newPoint.id;
+    
+    // Update sequence index for next repeat
+    currentSequenceIndex++;
+    if (currentSequenceIndex >= drawingSequence.length) {
+        currentSequenceIndex = 1; // Reset to start of repeat pattern (skipping first segment)
+    }
+
+    frozenReference_D_du = null;
+    frozenReference_D_g2g = null;
+    frozenReference_A_rad = null;
+    frozenReference_A_baseRad = null;
+    frozenReference_Origin_Data = null;
+}
+
+canvas.addEventListener('wheel', (event) => {
+    event.preventDefault();
+    const mouseScreen = getMousePosOnCanvas(event, canvas);
+    const scaleFactor = event.deltaY > 0 ? 1/1.15 : 1.15;
+    zoomAt(mouseScreen, scaleFactor);
+});
+
+canvas.addEventListener('mouseenter', () => {
+    isMouseOverCanvas = true;
+});
+
+canvas.addEventListener('mouseleave', () => {
+    isMouseOverCanvas = false;
+    redrawAll(); // To hide the mouse coordinates
+});
+
+canvas.addEventListener('contextmenu', (event) => event.preventDefault());
 
 canvas.addEventListener('mousemove', (event) => {
     mousePos = getMousePosOnCanvas(event, canvas);
@@ -3799,7 +3997,7 @@ canvas.addEventListener('mousemove', (event) => {
                 const startAngle = Math.atan2(startVector.y, startVector.x);
                 const currentAngle = Math.atan2(currentVector.y, currentVector.x);
                 rotation = normalizeAngleToPi(currentAngle - startAngle);
-                scale = (startDist < 1e-9) ? 1 : currentDist / startDist;
+                scale = (startDist < GEOMETRY_CALCULATION_EPSILON) ? 1 : currentDist / startDist;
             }
         
             if (centerType === 'center_rotate_only') scale = 1.0;
@@ -3853,49 +4051,6 @@ canvas.addEventListener('mousemove', (event) => {
         }
     }
 });
-
-function getBestSnapPosition(mouseDataPos) {
-    const candidates = [];
-    const distanceSq = (p1, p2) => (p1.x - p2.x)**2 + (p1.y - p2.y)**2;
-    const snapRadiusPixels = 30;
-    const snapRadiusDataSq = Math.pow(snapRadiusPixels / viewTransform.scale, 2);
-    
-    if(gridDisplayMode !== 'none') {
-        if (gridDisplayMode === 'polar') {
-            const radialInterval = (lastGridState.alpha2 > lastGridState.alpha1 && lastGridState.interval2) ? lastGridState.interval2 : lastGridState.interval1;
-            const angularInterval = (lastAngularGridState.alpha2 > lastAngularGridState.alpha1) ? lastAngularGridState.angle2 : lastAngularGridState.angle1;
-            if(radialInterval > 0 && angularInterval > 0) {
-                const mouseAngleDeg = (Math.atan2(mouseDataPos.y, mouseDataPos.x) * 180 / Math.PI + 360) % 360;
-                const mouseRadius = Math.hypot(mouseDataPos.x, mouseDataPos.y);
-                const snappedAngleDeg = Math.round(mouseAngleDeg / angularInterval) * angularInterval;
-                const snappedRadius = Math.round(mouseRadius / radialInterval) * radialInterval;
-                const snappedAngleRad = snappedAngleDeg * Math.PI / 180;
-                const gridPoint = { x: snappedRadius * Math.cos(snappedAngleRad), y: snappedRadius * Math.sin(snappedAngleRad) };
-                candidates.push({ pos: gridPoint, distSq: distanceSq(mouseDataPos, gridPoint) });
-            }
-        } else {
-            const gridInterval = (lastGridState.alpha2 > lastGridState.alpha1 && lastGridState.interval2) ? lastGridState.interval2 : lastGridState.interval1;
-            if (gridInterval > 0) {
-                const gridPoint = { x: Math.round(mouseDataPos.x / gridInterval) * gridInterval, y: Math.round(mouseDataPos.y / gridInterval) * gridInterval };
-                candidates.push({ pos: gridPoint, distSq: distanceSq(mouseDataPos, gridPoint) });
-            }
-        }
-    }
-
-    allPoints.forEach(p => { if (p.type === 'regular') candidates.push({ pos: p, distSq: distanceSq(mouseDataPos, p) }); });
-    allEdges.forEach(edge => {
-        const p1 = findPointById(edge.id1);
-        const p2 = findPointById(edge.id2);
-        if (p1 && p2 && p1.type === 'regular' && p2.type === 'regular') {
-            const midpoint = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
-            candidates.push({ pos: midpoint, distSq: distanceSq(mouseDataPos, midpoint) });
-        }
-    });
-    if (candidates.length === 0) return null;
-    const bestCandidate = candidates.sort((a, b) => a.distSq - b.distSq)[0];
-    if (bestCandidate.distSq < snapRadiusDataSq) return bestCandidate.pos;
-    return null;
-}
 
 canvas.addEventListener('mousedown', (event) => {
     mousePos = getMousePosOnCanvas(event, canvas);
@@ -4262,181 +4417,12 @@ canvas.addEventListener('mouseup', (event) => {
     canvas.style.cursor = 'crosshair';
 });
 
-function performEscapeAction() {
-    selectedPointIds = [];
-    selectedEdgeIds = [];
-    selectedCenterIds = [];
-    activeCenterId = null;
-    isDrawingMode = false;
-    previewLineStartPointId = null;
-    frozenReference_A_rad = null;
-    frozenReference_A_baseRad = null;
-    frozenReference_D_du = null;
-    frozenReference_D_g2g = null;
-    frozenReference_Origin_Data = null;
-    currentDrawingFirstSegmentAbsoluteAngleRad = null;
-    isActionInProgress = false;
-    isDragConfirmed = false;
-    isRectangleSelecting = false;
-    isTransformDrag = false;
-    isEdgeTransformDrag = false;
-    isDraggingCenter = false;
-    isPanningBackground = false;
-    dragPreviewPoints = [];
-    actionTargetPoint = null;
-    currentMouseButton = -1;
-    clickData = { pointId: null, count: 0, timestamp: 0 };
-    canvas.style.cursor = 'crosshair';
-    transformIndicatorData = null;
-    drawingSequence = [];
-    currentSequenceIndex = 0;
-}
-
-
-
 window.addEventListener('keyup', (event) => {
     if (event.key === 'Shift') {
         currentShiftPressed = false;
         ghostPointPosition = null;
     }
 });
-
-function handleRepeat() {
-    if (!isDrawingMode || !previewLineStartPointId || drawingSequence.length === 0) {
-        return;
-    }
-
-    saveStateForUndo();
-
-    const lastPoint = findPointById(previewLineStartPointId);
-    if (!lastPoint) {
-        console.error("handleRepeat: Last point not found. Cannot repeat.");
-        performEscapeAction();
-        return;
-    }
-
-    const precedingSegmentOfLastPoint = getPrecedingSegment(lastPoint.id);
-    if (!precedingSegmentOfLastPoint) {
-        console.error("handleRepeat: No preceding segment found for lastPoint, but drawingSequence is not empty. Aborting repeat.");
-        performEscapeAction();
-        return;
-    }
-    const currentAbsoluteDirection = precedingSegmentOfLastPoint.angleRad;
-
-    // For the repeat pattern, we only use segments starting from index 1 (skipping the first segment)
-    // If we only have the first segment, we can't repeat yet
-    if (drawingSequence.length === 1) {
-        console.log("handleRepeat: Only first segment exists, cannot repeat pattern yet.");
-        return;
-    }
-
-    // Get the pattern step from the repeating portion (starting from index 1)
-    const repeatPatternLength = drawingSequence.length - 1;
-    const patternStepIndex = ((currentSequenceIndex - 1) % repeatPatternLength) + 1;
-    const patternStep = drawingSequence[patternStepIndex];
-    
-    console.log("=== REPEAT DEBUG ===");
-    console.log("drawingSequence:", drawingSequence);
-    console.log("currentSequenceIndex:", currentSequenceIndex);
-    console.log("repeatPatternLength:", repeatPatternLength);
-    console.log("patternStepIndex:", patternStepIndex);
-    console.log("patternStep:", patternStep);
-    
-    const lengthToDraw = patternStep.length;
-    // For repeating patterns, the last segment (which has turn=0 as placeholder) 
-    // should use the same turn as the first segment in the repeating cycle
-    let turnToApplyForNextSegment;
-    if (patternStepIndex === drawingSequence.length - 1) {
-        // We're at the last segment - its turn is just a placeholder 0
-        // Use the turn from the first segment of the repeating pattern (index 1, or index 0 if only 2 total)
-        const firstRepeatSegmentIndex = drawingSequence.length > 2 ? 1 : 0;
-        turnToApplyForNextSegment = drawingSequence[firstRepeatSegmentIndex].turn;
-        console.log("Last segment - using turn from segment", firstRepeatSegmentIndex, ":", turnToApplyForNextSegment, "radians");
-    } else {
-        // Use the established turn for this segment
-        turnToApplyForNextSegment = patternStep.turn;
-        console.log("Using established turn from pattern step:", turnToApplyForNextSegment, "radians");
-    }
-        
-    console.log("lengthToDraw:", lengthToDraw);
-    console.log("turnToApplyForNextSegment (radians):", turnToApplyForNextSegment);
-    console.log("turnToApplyForNextSegment (degrees):", turnToApplyForNextSegment * 180 / Math.PI);
-    
-    // Cycle through colors just like we cycle through angles
-    // For proper alternating pattern, determine which color position we should be at
-    let colorForNewPoint;
-    let colorForCurrentPoint;
-    
-    if (patternStepIndex === drawingSequence.length - 1) {
-        // We're at the last segment - figure out the proper alternating pattern
-        // Based on the established pattern (segments 0 and 1), determine what colors should be
-        const establishedColors = [drawingSequence[0].endPointColor, drawingSequence[1].endPointColor];
-        
-        // For the current point (where we're standing), use the alternating pattern
-        const currentColorIndex = (currentSequenceIndex - 1) % establishedColors.length;
-        colorForCurrentPoint = establishedColors[currentColorIndex];
-        
-        // For the new point, use the next color in the alternating pattern
-        const newColorIndex = currentSequenceIndex % establishedColors.length;
-        colorForNewPoint = establishedColors[newColorIndex];
-        
-        console.log("Last segment - alternating pattern:");
-        console.log("Current point color should be:", colorForCurrentPoint);
-        console.log("New point color should be:", colorForNewPoint);
-        
-        // Update the current point's color to match the pattern
-        lastPoint.color = colorForCurrentPoint;
-    } else {
-        // Use the color that corresponds to this pattern step's position
-        colorForNewPoint = patternStep.endPointColor;
-        console.log("Using color from current pattern step:", colorForNewPoint);
-    }
-
-    // Calculate the new point's absolute angle
-    const newSegmentAbsoluteAngle = normalizeAngle(currentAbsoluteDirection + turnToApplyForNextSegment);
-    
-    const targetX = lastPoint.x + lengthToDraw * Math.cos(newSegmentAbsoluteAngle);
-    const targetY = lastPoint.y + lengthToDraw * Math.sin(newSegmentAbsoluteAngle);
-
-    let newPoint = null;
-    let merged = false;
-    const mergeRadiusData = POINT_SELECT_RADIUS / viewTransform.scale;
-
-    for (const p of allPoints) {
-        if (p.type === 'regular' && distance({ x: targetX, y: targetY }, p) < mergeRadiusData) {
-            newPoint = p;
-            merged = true;
-            break;
-        }
-    }
-
-    if (!merged) {
-        newPoint = { id: generateUniqueId(), x: targetX, y: targetY, type: 'regular', color: colorForNewPoint };
-        allPoints.push(newPoint);
-    }
-
-    const edgeExists = allEdges.some(e => 
-        (e.id1 === lastPoint.id && e.id2 === newPoint.id) || 
-        (e.id2 === lastPoint.id && e.id1 === newPoint.id)
-    );
-    if (!edgeExists) {
-        allEdges.push({ id1: lastPoint.id, id2: newPoint.id });
-    }
-
-    previewLineStartPointId = newPoint.id;
-    
-    // Update sequence index for next repeat
-    currentSequenceIndex++;
-    if (currentSequenceIndex >= drawingSequence.length) {
-        currentSequenceIndex = 1; // Reset to start of repeat pattern (skipping first segment)
-    }
-
-    frozenReference_D_du = null;
-    frozenReference_D_g2g = null;
-    frozenReference_A_rad = null;
-    frozenReference_A_baseRad = null;
-    frozenReference_Origin_Data = null;
-}
 
 window.addEventListener('keydown', (event) => {
     const isCtrlOrCmd = event.ctrlKey || event.metaKey;
@@ -4507,18 +4493,12 @@ window.addEventListener('keydown', (event) => {
     }
 });
 
-
-
 window.addEventListener('resize', resizeCanvas);
 
 colorPicker.addEventListener('change', (e) => {
     setCurrentColor(e.target.value);
 });
 
-function gameLoop() {
-    redrawAll();
-    requestAnimationFrame(gameLoop);
-}
 
 window.addEventListener('load', () => {
     if (typeof window.katex === 'undefined') {
@@ -4543,3 +4523,8 @@ window.addEventListener('load', () => {
     saveStateForUndo();
     gameLoop();
 });
+
+function gameLoop() {
+    redrawAll();
+    requestAnimationFrame(gameLoop);
+}
