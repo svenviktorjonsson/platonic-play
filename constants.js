@@ -60,3 +60,28 @@ export const MAX_BASE_ANGLE_MULTIPLIER_FOR_SNAPS = 2;
 export const MAX_INITIAL_METER_SNAP_MULTIPLIER = 10;
 export const MAX_SNAP_DENOMINATOR = 6;
 export const MAX_SNAP_INTEGER = 10;
+
+export const NINETY_DEG_ANGLE_SNAP_FRACTIONS = (() => {
+    const uniqueFractions = new Set();
+    const denominators = [1, 2, 3, 4, 5, 6];
+    for (const q of denominators) {
+        for (let p = 1; p <= q * 4; p++) {
+            uniqueFractions.add(p / q);
+        }
+    }
+    return Array.from(uniqueFractions).sort((a, b) => a - b);
+})();
+
+
+function generateSnapFactors(maxDenominator, maxInteger) {
+    const fractionsSet = new Set();
+    fractionsSet.add(0);
+    for (let q = 1; q <= maxDenominator; q++) {
+        for (let p = 1; p <= q * maxInteger; p++) {
+            fractionsSet.add(p / q);
+        }
+    }
+    return Array.from(fractionsSet).sort((a, b) => a - b);
+}
+
+export const SNAP_FACTORS = generateSnapFactors(MAX_SNAP_DENOMINATOR, MAX_SNAP_INTEGER);
