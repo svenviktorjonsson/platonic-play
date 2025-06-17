@@ -1,0 +1,62 @@
+// --- GEOMETRY & DRAWING ---
+export const POINT_RADIUS = 5;
+export const CENTER_POINT_VISUAL_RADIUS = POINT_RADIUS * 2;
+export const POINT_SELECT_RADIUS = 10;
+export const LINE_WIDTH = 2;
+export const GRID_LINEWIDTH = 1;
+export const DASH_PATTERN = [6, 6];
+export const SELECTED_INDICATOR_OFFSET = 3;
+
+// --- INTERACTION ---
+export const DOUBLE_CLICK_MS = 300;
+export const DRAG_THRESHOLD = 3;
+export const EDGE_CLICK_THRESHOLD = 7;
+
+// --- COLORS ---
+export const FROZEN_REFERENCE_COLOR = 'rgba(240, 240, 130, 0.95)';
+export const BACKGROUND_COLOR = 'rgba(0,0,0, 1)';
+export const FEEDBACK_COLOR_SNAPPED = 'rgba(240, 240, 130, 0.95)';
+export const FEEDBACK_COLOR_DEFAULT = 'rgba(230, 230, 230, 0.95)';
+
+// --- DEFAULTS ---
+export const DEFAULT_CALIBRATION_VIEW_SCALE = 80.0;
+export const DEFAULT_REFERENCE_DISTANCE = 1.0;
+export const DEFAULT_REFERENCE_ANGLE_RAD = Math.PI / 2;
+export const DEFAULT_POLAR_ANGLE_DIFF = 30;
+
+// --- UI & TOOLBAR ---
+export const UI_BUTTON_PADDING = 10;
+export const UI_TOOLBAR_WIDTH = 56;
+export const UI_SWATCH_SIZE = 30;
+
+// --- FEEDBACK LABELS & TEXT ---
+export const FEEDBACK_LABEL_FONT_SIZE = 12;
+export const FEEDBACK_ARC_RADIUS_SCREEN = 30;
+export const FEEDBACK_DISTANCE_LABEL_OFFSET_SCREEN = 18;
+export const FEEDBACK_LINE_VISUAL_WIDTH = 1;
+export const REF_TEXT_SCREEN_PIXEL_THRESHOLD = 1.5;
+export const REF_TEXT_KATEX_FONT_SIZE = 11;
+export const REF_TEXT_DISTANCE_LABEL_OFFSET_SCREEN = 18;
+export const REF_TEXT_ANGLE_LABEL_OFFSET_SCREEN = 50;
+export const ANGLE_LABEL_RADIUS_SCREEN = 75;
+
+// --- SNAPPING PARAMETERS ---
+export const GEOMETRY_CALCULATION_EPSILON = 1e-6;
+export const VERTICAL_LINE_COS_THRESHOLD = 0.1;
+export const SNAP_STICKINESS_RADIUS_SCREEN = 30;
+export const LINE_TO_SNAP_RADIUS_SCREEN = 10;
+export const POINT_ON_LINE_SNAP_RADIUS_SCREEN = 15;
+export const DRAG_SNAP_GEOMETRIC_DISTANCE_FACTORS = [0.5, 1, 1.5, 2, 3, 4, 5];
+export const DRAW_SNAP_CANDIDATE_COUNT_PER_SIDE = 2;
+export const DRAW_SNAP_DISTANCE_FACTOR_STEP = 0.5;
+export const DRAW_SNAP_DISTANCE_FACTOR_LIMIT = 50;
+export const GHOST_SNAP_RADIUS_SCREEN = 30;
+export const MAX_HISTORY_SIZE = 50;
+
+// --- SNAP GENERATION PARAMETERS ---
+// These are used by the generator functions in script.js
+export const MAX_FRACTION_DENOMINATOR_FOR_ANGLE_SNAPS = 6;
+export const MAX_BASE_ANGLE_MULTIPLIER_FOR_SNAPS = 2;
+export const MAX_INITIAL_METER_SNAP_MULTIPLIER = 10;
+export const MAX_SNAP_DENOMINATOR = 6;
+export const MAX_SNAP_INTEGER = 10;
