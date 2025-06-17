@@ -1797,39 +1797,82 @@ function updateMouseCoordinates(screenPos) {
         return;
     }
 
-    const dataPos = screenToData(screenPos);
+    let displayPos;
+    if (currentShiftPressed && ghostPointPosition) {
+        displayPos = ghostPointPosition;
+    } else {
+        displayPos = screenToData(screenPos);
+    }
+    
+    let effectiveGridInterval = 1; 
+    if (gridDisplayMode !== 'none' && lastGridState.interval1) {
+        effectiveGridInterval = (lastGridState.alpha2 > lastGridState.alpha1 && lastGridState.interval2) ? lastGridState.interval2 : lastGridState.interval1;
+    }
+    
+    let decimalPlaces = 0;
+    if (effectiveGridInterval > 0) {
+        decimalPlaces = Math.max(0, -Math.floor(Math.log10(effectiveGridInterval * 0.999)));
+        decimalPlaces = Math.min(decimalPlaces + 1, 6); 
+    }
+    
+    const angleDecimalPlaces = Math.min(decimalPlaces + 1, 4);
+
+
     let textContent = '';
-    const sigFigs = 3; 
-    const decimalPlacesForAngle = 2;
 
     switch (coordsDisplayMode) {
         case 'regular': {
-            const xText = formatNumber(dataPos.x, sigFigs);
-            const yText = formatNumber(dataPos.y, sigFigs);
-            textContent = `\\begin{pmatrix} x \\\\ y \\end{pmatrix} = \\begin{pmatrix} ${xText} \\\\ ${yText} \\end{pmatrix}`;
+            let xValue = displayPos.x;
+            let yValue = displayPos.y;
+
+            // Apply toFixed, then add phantom minus if the value is non-negative
+            let xText = xValue.toFixed(decimalPlaces);
+            if (xValue >= 0) xText = `\\hphantom{-}${xText}`;
+
+            let yText = yValue.toFixed(decimalPlaces);
+            if (yValue >= 0) yText = `\\hphantom{-}${yText}`;
+
+            textContent = `\\begin{pmatrix*}[r] x \\\\ y \\end{pmatrix*} = \\begin{pmatrix*}[r] ${xText} \\\\ ${yText} \\end{pmatrix*}`;
             break;
         }
         case 'complex': {
-            const sign = dataPos.y < 0 ? '-' : '+';
-            const rePart = formatNumber(dataPos.x, sigFigs);
-            const imPart = formatNumber(Math.abs(dataPos.y), sigFigs);
-            textContent = `z = ${rePart} ${sign} ${imPart}i`;
+            let reValue = displayPos.x;
+            let imValue = displayPos.y;
+
+            // Apply toFixed, then add phantom minus for the real part if non-negative
+            let rePart = reValue.toFixed(decimalPlaces);
+            if (reValue >= 0) rePart = `\\hphantom{-}${rePart}`;
+
+            // Absolute value for imaginary part, its sign is determined by the `sign` variable
+            let imPartAbs = Math.abs(imValue).toFixed(decimalPlaces);
+            const sign = imValue < 0 ? '-' : '+'; 
+
+            textContent = `z = ${rePart} ${sign} ${imPartAbs}i`;
             break;
         }
         case 'polar': {
-            const r = Math.hypot(dataPos.x, dataPos.y);
-            const theta = Math.atan2(dataPos.y, dataPos.x);
-            
-            const rText = formatNumber(r, sigFigs);
-            let angleStr;
+            let rValue = Math.hypot(displayPos.x, displayPos.y);
+            let thetaRaw = Math.atan2(displayPos.y, displayPos.x); 
 
+            // Apply toFixed, then add phantom minus for radius (radius is always non-negative)
+            let rText = rValue.toFixed(decimalPlaces);
+            if (rValue >= 0) rText = `\\hphantom{-}${rText}`; 
+
+            let angleStr;
             if (angleDisplayMode === 'degrees') {
-                const thetaDeg = theta * 180 / Math.PI;
-                angleStr = `${thetaDeg.toFixed(decimalPlacesForAngle)}^{\\circ}`;
-            } else { 
-                angleStr = theta.toFixed(decimalPlacesForAngle);
+                let thetaDeg = normalizeAngleDegrees(thetaRaw * 180 / Math.PI);
+                angleStr = thetaDeg.toFixed(angleDecimalPlaces);
+                // Add phantom minus for degrees if non-negative (as normalized degrees are 0-360)
+                if (thetaDeg >= 0) angleStr = `\\hphantom{-}${angleStr}`; 
+                angleStr += `^{\\circ}`;
+            } else { // Radians
+                let thetaRad = normalizeAngleToPi(thetaRaw);
+                angleStr = thetaRad.toFixed(angleDecimalPlaces);
+                // Add phantom minus for radians if non-negative (as normalized radians are -Pi to Pi)
+                if (thetaRad >= 0) angleStr = `\\hphantom{-}${angleStr}`; 
             }
-            textContent = `\\begin{pmatrix} r \\\\ \\theta \\end{pmatrix} = \\begin{pmatrix} ${rText} \\\\ ${angleStr} \\end{pmatrix}`;
+            
+            textContent = `\\begin{pmatrix*}[r] r \\\\ \\theta \\end{pmatrix*} = \\begin{pmatrix*}[r] ${rText} \\\\ ${angleStr} \\end{pmatrix*}`;
             break;
         }
     }
@@ -1843,7 +1886,7 @@ function updateMouseCoordinates(screenPos) {
         y: padding,
         color: 'rgba(255, 255, 255, 0.7)',
         fontSize: 14,
-        options: { textAlign: 'right', textBaseline: 'top' }
+        options: { textAlign: 'right', textBaseline: 'top' } 
     });
 }
 
