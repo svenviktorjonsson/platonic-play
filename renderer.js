@@ -1,14 +1,10 @@
 import {
     formatNumber,
-    solveForPoint,
-    generateUniqueId,
     normalizeAngleToPi,
     normalizeAngleDegrees,
     distance,
     formatFraction,
     hslToRgb,
-    getClosestPointOnLineSegment,
-    getMousePosOnCanvas,
     formatSnapFactor,
     simplifySquareRoot,
     formatSimplifiedRoot
@@ -24,9 +20,6 @@ import {
     FEEDBACK_COLOR_SNAPPED,
     FEEDBACK_COLOR_DEFAULT,
     DEFAULT_REFERENCE_DISTANCE,
-    UI_BUTTON_PADDING,
-    UI_TOOLBAR_WIDTH,
-    UI_SWATCH_SIZE,
     FEEDBACK_LABEL_FONT_SIZE,
     FEEDBACK_ARC_RADIUS_SCREEN,
     FEEDBACK_DISTANCE_LABEL_OFFSET_SCREEN,
@@ -42,7 +35,16 @@ import {
     SNAP_FACTORS
 } from './constants.js';
 
+
+
+
+
 let colorWheelIcon = null
+
+
+
+
+
 
 export function calculateGridIntervals(viewTransformScale) {
     const targetScreenSpacing = 140;
@@ -165,40 +167,71 @@ export function drawPolarReferenceCircle(ctx, htmlOverlay, updateHtmlLabel, radi
     if (alpha < 0.01 && isFadingCircle) return;
 
     const { viewTransform, canvas, dpr, angleDisplayMode } = state;
-    const origin = dataToScreen({ x: 0, y: 0 });
-    const screenRadius = radius * viewTransform.scale / dpr;
-
     const canvasWidthCSS = canvas.width / dpr;
     const canvasHeightCSS = canvas.height / dpr;
 
-    if (!isCircleInView(origin.x, origin.y, screenRadius, canvasWidthCSS, canvasHeightCSS)) {
-        return;
-    }
+    const isScreenPointVisible = (p) => {
+        const buffer = 5;
+        return p.x >= -buffer && p.x <= canvasWidthCSS + buffer && p.y >= -buffer && p.y <= canvasHeightCSS + buffer;
+    };
 
     const circleColor = `rgba(255, 255, 255, ${alpha * 0.8})`;
-    const tickSize = 5;
-    const katexFontSize = 10;
-
     ctx.strokeStyle = circleColor;
     ctx.lineWidth = 1;
     ctx.beginPath();
-    ctx.arc(origin.x, origin.y, screenRadius, 0, 2 * Math.PI);
+
+    const angleStep = Math.PI / 180;
+    let onScreen = false;
+
+    for (let angleRad = -angleStep; angleRad <= 2 * Math.PI; angleRad += angleStep) {
+        const dataPos = { x: radius * Math.cos(angleRad), y: radius * Math.sin(angleRad) };
+        const screenPos = dataToScreen(dataPos);
+
+        if (isScreenPointVisible(screenPos)) {
+            if (!onScreen) {
+                ctx.moveTo(screenPos.x, screenPos.y);
+                onScreen = true;
+            } else {
+                ctx.lineTo(screenPos.x, screenPos.y);
+            }
+        } else {
+            if (onScreen) {
+                ctx.lineTo(screenPos.x, screenPos.y);
+            }
+            onScreen = false;
+        }
+    }
     ctx.stroke();
 
     const drawnAngles = new Set();
+    const tickSize = 5;
+    const katexFontSize = 10;
+    const originScreen = dataToScreen({ x: 0, y: 0 });
 
     lastAngularGridState.forEach(level => {
-        const tickAlpha = level.alpha * alpha;
+        let tickAlpha = level.alpha * alpha;
+        if (!isFadingCircle && (level.angle === 90 || level.angle === 30)) {
+            tickAlpha = 1.0;
+        }
+
         if (tickAlpha < 0.01) return;
 
         const finalColor = `rgba(255, 255, 255, ${tickAlpha * 0.8})`;
 
         for (let deg = 0; deg < 360; deg += level.angle) {
-            if (deg === 0 || drawnAngles.has(deg)) continue;
+            if (drawnAngles.has(deg)) continue;
 
             const angleRad = deg * Math.PI / 180;
-            const tickStart = { x: origin.x + (screenRadius - tickSize / 2) * Math.cos(angleRad), y: origin.y - (screenRadius - tickSize / 2) * Math.sin(angleRad) };
-            const tickEnd = { x: origin.x + (screenRadius + tickSize / 2) * Math.cos(angleRad), y: origin.y - (screenRadius + tickSize / 2) * Math.sin(angleRad) };
+            const dataPos = { x: radius * Math.cos(angleRad), y: radius * Math.sin(angleRad) };
+            const screenPos = dataToScreen(dataPos);
+
+            if (!isScreenPointVisible(screenPos)) continue;
+
+            const canvasAngle = -angleRad;
+            const perpVec = { x: Math.sin(angleRad), y: Math.cos(angleRad) };
+
+            const tickStart = { x: screenPos.x - (tickSize / 2) * perpVec.x, y: screenPos.y - (tickSize / 2) * perpVec.y };
+            const tickEnd = { x: screenPos.x + (tickSize / 2) * perpVec.x, y: screenPos.y + (tickSize / 2) * perpVec.y };
 
             ctx.strokeStyle = finalColor;
             ctx.beginPath();
@@ -207,34 +240,35 @@ export function drawPolarReferenceCircle(ctx, htmlOverlay, updateHtmlLabel, radi
             ctx.stroke();
 
             if (deg === 180) {
-                const tangentAngle = angleRad - Math.PI / 2;
+                const tangentAngle = canvasAngle - Math.PI / 2;
                 ctx.fillStyle = finalColor;
                 ctx.beginPath();
-                ctx.moveTo(tickEnd.x, tickEnd.y);
-                ctx.lineTo(tickEnd.x - axisArrowSize * Math.cos(tangentAngle - Math.PI / 6), tickEnd.y - axisArrowSize * Math.sin(tangentAngle - Math.PI / 6));
-                ctx.lineTo(tickEnd.x - axisArrowSize * Math.cos(tangentAngle + Math.PI / 6), tickEnd.y - axisArrowSize * Math.sin(tangentAngle + Math.PI / 6));
+                ctx.moveTo(screenPos.x, screenPos.y);
+                ctx.lineTo(screenPos.x - axisArrowSize * Math.cos(tangentAngle - Math.PI / 6), screenPos.y - axisArrowSize * Math.sin(tangentAngle - Math.PI / 6));
+                ctx.lineTo(screenPos.x - axisArrowSize * Math.cos(tangentAngle + Math.PI / 6), screenPos.y - axisArrowSize * Math.sin(tangentAngle + Math.PI / 6));
                 ctx.closePath();
                 ctx.fill();
 
-                const labelPos = { x: tickEnd.x - axisArrowSize - 10, y: tickEnd.y - axisArrowSize - 10 };
-                updateHtmlLabel({ id: `theta-label-${radius}`, content: '\\theta', x: labelPos.x, y: labelPos.y, color: finalColor, fontSize: axisNameFontSize, options: { textAlign: 'right', textBaseline: 'bottom' } }, htmlOverlay);
-                
+                const labelPos = { x: screenPos.x + (axisArrowSize + 10) * Math.cos(canvasAngle), y: screenPos.y + (axisArrowSize + 10) * Math.sin(canvasAngle) };
+                updateHtmlLabel({ id: `theta-label-${radius}`, content: '\\theta', x: labelPos.x, y: labelPos.y, color: finalColor, fontSize: axisNameFontSize, options: { textAlign: 'center', textBaseline: 'middle' } }, htmlOverlay);
+
             } else {
                 let angleText = '';
                 if (angleDisplayMode === 'degrees') {
-                    angleText = `${deg}^{\\circ}`;
+                    if (deg !== 0) angleText = `${deg}^{\\circ}`;
                 } else {
-                    const frac = formatFraction(deg / 180, 0.001, 6);
-                    if (frac !== '0') {
-                        angleText = frac === '1' ? `\\pi` : (frac === '-1' ? `-\\pi` : `${frac}\\pi`);
+                    if (deg !== 0) {
+                        const frac = formatFraction(deg / 180, 0.001, 6);
+                        if (frac !== '0') {
+                            angleText = frac === '1' ? `\\pi` : (frac === '-1' ? `-\\pi` : `${frac}\\pi`);
+                        }
                     }
                 }
 
                 if (angleText) {
-                    const labelRadius = screenRadius + 15;
-                    const labelPos = { x: origin.x + labelRadius * Math.cos(angleRad), y: origin.y - labelRadius * Math.sin(angleRad) };
+                    const labelOffset = 15;
+                    const labelPos = { x: screenPos.x + labelOffset * Math.cos(angleRad), y: screenPos.y - labelOffset * Math.sin(angleRad) };
                     updateHtmlLabel({ id: `circ-label-${deg}-${radius.toExponential(15)}`, content: angleText, x: labelPos.x, y: labelPos.y, color: finalColor, fontSize: katexFontSize, options: { textAlign: 'center', textBaseline: 'middle' } }, htmlOverlay);
-                    
                 }
             }
             drawnAngles.add(deg);

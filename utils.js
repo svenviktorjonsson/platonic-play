@@ -92,7 +92,9 @@ export function generateDistanceSnapFactors() {
     return Array.from(fractionsSet).sort((a, b) => a - b);
 }
 
-export function generateUniqueId() { return crypto.randomUUID(); }
+export function generateUniqueId() {
+    return crypto.randomUUID();
+}
 
 export function normalizeAngle(angleRad) {
     while (angleRad < 0) angleRad += 2 * Math.PI;
@@ -112,6 +114,43 @@ export function normalizeAngleDegrees(angleDeg) {
     while (angleDeg < 0) angleDeg += 360;
     while (angleDeg >= 360) angleDeg -= 360;
     return angleDeg;
+}
+
+export function getLineCircleIntersection(line, circle) {
+    const { p1, p2 } = line;
+    const { center, radius } = circle;
+    const d = { x: p2.x - p1.x, y: p2.y - p1.y };
+    const f = { x: p1.x - center.x, y: p1.y - center.y };
+    const a = d.x * d.x + d.y * d.y;
+    const b = 2 * (f.x * d.x + f.y * d.y);
+    const c = f.x * f.x + f.y * f.y - radius * radius;
+    let discriminant = b * b - 4 * a * c;
+
+    if (discriminant < 0) return [];
+
+    discriminant = Math.sqrt(discriminant);
+    const t1 = (-b - discriminant) / (2 * a);
+    const t2 = (-b + discriminant) / (2 * a);
+    
+    return [
+        { x: p1.x + t1 * d.x, y: p1.y + t1 * d.y },
+        { x: p1.x + t2 * d.x, y: p1.y + t2 * d.y }
+    ];
+}
+
+export function getLineLineIntersection(line1, line2) {
+    const p1 = line1.p1, p2 = line1.p2, p3 = line2.p1, p4 = line2.p2;
+    const den = (p1.x - p2.x) * (p3.y - p4.y) - (p1.y - p2.y) * (p3.x - p4.x);
+    if (Math.abs(den) < 1e-9) return null;
+    const t = ((p1.x - p3.x) * (p3.y - p4.y) - (p1.y - p3.y) * (p3.x - p4.x)) / den;
+    const u = -((p1.x - p2.x) * (p1.y - p3.y) - (p1.y - p2.y) * (p1.x - p3.x)) / den;
+    
+    // We are interested in intersections on the infinite bisector line, so we don't check if t is between 0 and 1.
+    // We only care that the intersection happens on the grid line segment, which u controls.
+    if (u >= 0 && u <= 1) { 
+        return { x: p1.x + t * (p2.x - p1.x), y: p1.y + t * (p2.y - p1.y) };
+    }
+    return null;
 }
 
 export function simplifySquareRoot(n) {
@@ -165,7 +204,9 @@ export function snapTValue(t, fractions, snapThreshold = 0.05) {
     return Math.max(0, Math.min(1, bestSnappedT));
 }
 
-export function distance(p1, p2) { return Math.sqrt(Math.pow(p1.x - p2.x, 2) + Math.pow(p1.y - p2.y, 2)); }
+export function distance(p1, p2) {
+    return Math.sqrt(Math.pow(p1.x - p2.x, 2) + Math.pow(p1.y - p2.y, 2));
+}
 
 export function formatFraction(decimal, tolerance = 0.015, maxDisplayDenominator = 32) {
     if (Math.abs(decimal) < 0.00001) return "0";

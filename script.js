@@ -1,15 +1,12 @@
 import {
-    formatNumber,
     solveForPoint,
     generateUniqueId,
     normalizeAngleToPi,
     distance,
-    formatFraction,
     getClosestPointOnLineSegment,
     getMousePosOnCanvas,
-    formatSnapFactor,
-    simplifySquareRoot,
-    formatSimplifiedRoot
+    getLineCircleIntersection,
+    getLineLineIntersection,
 } from './utils.js';
 
 import {
@@ -21,19 +18,13 @@ import {
     DOUBLE_CLICK_MS,
     DRAG_THRESHOLD,
     EDGE_CLICK_THRESHOLD,
-    FROZEN_REFERENCE_COLOR,
     DEFAULT_CALIBRATION_VIEW_SCALE,
     DEFAULT_REFERENCE_DISTANCE,
     DEFAULT_REFERENCE_ANGLE_RAD,
     UI_BUTTON_PADDING,
     UI_TOOLBAR_WIDTH,
     UI_SWATCH_SIZE,
-    REF_TEXT_SCREEN_PIXEL_THRESHOLD,
-    REF_TEXT_KATEX_FONT_SIZE,
-    REF_TEXT_DISTANCE_LABEL_OFFSET_SCREEN,
-    REF_TEXT_ANGLE_LABEL_OFFSET_SCREEN,
     GEOMETRY_CALCULATION_EPSILON,
-    VERTICAL_LINE_COS_THRESHOLD,
     SNAP_STICKINESS_RADIUS_SCREEN,
     LINE_TO_SNAP_RADIUS_SCREEN,
     POINT_ON_LINE_SNAP_RADIUS_SCREEN,
@@ -60,15 +51,117 @@ import {drawPoint,
         drawReferenceElementsGeometry
         } from './renderer.js';
 
+
+
+
+
+
 const canvas = document.getElementById('drawingCanvas');
 const ctx = canvas.getContext('2d');
 const htmlOverlay = document.getElementById('html-overlay');
 const colorPicker = document.getElementById('colorPicker');
-
 const dpr = window.devicePixelRatio || 1;
-
 const activeHtmlLabels = new Map();
+const canvasUI = {
+    toolbarButton: null,
+    mainToolbar: null,
+    colorToolButton: null,
+    colorSwatches: [],
+    addColorButton: null,
+    transformToolButton: null,
+    transformIcons: [],     
+    displayToolButton: null,
+    displayIcons: []
+};
+
+
+
+
+
+
+let frozenReference_A_rad = null;
+let frozenReference_A_baseRad = null;
+let frozenReference_D_du = null;
+let frozenReference_Origin_Data = null;
+let isMouseOverCanvas = false;
+let placingSnapPos = null;
+let isDisplayPanelExpanded = false;
+let coordsDisplayMode = 'regular';    // Options: 'regular', 'complex', 'polar', 'none'
+let gridDisplayMode = 'lines';      // Options: 'lines', 'points', 'none'
+let angleDisplayMode = 'degrees';  // Options: 'degrees', 'radians', 'none'
+let distanceDisplayMode = 'on';    // Options: 'on', 'none'
+let isEdgeTransformDrag = false;
+let isDraggingCenter = false;
+let allPoints = [];
+let allEdges = [];
+let selectedPointIds = [];
+let selectedEdgeIds = [];
+let activeCenterId = null;
+let mousePos = { x: 0, y: 0 };
+let currentColor = '#ffffff';
+let frozenReference_D_g2g = null;
+let isToolbarExpanded = false;
+let isColorPaletteExpanded = false;
+let selectedSwatchIndex = null;
+let isTransformPanelExpanded = false;
+let isPlacingTransform = false;
+let placingTransformType = null;
+let drawingSequence = [];
+let currentSequenceIndex = 0;
+let showAngles = true;
+let showDistances = true;
+let angleSigFigs = 4;
+let distanceSigFigs = 3;
+let gridAlpha = 0.5;
+let transformIndicatorData = null;
+let isActionInProgress = false;
+let isDragConfirmed = false;
+let isPanningBackground = false;
+let isRectangleSelecting = false;
+let currentMouseButton = -1;
+let actionStartPos = { x: 0, y: 0 };
+let backgroundPanStartOffset = { x: 0, y: 0 };
+let initialDragPointStates = [];
+let rectangleSelectStartPos = { x: 0, y: 0 };
+let actionContext = null;
+let recentColors = ['#ffffff', '#ff4444', '#44ff44', '#4444ff', '#ffff44', '#ff44ff', '#44ffff', '#ffa544'];
+let isDrawingMode = false;
+let previewLineStartPointId = null;
+let actionTargetPoint = null;
+let dragPreviewPoints = [];
+let currentShiftPressed = false;
+let clipboard = { points: [], edges: [], referencePoint: null };
+let clickData = { targetId: null, type: null, count: 0, timestamp: 0 };
+let undoStack = [];
+let redoStack = [];
+let ghostPointPosition = null;
+let selectedCenterIds = []; // ADD THIS NEW STATE VARIABLE
+let lastGridState = {
+    interval1: null,
+    interval2: null,
+    alpha1: 0,
+    alpha2: 0,
+    scale: null
+};
+let viewTransform = {
+    scale: DEFAULT_CALIBRATION_VIEW_SCALE,
+    offsetX: 0,
+    offsetY: 0
+};
+let lastAngularGridState = {
+    angle1: 30,
+    angle2: 15,
+    alpha1: 1,
+    alpha2: 0,
+};
 let labelsToKeepThisFrame = new Set();
+
+
+
+
+
+
+
 
 function updateHtmlLabel({ id, content, x, y, color, fontSize, options = {} }) {
     labelsToKeepThisFrame.add(id);
@@ -126,97 +219,6 @@ function cleanupHtmlLabels() {
             activeHtmlLabels.delete(id);
         }
     }
-}
-
-let frozenReference_A_rad = null;
-let frozenReference_A_baseRad = null;
-let frozenReference_D_du = null;
-let frozenReference_Origin_Data = null;
-let isMouseOverCanvas = false;
-let placingSnapPos = null;
-let isDisplayPanelExpanded = false;
-let coordsDisplayMode = 'regular';    // Options: 'regular', 'complex', 'polar', 'none'
-let gridDisplayMode = 'lines';      // Options: 'lines', 'points', 'none'
-let angleDisplayMode = 'degrees';  // Options: 'degrees', 'radians', 'none'
-let distanceDisplayMode = 'on';    // Options: 'on', 'none'
-let isEdgeTransformDrag = false;
-let isDraggingCenter = false;
-let allPoints = [];
-let allEdges = [];
-let selectedPointIds = [];
-let selectedEdgeIds = [];
-let activeCenterId = null;
-let mousePos = { x: 0, y: 0 };
-let currentColor = '#ffffff';
-let frozenReference_D_g2g = null;
-let isToolbarExpanded = false;
-let isColorPaletteExpanded = false;
-let selectedSwatchIndex = null;
-let isTransformPanelExpanded = false;
-let isPlacingTransform = false;
-let placingTransformType = null;
-let drawingSequence = [];
-let currentSequenceIndex = 0;
-let showAngles = true;
-let showDistances = true;
-let angleSigFigs = 4;
-let distanceSigFigs = 3;
-let gridAlpha = 0.5;
-let transformIndicatorData = null;
-
-let viewTransform = {
-    scale: DEFAULT_CALIBRATION_VIEW_SCALE,
-    offsetX: 0,
-    offsetY: 0
-};
-
-let lastAngularGridState = {
-    angle1: 30,
-    angle2: 15,
-    alpha1: 1,
-    alpha2: 0,
-};
-
-let isActionInProgress = false;
-let isDragConfirmed = false;
-let isPanningBackground = false;
-let isRectangleSelecting = false;
-let currentMouseButton = -1;
-let actionStartPos = { x: 0, y: 0 };
-let backgroundPanStartOffset = { x: 0, y: 0 };
-let initialDragPointStates = [];
-let rectangleSelectStartPos = { x: 0, y: 0 };
-let actionContext = null;
-let recentColors = ['#ffffff', '#ff4444', '#44ff44', '#4444ff', '#ffff44', '#ff44ff', '#44ffff', '#ffa544'];
-let isDrawingMode = false;
-let previewLineStartPointId = null;
-let actionTargetPoint = null;
-let dragPreviewPoints = [];
-let currentShiftPressed = false;
-let clipboard = { points: [], edges: [], referencePoint: null };
-let clickData = { targetId: null, type: null, count: 0, timestamp: 0 };
-let undoStack = [];
-let redoStack = [];
-let ghostPointPosition = null;
-let selectedCenterIds = []; // ADD THIS NEW STATE VARIABLE
-
-let lastGridState = {
-    interval1: null,
-    interval2: null,
-    alpha1: 0,
-    alpha2: 0,
-    scale: null
-};
-
-let lastSnapResult = null;
-
-
-
-
-function normalizeAngle(angleRad) {
-    while (angleRad < 0) angleRad += 2 * Math.PI;
-    while (angleRad >= 2 * Math.PI) angleRad -= 2 * Math.PI;
-    return angleRad;
 }
 
 function handleCenterSelection(centerId, shiftKey, ctrlKey) {
@@ -731,46 +733,6 @@ function getDragSnapPosition(dragOrigin, mouseDataPos) {
     return { point: mouseDataPos, snapped: false };
 }
 
-function getLineCircleIntersection(line, circle) {
-    const { p1, p2 } = line;
-    const { center, radius } = circle;
-    const d = { x: p2.x - p1.x, y: p2.y - p1.y };
-    const f = { x: p1.x - center.x, y: p1.y - center.y };
-    const a = d.x * d.x + d.y * d.y;
-    const b = 2 * (f.x * d.x + f.y * d.y);
-    const c = f.x * f.x + f.y * f.y - radius * radius;
-    let discriminant = b * b - 4 * a * c;
-
-    if (discriminant < 0) return [];
-
-    discriminant = Math.sqrt(discriminant);
-    const t1 = (-b - discriminant) / (2 * a);
-    const t2 = (-b + discriminant) / (2 * a);
-    
-    return [
-        { x: p1.x + t1 * d.x, y: p1.y + t1 * d.y },
-        { x: p1.x + t2 * d.x, y: p1.y + t2 * d.y }
-    ];
-}
-
-function getLineLineIntersection(line1, line2) {
-    const p1 = line1.p1, p2 = line1.p2, p3 = line2.p1, p4 = line2.p2;
-    const den = (p1.x - p2.x) * (p3.y - p4.y) - (p1.y - p2.y) * (p3.x - p4.x);
-    if (Math.abs(den) < 1e-9) return null;
-    const t = ((p1.x - p3.x) * (p3.y - p4.y) - (p1.y - p3.y) * (p3.x - p4.x)) / den;
-    const u = -((p1.x - p2.x) * (p1.y - p3.y) - (p1.y - p2.y) * (p1.x - p3.x)) / den;
-    
-    // We are interested in intersections on the infinite bisector line, so we don't check if t is between 0 and 1.
-    // We only care that the intersection happens on the grid line segment, which u controls.
-    if (u >= 0 && u <= 1) { 
-        return { x: p1.x + t * (p2.x - p1.x), y: p1.y + t * (p2.y - p1.y) };
-    }
-    return null;
-}
-
-
-
-
 function initializeCanvasUI() {
     canvasUI.toolbarButton = {
         id: "toolbar-button",
@@ -781,19 +743,6 @@ function initializeCanvasUI() {
         type: "menuButton"
     };
 }
-
-const canvasUI = {
-    toolbarButton: null,
-    mainToolbar: null,
-    colorToolButton: null,
-    colorSwatches: [],
-    addColorButton: null,
-    transformToolButton: null, // Ensure this exists if it doesn't already
-    transformIcons: [],      // Ensure this exists if it doesn't already
-    // NEW UI elements
-    displayToolButton: null,
-    displayIcons: []
-};
 
 function buildMainToolbarUI() {
     const canvasHeight = canvas.height / dpr;
@@ -916,7 +865,6 @@ function buildColorPaletteUI() {
         height: UI_SWATCH_SIZE,
     };
 }
-
 
 function handleCanvasUIClick(screenPos) {
     const btn = canvasUI.toolbarButton;
@@ -1059,7 +1007,6 @@ function addToRecentColors(color) {
         buildColorPaletteUI();
     }
 }
-
 
 function getPrecedingSegment(pointId, edgesToIgnoreIds = []) {
     const currentPoint = findPointById(pointId);
@@ -1315,37 +1262,6 @@ function findAllPointsInSubgraph(startPointId) {
     return subgraphPointIds;
 }
 
-
-function getCircumcenter(p1, p2, p3) {
-    const D = 2 * (p1.x * (p2.y - p3.y) + p2.x * (p3.y - p1.y) + p3.x * (p1.y - p2.y));
-    if (Math.abs(D) < 1e-9) {
-        return null; // Points are collinear, no unique circumcenter
-    }
-
-    const p1_sq = p1.x * p1.x + p1.y * p1.y;
-    const p2_sq = p2.x * p2.x + p2.y * p2.y;
-    const p3_sq = p3.x * p3.x + p3.y * p3.y;
-
-    const Ux = (1 / D) * (p1_sq * (p2.y - p3.y) + p2_sq * (p3.y - p1.y) + p3_sq * (p1.y - p2.y));
-    const Uy = (1 / D) * (p1_sq * (p3.x - p2.x) + p2_sq * (p1.x - p3.x) + p3_sq * (p2.x - p1.x));
-
-    return { x: Ux, y: Uy, type: 'equidistant-circumcenter' };
-}
-
-function getProjectionOnPerpendicularBisector(p, p1, p2) {
-    const midPoint = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
-    const p1p2_vec = { x: p2.x - p1.x, y: p2.y - p1.y };
-    const perp_vec = { x: -p1p2_vec.y, y: p1p2_vec.x };
-    
-    const v_sq_mag = perp_vec.x * perp_vec.x + perp_vec.y * perp_vec.y;
-    if (v_sq_mag < 1e-9) return null; // p1 and p2 are the same point
-
-    const Ap_vec = { x: p.x - midPoint.x, y: p.y - midPoint.y };
-    const t = (Ap_vec.x * perp_vec.x + Ap_vec.y * perp_vec.y) / v_sq_mag;
-    
-    return { x: midPoint.x + t * perp_vec.x, y: midPoint.y + t * perp_vec.y, type: 'equidistant-bisector' };
-}
-
 function handleCopy() {
     const pointsToCopyIds = new Set(selectedPointIds);
     if (activeCenterId) pointsToCopyIds.add(activeCenterId);
@@ -1417,7 +1333,6 @@ function handlePaste() {
     activeCenterId = newPastedActiveCenterId;
 }
 
-
 function deleteSelectedItems() {
     if (selectedPointIds.length === 0 && selectedEdgeIds.length === 0 && selectedCenterIds.length === 0) return;
     
@@ -1464,7 +1379,6 @@ function deleteSelectedItems() {
         frozenReference_Origin_Data = null;
     }
 }
-
 
 function zoomAt(zoomCenterScreen_css_pixels, scaleFactor) {
     const oldScale = viewTransform.scale;
@@ -1570,7 +1484,6 @@ function getDrawingContext(currentDrawStartPointId) {
     };
 }
 
-
 function getCompletedSegmentProperties(startPoint, endPoint, existingEdges) {
     if (!startPoint || !endPoint) return null;
 
@@ -1665,7 +1578,6 @@ function applySelectionLogic(pointIdsToSelect, edgeIdsToSelect, wantsShift, want
         }
     }
 }
-
 
 function redrawAll() {
     labelsToKeepThisFrame.clear();
@@ -1805,7 +1717,6 @@ function redrawAll() {
     
     cleanupHtmlLabels();
 }
-
 
 function performEscapeAction() {
     selectedPointIds = [];
@@ -1972,6 +1883,19 @@ function handleRepeat() {
     frozenReference_Origin_Data = null;
 }
 
+function gameLoop() {
+    redrawAll();
+    requestAnimationFrame(gameLoop);
+}
+
+
+
+
+colorPicker.addEventListener('change', (e) => {
+    setCurrentColor(e.target.value);
+});
+
+
 canvas.addEventListener('wheel', (event) => {
     event.preventDefault();
     const mouseScreen = getMousePosOnCanvas(event, canvas);
@@ -1993,7 +1917,6 @@ canvas.addEventListener('contextmenu', (event) => event.preventDefault());
 canvas.addEventListener('mousemove', (event) => {
     mousePos = getMousePosOnCanvas(event, canvas);
     currentShiftPressed = event.shiftKey;
-    lastSnapResult = null; // Reset on each mousemove
     placingSnapPos = null; // Reset on each mousemove
     ghostPointPosition = null; // Reset ghost position at the start of the frame to ensure it's re-evaluated
 
@@ -2209,7 +2132,6 @@ canvas.addEventListener('mousemove', (event) => {
                     if (snapResult.snapped) {
                         finalDelta = { x: snapResult.point.x - dragOrigin.x, y: snapResult.point.y - dragOrigin.y };
                     }
-                    lastSnapResult = snapResult;
                 }
             }
             initialDragPointStates.forEach(originalPointState => {
@@ -2599,6 +2521,7 @@ canvas.addEventListener('mouseup', (event) => {
     canvas.style.cursor = 'crosshair';
 });
 
+
 window.addEventListener('keyup', (event) => {
     if (event.key === 'Shift') {
         currentShiftPressed = false;
@@ -2677,25 +2600,16 @@ window.addEventListener('keydown', (event) => {
 
 window.addEventListener('resize', resizeCanvas);
 
-colorPicker.addEventListener('change', (e) => {
-    setCurrentColor(e.target.value);
-});
-
-
 window.addEventListener('load', () => {
     if (typeof window.katex === 'undefined') {
         console.error("KaTeX library failed to load or initialize. Math rendering will be broken.");
     }
     initializeCanvasUI();
     buildMainToolbarUI();
-    resizeCanvas(); // Ensure canvas.width and canvas.height are correctly set in physical pixels here
+    resizeCanvas();
 
-    // Set scale to a value where the primary grid interval will be 1
     viewTransform.scale = 70;
     
-    // Center view on origin (0,0)
-    // canvas.width and canvas.height already hold the physical pixel dimensions.
-    // So, dividing by 2 places the origin at the physical center.
     viewTransform.offsetX = canvas.width / 2;
     viewTransform.offsetY = canvas.height / 2;
     
@@ -2705,8 +2619,3 @@ window.addEventListener('load', () => {
     saveStateForUndo();
     gameLoop();
 });
-
-function gameLoop() {
-    redrawAll();
-    requestAnimationFrame(gameLoop);
-}
