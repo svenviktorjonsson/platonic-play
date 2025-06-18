@@ -23,6 +23,7 @@ import {
     FROZEN_REFERENCE_COLOR,
     FEEDBACK_COLOR_SNAPPED,
     FEEDBACK_COLOR_DEFAULT,
+    DEFAULT_REFERENCE_DISTANCE,
     UI_BUTTON_PADDING,
     UI_TOOLBAR_WIDTH,
     UI_SWATCH_SIZE,
@@ -160,7 +161,7 @@ export function drawAngleArc(ctx, centerScreen, dataStartAngleRad, dataEndAngleR
     ctx.restore();
 }
 
-export function drawPolarReferenceCircle(ctx, htmlOverlay, radius, alpha, axisArrowSize, axisNameFontSize, state, dataToScreen, lastAngularGridState, isFadingCircle = true) {
+export function drawPolarReferenceCircle(ctx, htmlOverlay, updateHtmlLabel, radius, alpha, axisArrowSize, axisNameFontSize, state, dataToScreen, lastAngularGridState, isFadingCircle = true) {
     if (alpha < 0.01 && isFadingCircle) return;
 
     const { viewTransform, canvas, dpr, angleDisplayMode } = state;
@@ -241,7 +242,7 @@ export function drawPolarReferenceCircle(ctx, htmlOverlay, radius, alpha, axisAr
     });
 }
 
-export function drawAxes(ctx, htmlOverlay, state, dataToScreen, screenToData, lastGridState, lastAngularGridState) {
+export function drawAxes(ctx, htmlOverlay, state, dataToScreen, screenToData, lastGridState, lastAngularGridState, updateHtmlLabel) {
     const { canvas, dpr, coordsDisplayMode, viewTransform } = state;
     const axisColor = 'rgba(255, 255, 255, 1)';
     const baseTickLabelColor = [255, 255, 255];
@@ -369,7 +370,7 @@ export function drawAxes(ctx, htmlOverlay, state, dataToScreen, screenToData, la
         const idealDataRadius = idealScreenRadius / viewTransform.scale;
         const persistentRadius = Math.pow(10, Math.round(Math.log10(idealDataRadius)));
 
-        drawPolarReferenceCircle(ctx, htmlOverlay, persistentRadius, 1.0, axisArrowSize, axisNameFontSize, state, dataToScreen, lastAngularGridState);
+        drawPolarReferenceCircle(ctx, htmlOverlay, updateHtmlLabel, persistentRadius, 1.0, axisArrowSize, axisNameFontSize, state, dataToScreen, lastAngularGridState);
 
     } else {
         
@@ -905,7 +906,7 @@ export function drawTransformIndicators(ctx, htmlOverlay, state, dataToScreen, u
     }
 }
 
-export function drawReferenceElementsGeometry(ctx, context, dataToScreen, state) {
+export function drawReferenceElementsGeometry(ctx, context, dataToScreen, screenToData, state) {
     if ((!state.showAngles && !state.showDistances) || !context.frozen_Origin_Data_to_display) return;
     const { viewTransform } = state;
 
@@ -951,7 +952,7 @@ export function drawReferenceElementsGeometry(ctx, context, dataToScreen, state)
     ctx.restore();
 }
 
-export function prepareReferenceElementsTexts(htmlOverlay, context, state, screenToData, dataToScreen) {
+export function prepareReferenceElementsTexts(htmlOverlay, context, state, screenToData, dataToScreen, updateHtmlLabel) {
     const { showAngles, showDistances, viewTransform, mousePos, frozenReference_D_du, distanceSigFigs, angleDisplayMode } = state;
     const screenPixelThreshold = REF_TEXT_SCREEN_PIXEL_THRESHOLD;
     const dataThreshold = screenPixelThreshold / viewTransform.scale;
@@ -1074,7 +1075,7 @@ export function prepareReferenceElementsTexts(htmlOverlay, context, state, scree
     }
 }
 
-export function prepareSnapInfoTexts(ctx, htmlOverlay, startPointData, targetDataPos, snappedOutput, state, dataToScreen, drawingContext) {
+export function prepareSnapInfoTexts(ctx, htmlOverlay, startPointData, targetDataPos, snappedOutput, state, dataToScreen, drawingContext, updateHtmlLabel) {
     const { showDistances, showAngles, currentShiftPressed, distanceSigFigs, angleSigFigs, angleDisplayMode, viewTransform } = state;
     const epsilon = GEOMETRY_CALCULATION_EPSILON;
     if ((!showAngles && !showDistances) || snappedOutput.distance < epsilon) {
