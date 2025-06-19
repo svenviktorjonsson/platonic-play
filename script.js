@@ -393,9 +393,6 @@ function getSnappedPosition(startPoint, mouseScreenPos, shiftPressed) {
 
     const distanceSq = (p1, p2) => (p1.x - p2.x)**2 + (p1.y - p2.y)**2;
 
-    // List to hold potential snap candidates
-    const categorizedSnapCandidates = [];
-
     // 1. High Priority: Direct hits on existing points.
     const pointSelectRadiusData = POINT_SELECT_RADIUS / viewTransform.scale;
     for (const p of allPoints) {
@@ -432,15 +429,96 @@ function getSnappedPosition(startPoint, mouseScreenPos, shiftPressed) {
         };
     }
 
-    // 4. If Shift IS pressed, generate candidates for snapping.
+    // 4. NEW: GRID PRIORITY - Check for grid snaps first with tighter threshold
     const rawAngle = Math.atan2(mouseDataPos.y - startPoint.y, mouseDataPos.x - startPoint.x);
-    const rawDist = distance(startPoint, mouseDataPos);
+    const gridSnapThreshold = POINT_SELECT_RADIUS / viewTransform.scale * 0.8; // Tighter threshold for grid priority
+    let priorityGridCandidate = null;
+    
+    if (gridDisplayMode !== 'none' && lastGridState.interval1) {
+        if (gridDisplayMode === 'polar') {
+            const dominantRadialInterval = (lastGridState.alpha2 > lastGridState.alpha1 && lastGridState.interval2) ? lastGridState.interval2 : lastGridState.interval1;
+            if (dominantRadialInterval > 0) {
+                const mouseAngleDeg = (Math.atan2(mouseDataPos.y, mouseDataPos.x) * 180 / Math.PI + 360) % 360;
+                const mouseRadius = Math.hypot(mouseDataPos.x, mouseDataPos.y);
+                const snappedRadius = Math.round(mouseRadius / dominantRadialInterval) * dominantRadialInterval;
+                lastAngularGridState.forEach(level => {
+                    if (level.alpha > 0.01 && level.angle > 0) {
+                        const angularInterval = level.angle;
+                        const snappedAngleDeg = Math.round(mouseAngleDeg / angularInterval) * angularInterval;
+                        const snappedAngleRad = snappedAngleDeg * Math.PI / 180;
+                        const pos = { x: snappedRadius * Math.cos(snappedAngleRad), y: snappedRadius * Math.sin(snappedAngleRad) };
+                        const gridDist = distance(mouseDataPos, pos);
+                        if (gridDist < gridSnapThreshold) {
+                            if (!priorityGridCandidate || gridDist < distance(mouseDataPos, priorityGridCandidate.pos)) {
+                                priorityGridCandidate = { pos: pos, isGridPoint: true, type: 'polar_grid_snap' };
+                            }
+                        }
+                    }
+                });
+            }
+        } else { // Rectilinear grid
+            const dominantGridInterval = (lastGridState.alpha2 > lastGridState.alpha1 && lastGridState.interval2) ? lastGridState.interval2 : lastGridState.interval1;
+            if (dominantGridInterval > 0) {
+                const gridX = Math.round(mouseDataPos.x / dominantGridInterval) * dominantGridInterval;
+                const gridY = Math.round(mouseDataPos.y / dominantGridInterval) * dominantGridInterval;
+                const pos = { x: gridX, y: gridY };
+                const gridDist = distance(mouseDataPos, pos);
+                if (gridDist < gridSnapThreshold) {
+                    priorityGridCandidate = { pos: pos, isGridPoint: true, type: 'rect_grid_snap' };
+                }
+            }
+        }
+    }
+    
+    // If we found a priority grid candidate, use it immediately
+    if (priorityGridCandidate) {
+        const finalAngle = Math.atan2(priorityGridCandidate.pos.y - startPoint.y, priorityGridCandidate.pos.x - startPoint.x) || 0;
+        const snappedDistanceOutput = parseFloat(distance(startPoint, priorityGridCandidate.pos).toFixed(10));
+        
+        let gridToGridSquaredSum = null;
+        let finalGridInterval = null;
+        if (gridDisplayMode !== 'polar') {
+            const gridInterval = (lastGridState.alpha2 > lastGridState.alpha1 && lastGridState.interval2) ? lastGridState.interval2 : lastGridState.interval1;
+            const epsilon = gridInterval * GEOMETRY_CALCULATION_EPSILON;
+            const startIsOnGridX = Math.abs(startPoint.x / gridInterval - Math.round(startPoint.x / gridInterval)) < epsilon;
+            const startIsOnGridY = Math.abs(startPoint.y / gridInterval - Math.round(startPoint.y / gridInterval)) < epsilon;
+            if (startIsOnGridX && startIsOnGridY) {
+                const deltaX = priorityGridCandidate.pos.x - startPoint.x;
+                const deltaY = priorityGridCandidate.pos.y - startPoint.y;
+                const dx_grid = Math.round(deltaX / gridInterval);
+                const dy_grid = Math.round(deltaY / gridInterval);
+                gridToGridSquaredSum = dx_grid * dx_grid + dy_grid * dy_grid;
+                finalGridInterval = gridInterval;
+            }
+        }
+        
+        // For grid snaps, preserve the natural angle direction
+        const snappedTurnRaw = finalAngle - drawingContext.offsetAngleRad;
+        const rawTurn = rawAngle - drawingContext.offsetAngleRad;
+        const turnOptions = [snappedTurnRaw, snappedTurnRaw + 2 * Math.PI, snappedTurnRaw - 2 * Math.PI];
+        const finalAngleTurn = turnOptions.reduce((best, current) => {
+            return Math.abs(current - rawTurn) < Math.abs(best - rawTurn) ? current : best;
+        });
+        
+        return {
+            x: parseFloat(priorityGridCandidate.pos.x.toFixed(10)),
+            y: parseFloat(priorityGridCandidate.pos.y.toFixed(10)),
+            angle: finalAngle * (180 / Math.PI),
+            distance: snappedDistanceOutput,
+            snapped: true,
+            gridSnapped: true,
+            isGridPointSnap: true, // Flag for display logic
+            lengthSnapFactor: null,
+            angleSnapFactor: null,
+            angleTurn: finalAngleTurn,
+            gridToGridSquaredSum: gridToGridSquaredSum,
+            gridInterval: finalGridInterval
+        };
+    }
 
-    // --- Candidate Generation (no changes here) ---
-    // ... (code for generating grid and angle/distance candidates remains the same)
-    // --- (For brevity, this large unchanged block is omitted) ---
-    // The following is a placeholder for the large candidate-generation block which you should not change.
-    const searchExtentData = 1000; // Placeholder value
+    // 5. ORIGINAL LOGIC: Generate candidates for angle/distance snapping
+    const categorizedSnapCandidates = [];
+    const searchExtentData = 1000;
     let closestGridPoint = null;
     let minGridDistSq = Infinity;
     if (gridDisplayMode !== 'none' && lastGridState.interval1) {
@@ -521,8 +599,7 @@ function getSnappedPosition(startPoint, mouseScreenPos, shiftPressed) {
         categorizedSnapCandidates.push(closestAngleDistanceSnap);
     }
 
-
-    // 5. Final Selection
+    // 6. Final Selection (unchanged from original)
     if (categorizedSnapCandidates.length > 0) {
         const bestOverallCandidate = categorizedSnapCandidates.reduce((best, current) =>
             distanceSq(mouseDataPos, current.pos) < distanceSq(mouseDataPos, best.pos) ? current : best
@@ -548,23 +625,17 @@ function getSnappedPosition(startPoint, mouseScreenPos, shiftPressed) {
             }
         }
 
-        // --- START: MODIFIED SECTION ---
         let finalAngleTurn;
         if (bestOverallCandidate.angleTurn != null) {
-            // This candidate (from angle/distance snap) already has a defined turn. Use it.
             finalAngleTurn = bestOverallCandidate.angleTurn;
         } else {
-            // This is a grid snap. We calculate its turn but use the raw mouse angle to resolve direction ambiguity.
             const snappedTurnRaw = finalAngle - drawingContext.offsetAngleRad;
-            const rawTurn = rawAngle - drawingContext.offsetAngleRad; // User's intended turn from raw mouse position
-
-            // Find the version of the snapped turn (e.g., turn, turn+360, turn-360) that is closest to the raw turn.
+            const rawTurn = rawAngle - drawingContext.offsetAngleRad;
             const turnOptions = [snappedTurnRaw, snappedTurnRaw + 2 * Math.PI, snappedTurnRaw - 2 * Math.PI];
             finalAngleTurn = turnOptions.reduce((best, current) => {
                 return Math.abs(current - rawTurn) < Math.abs(best - rawTurn) ? current : best;
             });
         }
-        // --- END: MODIFIED SECTION ---
 
         return {
             x: parseFloat(bestOverallCandidate.pos.x.toFixed(10)),
@@ -573,15 +644,16 @@ function getSnappedPosition(startPoint, mouseScreenPos, shiftPressed) {
             distance: snappedDistanceOutput,
             snapped: true,
             gridSnapped: !!bestOverallCandidate.isGridPoint,
+            isGridPointSnap: !!bestOverallCandidate.isGridPoint,
             lengthSnapFactor: bestOverallCandidate.lengthSnapFactor || null,
             angleSnapFactor: bestOverallCandidate.angleSnapFactor || null,
-            angleTurn: finalAngleTurn, // Use the newly calculated turn
+            angleTurn: finalAngleTurn,
             gridToGridSquaredSum: gridToGridSquaredSum,
             gridInterval: finalGridInterval,
         };
     }
 
-    // 6. Fallback: If Shift is pressed but NO candidates were found.
+    // 7. Fallback: If Shift is pressed but NO candidates were found.
     const finalAngleRad = Math.atan2(mouseDataPos.y - startPoint.y, mouseDataPos.x - startPoint.x) || 0;
     return {
         x: mouseDataPos.x, y: mouseDataPos.y,
