@@ -34,6 +34,13 @@ export const AXIS_TICK_FONT_SIZE = 10;
 export const AXIS_LABEL_OFFSET = 8;
 export const AXIS_LABEL_PADDING = 20;
 export const AXIS_ARROW_SIZE = 12;
+export const INITIAL_POLAR_REL_RADIUS = 0.309;
+export const X_AXIS_LABEL_DISTANCE = 5;
+export const X_AXIS_LABEL_ARROW_DIST = 20;
+export const Y_AXIS_LABEL_DISTANCE = 10;
+export const Y_AXIS_LABEL_ARROW_DIST = 5;
+export const POLAR_THETA_LABEL_DISTANCE = 20;
+export const POLAR_THETA_LABEL_ARROW_DIST = 12;
 
 // --- DEFAULTS ---
 export const DEFAULT_CALIBRATION_VIEW_SCALE = 80.0;
@@ -61,8 +68,6 @@ export const REF_CIRCLE_MIN_TICK_SPACING = 8;
 export const REF_CIRCLE_THETA_LABEL_OFFSET = 30;
 export const GEOMETRY_INFO_TEXT_COLOR = 'rgba(255, 255, 255, 0.95)'; // White text for geometry info
 export const GEOMETRY_INFO_TEXT_COLOR_SNAPPED = 'rgba(240, 240, 130, 0.95)'; // Yellow when snapped
-export const Y_AXIS_LABEL_DISTANCE = 15
-export const Y_AXIS_LABEL_ARROW_DIST = 5
 
 // --- GRID CALCULATIONS ---
 export const GRID_TARGET_SPACING = 140;

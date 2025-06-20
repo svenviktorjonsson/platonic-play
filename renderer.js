@@ -39,8 +39,12 @@ import {
     AXIS_LABEL_OFFSET,
     AXIS_LABEL_PADDING,
     AXIS_ARROW_SIZE,
+    X_AXIS_LABEL_DISTANCE,
+    X_AXIS_LABEL_ARROW_DIST,
     Y_AXIS_LABEL_DISTANCE,
     Y_AXIS_LABEL_ARROW_DIST,
+    POLAR_THETA_LABEL_DISTANCE,
+    POLAR_THETA_LABEL_ARROW_DIST,
     
     // --- DEFAULTS ---
     DEFAULT_REFERENCE_DISTANCE,
@@ -257,84 +261,6 @@ export function getDynamicAngularIntervals(viewTransform, canvasWidth, canvasHei
 
 
 
-
-function calculateVisibleAngleRange(originScreen, screenRadius, canvasWidth, canvasHeight) {
-    const margin = AXIS_LABEL_PADDING + REF_TEXT_DISTANCE_LABEL_OFFSET_SCREEN;
-    const expandedRect = {
-        left: -margin,
-        right: canvasWidth + margin,
-        top: -margin,
-        bottom: canvasHeight + margin
-    };
-
-    if (originScreen.x + screenRadius < expandedRect.left || 
-        originScreen.x - screenRadius > expandedRect.right ||
-        originScreen.y + screenRadius < expandedRect.top || 
-        originScreen.y - screenRadius > expandedRect.bottom) {
-        return null;
-    }
-
-    const corners = [
-        { x: expandedRect.left, y: expandedRect.top },
-        { x: expandedRect.right, y: expandedRect.top },
-        { x: expandedRect.right, y: expandedRect.bottom },
-        { x: expandedRect.left, y: expandedRect.bottom }
-    ];
-
-    const visibleAngles = [];
-    
-    corners.forEach(corner => {
-        const dx = corner.x - originScreen.x;
-        const dy = corner.y - originScreen.y;
-        const angle = Math.atan2(-dy, dx);
-        const normalizedAngle = angle < 0 ? angle + 2 * Math.PI : angle;
-        visibleAngles.push(normalizedAngle * 180 / Math.PI);
-    });
-
-    const edges = [
-        { x1: expandedRect.left, y1: expandedRect.top, x2: expandedRect.right, y2: expandedRect.top },
-        { x1: expandedRect.right, y1: expandedRect.top, x2: expandedRect.right, y2: expandedRect.bottom },
-        { x1: expandedRect.right, y1: expandedRect.bottom, x2: expandedRect.left, y2: expandedRect.bottom },
-        { x1: expandedRect.left, y1: expandedRect.bottom, x2: expandedRect.left, y2: expandedRect.top }
-    ];
-
-    edges.forEach(edge => {
-        const intersections = getLineCircleIntersections(
-            edge.x1, edge.y1, edge.x2, edge.y2,
-            originScreen.x, originScreen.y, screenRadius
-        );
-        
-        intersections.forEach(point => {
-            const dx = point.x - originScreen.x;
-            const dy = point.y - originScreen.y;
-            const angle = Math.atan2(-dy, dx);
-            const normalizedAngle = angle < 0 ? angle + 2 * Math.PI : angle;
-            visibleAngles.push(normalizedAngle * 180 / Math.PI);
-        });
-    });
-
-    if (visibleAngles.length === 0) {
-        return { minAngle: 0, maxAngle: 360, isFullCircle: true };
-    }
-
-    const sortedAngles = visibleAngles.sort((a, b) => a - b);
-    const anglePadding = 20;
-    
-    let minAngle = sortedAngles[0] - anglePadding;
-    let maxAngle = sortedAngles[sortedAngles.length - 1] + anglePadding;
-    
-    const angleSpan = maxAngle - minAngle;
-    
-    if (angleSpan >= 300) {
-        return { minAngle: 0, maxAngle: 360, isFullCircle: true };
-    }
-    
-    minAngle = Math.max(0, minAngle);
-    maxAngle = Math.min(360, maxAngle);
-
-    return { minAngle, maxAngle, isFullCircle: false };
-}
-
 function getLineCircleIntersections(x1, y1, x2, y2, cx, cy, r) {
     const dx = x2 - x1;
     const dy = y2 - y1;
@@ -374,35 +300,162 @@ function getLineCircleIntersections(x1, y1, x2, y2, cx, cy, r) {
     return intersections;
 }
 
+function calculateVisibleAngleRange(originScreen, screenRadius, canvasWidth, canvasHeight) {
+    const rect = {
+        left: 0,
+        right: canvasWidth,
+        top: 0,
+        bottom: canvasHeight
+    };
+
+    // Check if circle is completely outside viewport
+    if (originScreen.x + screenRadius < rect.left || 
+        originScreen.x - screenRadius > rect.right ||
+        originScreen.y + screenRadius < rect.top || 
+        originScreen.y - screenRadius > rect.bottom) {
+        return null;
+    }
+
+    // Check if circle completely contains the viewport
+    const corners = [
+        { x: rect.left, y: rect.top },
+        { x: rect.right, y: rect.top },
+        { x: rect.right, y: rect.bottom },
+        { x: rect.left, y: rect.bottom }
+    ];
+
+    const allCornersInside = corners.every(corner => {
+        const distSq = (corner.x - originScreen.x) ** 2 + (corner.y - originScreen.y) ** 2;
+        return distSq <= screenRadius ** 2;
+    });
+
+    if (allCornersInside) {
+        return { minAngle: 0, maxAngle: 360, isFullCircle: true };
+    }
+
+    // Collect all intersection angles
+    const intersectionAngles = [];
+
+    // Add corner angles if corners are outside the circle
+    corners.forEach(corner => {
+        const distSq = (corner.x - originScreen.x) ** 2 + (corner.y - originScreen.y) ** 2;
+        if (distSq > screenRadius ** 2) {
+            const dx = corner.x - originScreen.x;
+            const dy = corner.y - originScreen.y;
+            const angle = Math.atan2(-dy, dx); // Note: -dy for screen coordinates
+            const normalizedAngle = angle < 0 ? angle + 2 * Math.PI : angle;
+            intersectionAngles.push(normalizedAngle * 180 / Math.PI);
+        }
+    });
+
+    // Add edge-circle intersections
+    const edges = [
+        { x1: rect.left, y1: rect.top, x2: rect.right, y2: rect.top },      // top
+        { x1: rect.right, y1: rect.top, x2: rect.right, y2: rect.bottom },  // right
+        { x1: rect.right, y1: rect.bottom, x2: rect.left, y2: rect.bottom }, // bottom
+        { x1: rect.left, y1: rect.bottom, x2: rect.left, y2: rect.top }     // left
+    ];
+
+    edges.forEach(edge => {
+        const intersections = getLineCircleIntersections(
+            edge.x1, edge.y1, edge.x2, edge.y2,
+            originScreen.x, originScreen.y, screenRadius
+        );
+        
+        intersections.forEach(point => {
+            const dx = point.x - originScreen.x;
+            const dy = point.y - originScreen.y;
+            const angle = Math.atan2(-dy, dx);
+            const normalizedAngle = angle < 0 ? angle + 2 * Math.PI : angle;
+            intersectionAngles.push(normalizedAngle * 180 / Math.PI);
+        });
+    });
+
+    if (intersectionAngles.length === 0) {
+        return { minAngle: 0, maxAngle: 360, isFullCircle: true };
+    }
+
+    // Remove duplicates and sort
+    const uniqueAngles = [...new Set(intersectionAngles.map(a => Math.round(a * 1e6) / 1e6))].sort((a, b) => a - b);
+
+    if (uniqueAngles.length < 2) {
+        return { minAngle: 0, maxAngle: 360, isFullCircle: true };
+    }
+
+    // Find the largest gap between consecutive angles to determine the invisible sector
+    let maxGap = 0;
+    let maxGapStartAngle = 0;
+    let maxGapEndAngle = 0;
+
+    for (let i = 0; i < uniqueAngles.length; i++) {
+        const currentAngle = uniqueAngles[i];
+        const nextAngle = uniqueAngles[(i + 1) % uniqueAngles.length];
+        
+        let gap;
+        if (i === uniqueAngles.length - 1) {
+            // Gap from last angle to first angle (wrapping around)
+            gap = (360 - currentAngle) + nextAngle;
+        } else {
+            gap = nextAngle - currentAngle;
+        }
+
+        if (gap > maxGap) {
+            maxGap = gap;
+            maxGapStartAngle = currentAngle;
+            maxGapEndAngle = nextAngle;
+        }
+    }
+
+    // The visible range is everything except the largest gap
+    if (maxGap > 180) {
+        // The invisible sector is larger than 180°, so we have a simple range
+        return { 
+            minAngle: maxGapEndAngle, 
+            maxAngle: maxGapStartAngle, 
+            isFullCircle: false 
+        };
+    } else {
+        // The invisible sector is smaller than 180°, so we have a wraparound range
+        return { 
+            minAngle: maxGapStartAngle, 
+            maxAngle: maxGapEndAngle + 360, 
+            isFullCircle: false 
+        };
+    }
+}
+
 function generateOptimizedAngleSequence(angleStep, minAngle, maxAngle) {
     const angles = [];
     
-    if (maxAngle > minAngle) {
-        const startAngle = Math.floor(minAngle / angleStep) * angleStep;
-        for (let angle = startAngle; angle <= maxAngle + angleStep; angle += angleStep) {
-            if (angle >= 0 && angle < 360) {
+    if (maxAngle > 360) {
+        // Handle wraparound case (e.g., minAngle = 345, maxAngle = 375 means 345-360 and 0-15)
+        const actualMaxAngle = maxAngle - 360;
+        
+        // Add angles from minAngle to 360
+        const startAngle1 = Math.floor(minAngle / angleStep) * angleStep;
+        for (let angle = startAngle1; angle < 360; angle += angleStep) {
+            if (angle >= minAngle) {
+                angles.push(angle);
+            }
+        }
+        
+        // Add angles from 0 to actualMaxAngle
+        for (let angle = 0; angle <= actualMaxAngle + angleStep; angle += angleStep) {
+            if (angle <= actualMaxAngle) {
                 angles.push(angle);
             }
         }
     } else {
-        const startAngle1 = Math.floor(minAngle / angleStep) * angleStep;
-        for (let angle = startAngle1; angle < 360; angle += angleStep) {
-            angles.push(angle);
-        }
-        
-        for (let angle = 0; angle <= maxAngle + angleStep; angle += angleStep) {
-            angles.push(angle);
+        // Normal case - no wraparound
+        const startAngle = Math.floor(minAngle / angleStep) * angleStep;
+        for (let angle = startAngle; angle <= maxAngle + angleStep; angle += angleStep) {
+            if (angle >= minAngle && angle <= maxAngle && angle >= 0 && angle < 360) {
+                angles.push(angle);
+            }
         }
     }
     
     return [...new Set(angles)].sort((a, b) => a - b);
-}
-
-function shouldUseOptimizedFiltering(level, screenRadius, canvasWidth, canvasHeight) {
-    const screenSeparation = screenRadius * (level.angle * Math.PI / 180);
-    const minCanvasDimension = Math.min(canvasWidth, canvasHeight);
-    
-    return screenSeparation < minCanvasDimension / 50 && level.angle < 5;
 }
 
 function isTickVisible(tickEnd, canvasWidth, canvasHeight) {
@@ -433,203 +486,230 @@ export function drawPolarReferenceCircle(ctx, htmlOverlay, updateHtmlLabel, radi
     ctx.save();
     ctx.strokeStyle = `rgba(${FEEDBACK_COLOR_DEFAULT.join(',')}, 1.0)`;
     ctx.lineWidth = FEEDBACK_LINE_VISUAL_WIDTH;
-    
+
     const transitionRadius = Math.min(canvasWidthCSS, canvasHeightCSS) * 400;
-    
-    if (screenRadius > transitionRadius) {
+    const isLineMode = screenRadius > transitionRadius;
+
+    let visibleAngleRange = null;
+
+    if (isLineMode) {
         const screenRect = { x: 0, y: 0, w: canvasWidthCSS, h: canvasHeightCSS };
         const circle = { x: originScreen.x, y: originScreen.y, r: screenRadius };
         const intersections = getCircleRectIntersections(circle, screenRect);
-        
+
         if (intersections.length >= 2) {
+            let p1 = intersections[0], p2 = intersections[1];
+            let maxDistSq = 0;
+            for (let i = 0; i < intersections.length; i++) {
+                for (let j = i + 1; j < intersections.length; j++) {
+                    const dSq = (intersections[i].x - intersections[j].x)**2 + (intersections[i].y - intersections[j].y)**2;
+                    if (dSq > maxDistSq) {
+                        maxDistSq = dSq;
+                        p1 = intersections[i];
+                        p2 = intersections[j];
+                    }
+                }
+            }
             ctx.beginPath();
-            ctx.moveTo(intersections[0].x, intersections[0].y);
-            ctx.lineTo(intersections[1].x, intersections[1].y);
+            ctx.moveTo(p1.x, p1.y);
+            ctx.lineTo(p2.x, p2.y);
             ctx.stroke();
+            const angle1 = (Math.atan2(originScreen.y - p1.y, p1.x - originScreen.x) * 180 / Math.PI + 360) % 360;
+            const angle2 = (Math.atan2(originScreen.y - p2.y, p2.x - originScreen.x) * 180 / Math.PI + 360) % 360;
+            visibleAngleRange = { minAngle: Math.min(angle1, angle2), maxAngle: Math.max(angle1, angle2), isFullCircle: false };
+            if (Math.abs(angle1 - angle2) > 180) {
+                 visibleAngleRange = { minAngle: Math.max(angle1, angle2), maxAngle: Math.min(angle1, angle2) + 360, isFullCircle: false };
+            }
         }
     } else {
         ctx.beginPath();
         ctx.arc(originScreen.x, originScreen.y, screenRadius, 0, 2 * Math.PI);
         ctx.stroke();
+        visibleAngleRange = calculateVisibleAngleRange(originScreen, screenRadius, canvasWidthCSS, canvasHeightCSS);
     }
     
     ctx.restore();
+    
+    if (!visibleAngleRange) return;
 
     const dataRadius = screenRadius / (viewTransform.scale / dpr);
     const drawnAngles = new Set();
 
     lastAngularGridState.forEach(level => {
-    const tickAlpha = level.alpha;
-    if (tickAlpha < 0.01) return;
+        const tickAlpha = level.alpha;
+        if (tickAlpha < 0.01) return;
 
-    const screenSeparation = screenRadius * (level.angle * Math.PI / 180);
-    
-    if (screenSeparation < REF_CIRCLE_MIN_TICK_SPACING * 0.5) return;
-
-    const finalColor = `rgba(${FEEDBACK_COLOR_DEFAULT.join(',')}, ${tickAlpha * 0.95})`;
-
-    const useOptimizedFiltering = shouldUseOptimizedFiltering(level, screenRadius, canvasWidthCSS, canvasHeightCSS);
-    let anglesToProcess;
-
-    if (useOptimizedFiltering) {
-        const visibleRange = calculateVisibleAngleRange(originScreen, screenRadius, canvasWidthCSS, canvasHeightCSS);
+        const screenSeparation = screenRadius * (level.angle * Math.PI / 180);
         
-        if (!visibleRange) {
-            return;
-        }
+        if (screenSeparation < REF_CIRCLE_MIN_TICK_SPACING * 0.5) return;
 
-        if (visibleRange.isFullCircle) {
+        const finalColor = `rgba(${FEEDBACK_COLOR_DEFAULT.join(',')}, ${tickAlpha * 0.95})`;
+
+        let anglesToProcess;
+        if (visibleAngleRange.isFullCircle) {
             anglesToProcess = [];
             for (let deg = 0; deg < 360; deg += level.angle) {
                 anglesToProcess.push(deg);
             }
         } else {
             anglesToProcess = generateOptimizedAngleSequence(
-                level.angle, 
-                visibleRange.minAngle, 
-                visibleRange.maxAngle
+                level.angle,
+                visibleAngleRange.minAngle,
+                visibleAngleRange.maxAngle
             );
         }
-    } else {
-        anglesToProcess = [];
-        for (let deg = 0; deg < 360; deg += level.angle) {
-            anglesToProcess.push(deg);
-        }
-    }
 
-    let ticksProcessed = 0;
-    const maxTicksToProcess = 1000;
+        anglesToProcess.forEach(deg => {
+            if (drawnAngles.has(deg) && deg !== 0) return;
+            if (deg === 0 && drawnAngles.has(deg) && level.angle !== 360) return;
 
-    anglesToProcess.forEach(deg => {
-        if (ticksProcessed >= maxTicksToProcess) return;
+            const angleRad = deg * Math.PI / 180;
+            let labelOptions = { textAlign: 'center', textBaseline: 'middle' };
+            let labelPos;
 
-        if (drawnAngles.has(deg) && deg !== 0) return;
-        if (deg === 0 && drawnAngles.has(deg) && level.angle !== 360) return;
+            ctx.save();
+            ctx.strokeStyle = finalColor;
+            ctx.lineWidth = GRID_LINEWIDTH;
 
-        const angleRad = deg * Math.PI / 180;
-        
-        const tickStart = { 
-            x: originScreen.x + (screenRadius - POINT_RADIUS) * Math.cos(angleRad), 
-            y: originScreen.y - (screenRadius - POINT_RADIUS) * Math.sin(angleRad) 
-        };
-        const tickEnd = { 
-            x: originScreen.x + (screenRadius + POINT_RADIUS) * Math.cos(angleRad), 
-            y: originScreen.y - (screenRadius + POINT_RADIUS) * Math.sin(angleRad) 
-        };
+            if (deg % 90 === 0 && deg < 360) {
+                const pointOnCircle = { 
+                    x: originScreen.x + screenRadius * Math.cos(angleRad), 
+                    y: originScreen.y - screenRadius * Math.sin(angleRad) 
+                };
 
-        if (!isTickVisible(tickEnd, canvasWidthCSS, canvasHeightCSS)) {
-            return;
-        }
+                let tickVec;
+                const tickLength = AXIS_TICK_SIZE * 1.5;
+                
+                switch (deg) {
+                    case 0:
+                        tickVec = { x: Math.SQRT1_2, y: -Math.SQRT1_2 };
+                        labelOptions = { textAlign: 'left', textBaseline: 'bottom' };
+                        break;
+                    case 90:
+                        tickVec = { x: Math.SQRT1_2, y: -Math.SQRT1_2 };
+                        labelOptions = { textAlign: 'left', textBaseline: 'bottom' };
+                        break;
+                    case 180:
+                        tickVec = { x: -Math.SQRT1_2, y: -Math.SQRT1_2 };
+                        labelOptions = { textAlign: 'right', textBaseline: 'bottom' };
+                        break;
+                    case 270:
+                        tickVec = { x: Math.SQRT1_2, y: Math.SQRT1_2 };
+                        labelOptions = { textAlign: 'left', textBaseline: 'top' };
+                        break;
+                }
+                
+                const tickEnd = {
+                    x: pointOnCircle.x + tickVec.x * tickLength,
+                    y: pointOnCircle.y + tickVec.y * tickLength
+                };
 
-        ticksProcessed++;
+                ctx.lineWidth = 1.5;
+                ctx.beginPath();
+                ctx.moveTo(pointOnCircle.x, pointOnCircle.y);
+                ctx.lineTo(tickEnd.x, tickEnd.y);
+                ctx.stroke();
+                
+                labelPos = { x: tickEnd.x, y: tickEnd.y };
 
-        ctx.save();
-        ctx.strokeStyle = finalColor;
-        ctx.lineWidth = GRID_LINEWIDTH;
-        ctx.beginPath();
-        ctx.moveTo(tickStart.x, tickStart.y);
-        ctx.lineTo(tickEnd.x, tickEnd.y);
-        ctx.stroke();
-        ctx.restore();
-
-        let angleText = '';
-        if (angleDisplayMode === 'degrees') {
-            let precision = Math.max(0, (level.angle.toString().split('.')[1] || '').length);
-            
-            if (level.angle < 1) {
-                precision = Math.max(precision, Math.ceil(-Math.log10(level.angle)) + 1);
+            } else {
+                const tickStart = { 
+                    x: originScreen.x + (screenRadius - POINT_RADIUS) * Math.cos(angleRad), 
+                    y: originScreen.y - (screenRadius - POINT_RADIUS) * Math.sin(angleRad) 
+                };
+                const tickEnd = { 
+                    x: originScreen.x + (screenRadius + POINT_RADIUS) * Math.cos(angleRad), 
+                    y: originScreen.y - (screenRadius + POINT_RADIUS) * Math.sin(angleRad) 
+                };
+                if (isTickVisible(tickEnd, canvasWidthCSS, canvasHeightCSS)) {
+                    ctx.beginPath();
+                    ctx.moveTo(tickStart.x, tickStart.y);
+                    ctx.lineTo(tickEnd.x, tickEnd.y);
+                    ctx.stroke();
+                }
+                labelPos = { 
+                    x: originScreen.x + (screenRadius + REF_TEXT_DISTANCE_LABEL_OFFSET_SCREEN) * Math.cos(angleRad), 
+                    y: originScreen.y - (screenRadius + REF_TEXT_DISTANCE_LABEL_OFFSET_SCREEN) * Math.sin(angleRad) 
+                };
             }
             
-            const formattedDeg = parseFloat(deg.toFixed(precision));
-            angleText = `${formattedDeg}^{\\circ}`;
-        } else {
-            if (deg === 0) {
-                angleText = ''; // Don't show 0
-            } else {
-                // Check if this is a fine tick spacing (5 degrees or smaller)
-                const isFineTick = level.angle <= 5;
+            ctx.restore();
+            
+            let angleText = '';
+            if (angleDisplayMode === 'degrees') {
+                let precision = Math.max(0, (level.angle.toString().split('.')[1] || '').length);
                 
-                if (isFineTick) {
-                    // Use raw radian values for fine ticks
-                    const radianValue = deg * Math.PI / 180;
+                if (level.angle < 1) {
+                    precision = Math.max(precision, Math.ceil(-Math.log10(level.angle)) + 1);
+                }
+                
+                const formattedDeg = parseFloat(deg.toFixed(precision));
+                angleText = `${formattedDeg}^{\\circ}`;
+            } else {
+                if (deg === 0 && angleDisplayMode === 'radians') {
+                    angleText = '0';
+                } else if (deg !== 0) {
+                    const isFineTick = level.angle <= 5;
                     
-                    // Calculate precision based on the angular interval (level.angle)
-                    // The smaller the interval, the more precision we need
-                    let precision;
-                    if (level.angle >= 1) {
-                        precision = 3; // 1 degree intervals: 0.017, 0.035, etc.
-                    } else if (level.angle >= 0.1) {
-                        precision = 4; // 0.1 degree intervals: 0.0017, 0.0035, etc.
-                    } else if (level.angle >= 0.01) {
-                        precision = 5; // 0.01 degree intervals: 0.00017, etc.
-                    } else if (level.angle >= 0.001) {
-                        precision = 6; // 0.001 degree intervals
-                    } else {
-                        precision = 7; // Even finer intervals
-                    }
-                    
-                    // Always use the full precision - don't remove trailing zeros for fine ticks
-                    let formattedRadian = radianValue.toFixed(precision);
-                    
-                    if (formattedRadian !== '0' && parseFloat(formattedRadian) !== 0) {
-                        angleText = formattedRadian;
-                    }
-                } else {
-                    // Use exact fractions of π for larger intervals
-                    const numerator = deg;
-                    const denominator = 180;
-                    
-                    // Simplify the fraction deg/180
-                    const gcdValue = gcd(numerator, denominator);
-                    const simplifiedNum = numerator / gcdValue;
-                    const simplifiedDen = denominator / gcdValue;
-                    
-                    if (simplifiedDen === 1) {
-                        // It's a whole number multiple of π
-                        if (simplifiedNum === 1) {
-                            angleText = '\\pi';
-                        } else if (simplifiedNum === -1) {
-                            angleText = '-\\pi';
+                    if (isFineTick) {
+                        const radianValue = deg * Math.PI / 180;
+                        
+                        let precision;
+                        if (level.angle >= 1) {
+                            precision = 3;
+                        } else if (level.angle >= 0.1) {
+                            precision = 4;
+                        } else if (level.angle >= 0.01) {
+                            precision = 5;
+                        } else if (level.angle >= 0.001) {
+                            precision = 6;
                         } else {
-                            angleText = `${simplifiedNum}\\pi`;
+                            precision = 7;
+                        }
+                        
+                        let formattedRadian = radianValue.toFixed(precision);
+                        
+                        if (parseFloat(formattedRadian) !== 0) {
+                            angleText = formattedRadian;
                         }
                     } else {
-                        // It's a proper fraction of π
-                        if (simplifiedNum === 1) {
-                            angleText = `\\frac{\\pi}{${simplifiedDen}}`;
-                        } else if (simplifiedNum === -1) {
-                            angleText = `-\\frac{\\pi}{${simplifiedDen}}`;
-                        } else if (simplifiedNum < 0) {
-                            angleText = `-\\frac{${Math.abs(simplifiedNum)}\\pi}{${simplifiedDen}}`;
+                        const numerator = deg;
+                        const denominator = 180;
+                        
+                        const gcdValue = gcd(numerator, denominator);
+                        const simplifiedNum = numerator / gcdValue;
+                        const simplifiedDen = denominator / gcdValue;
+                        
+                        if (simplifiedDen === 1) {
+                            if (simplifiedNum === 1) angleText = '\\pi';
+                            else if (simplifiedNum === -1) angleText = '-\\pi';
+                            else angleText = `${simplifiedNum}\\pi`;
                         } else {
-                            angleText = `\\frac{${simplifiedNum}\\pi}{${simplifiedDen}}`;
+                            if (simplifiedNum === 1) angleText = `\\frac{\\pi}{${simplifiedDen}}`;
+                            else if (simplifiedNum === -1) angleText = `-\\frac{\\pi}{${simplifiedDen}}`;
+                            else if (simplifiedNum < 0) angleText = `-\\frac{${Math.abs(simplifiedNum)}\\pi}{${simplifiedDen}}`;
+                            else angleText = `\\frac{${simplifiedNum}\\pi}{${simplifiedDen}}`;
                         }
                     }
                 }
             }
-        }
 
-        if (angleText) {
-            const labelRadius = screenRadius + REF_TEXT_DISTANCE_LABEL_OFFSET_SCREEN;
-            const labelPos = { 
-                x: originScreen.x + labelRadius * Math.cos(angleRad), 
-                y: originScreen.y - labelRadius * Math.sin(angleRad) 
-            };
-            const labelId = `circ-label-${deg}-${dataRadius.toExponential(15)}`;
-            updateHtmlLabel({ 
-                id: labelId, 
-                content: angleText, 
-                x: labelPos.x, 
-                y: labelPos.y, 
-                color: finalColor, 
-                fontSize: REF_TEXT_KATEX_FONT_SIZE, 
-                options: { textAlign: 'center', textBaseline: 'middle' } 
-            });
-        }
-        
-        drawnAngles.add(deg);
+            if (angleText) {
+                const labelId = `circ-label-${deg}-${dataRadius.toExponential(15)}`;
+                updateHtmlLabel({ 
+                    id: labelId, 
+                    content: angleText, 
+                    x: labelPos.x, 
+                    y: labelPos.y, 
+                    color: finalColor, 
+                    fontSize: REF_TEXT_KATEX_FONT_SIZE, 
+                    options: labelOptions
+                });
+            }
+            
+            drawnAngles.add(deg);
+        });
     });
-});
 
     const arrowColor = FEEDBACK_COLOR_DEFAULT;
     let stickyArrowAngle = -Infinity;
@@ -687,8 +767,19 @@ export function drawPolarReferenceCircle(ctx, htmlOverlay, updateHtmlLabel, radi
         ctx.fill();
         ctx.restore();
 
-        const labelRadius = screenRadius - REF_CIRCLE_THETA_LABEL_OFFSET;
-        const labelPos = { x: originScreen.x + labelRadius * Math.cos(arrowAngle), y: originScreen.y - labelRadius * Math.sin(arrowAngle) +2 };
+        let labelPos;
+        if (arrowAngle === 0) {
+            labelPos = {
+                x: tipPos.x - POLAR_THETA_LABEL_DISTANCE,
+                y: tipPos.y + POLAR_THETA_LABEL_ARROW_DIST + AXIS_ARROW_SIZE
+            };
+        } else {
+            const radialVecInward = { x: -Math.cos(arrowAngle), y: Math.sin(arrowAngle) };
+            labelPos = {
+                x: tipPos.x + radialVecInward.x * (POLAR_THETA_LABEL_ARROW_DIST + AXIS_ARROW_SIZE) + tangentVec.x * POLAR_THETA_LABEL_DISTANCE,
+                y: tipPos.y + radialVecInward.y * (POLAR_THETA_LABEL_ARROW_DIST + AXIS_ARROW_SIZE) + tangentVec.y * POLAR_THETA_LABEL_DISTANCE
+            };
+        }
         updateHtmlLabel({ id: `theta-label-sticky`, content: '\\theta', x: labelPos.x, y: labelPos.y, color: `rgba(${arrowColor.join(',')}, 1.0)`, fontSize: AXIS_NAME_FONT_SIZE, options: { textAlign: 'center', textBaseline: 'middle' } });
     }
 }
@@ -731,7 +822,6 @@ export function isCircleInView(circleX, circleY, circleRadius, canvasWidth, canv
     }
     return true;
 }
-
 
 function drawZeroTickAndTickLabel(ctx, origin, canvasWidth, canvasHeight, coordsDisplayMode, updateHtmlLabel) {
     const tickColor = `rgba(${AXIS_TICK_LABEL_COLOR.join(',')}, ${AXIS_TICK_LABEL_ALPHA})`;
@@ -789,134 +879,36 @@ export function drawAxes(ctx, htmlOverlay, state, dataToScreen, screenToData, la
         ctx.fill();
     };
 
-    ctx.lineWidth = AXIS_LINE_WIDTH;
-    ctx.strokeStyle = AXIS_COLOR;
-    ctx.fillStyle = AXIS_COLOR;
-
-    if (coordsDisplayMode === 'polar') {
-        const { interval1, interval2, alpha1, alpha2 } = lastGridState;
-        ctx.lineWidth = GRID_LINEWIDTH;
-        const topLeftData = screenToData({ x: 0, y: 0 });
-        const bottomRightData = screenToData({ x: canvasWidth, y: canvasHeight });
-        const maxRadiusData = Math.hypot(Math.max(Math.abs(topLeftData.x), Math.abs(bottomRightData.x)), Math.max(Math.abs(topLeftData.y), Math.abs(bottomRightData.y))) * 1.1;
+    // Unified tick drawing function for both modes
+    const drawTicksAndLabels = (interval1, alpha1, interval2, alpha2, isPolar) => {
+        const drawnXPositions = new Map();
+        const drawnYPositions = new Map();
         
-        // Check if each axis endpoint is visible before drawing arrow and label
-        const posXVisible = canvasWidth > origin.x;
-        const negXVisible = 0 < origin.x;
-        const posYVisible = 0 < origin.y;
-        const negYVisible = canvasHeight > origin.y;
-        
-        if (posXVisible) {
-            drawAxisWithArrows(origin.x, origin.y, canvasWidth, origin.y);
-            updateHtmlLabel({ id: 'axis-label-r-posx', content: 'r', x: canvasWidth - AXIS_ARROW_SIZE - 20, y: origin.y - 10, color: AXIS_COLOR, fontSize: AXIS_NAME_FONT_SIZE, options: { textAlign: 'center', textBaseline: 'bottom' } });
-        }
-        
-        if (negXVisible) {
-            drawAxisWithArrows(origin.x, origin.y, 0, origin.y);
-            updateHtmlLabel({ id: 'axis-label-r-negx', content: 'r', x: AXIS_ARROW_SIZE + 20, y: origin.y - 10, color: AXIS_COLOR, fontSize: AXIS_NAME_FONT_SIZE, options: { textAlign: 'center', textBaseline: 'bottom' } });
-        }
-        
-        if (posYVisible) {
-            drawAxisWithArrows(origin.x, origin.y, origin.x, 0);
-            updateHtmlLabel({ id: 'axis-label-r-posy', content: 'r', x: origin.x + 15, y: AXIS_ARROW_SIZE + 20, color: AXIS_COLOR, fontSize: AXIS_NAME_FONT_SIZE, options: { textAlign: 'left', textBaseline: 'middle' } });
-        }
-        
-        if (negYVisible) {
-            drawAxisWithArrows(origin.x, origin.y, origin.x, canvasHeight);
-            updateHtmlLabel({ id: 'axis-label-r-negy', content: 'r', x: origin.x + 15, y: canvasHeight - AXIS_ARROW_SIZE - 20, color: AXIS_COLOR, fontSize: AXIS_NAME_FONT_SIZE, options: { textAlign: 'left', textBaseline: 'middle' } });
-        }
-        
-        const drawTicksAndLabelsPolar = (interval1, alpha1, interval2, alpha2) => {
-            // Collect all tick positions and their maximum alpha
-            const drawnPositions = new Map();
+        const addTicksForInterval = (interval, alpha, isCoarser) => {
+            if (!interval || alpha < 0.01) return;
+            const topLeftData = screenToData({ x: 0, y: 0 });
+            const bottomRightData = screenToData({ x: canvasWidth, y: canvasHeight });
+            const localZeroThreshold = interval * 1e-6;
             
-            const addTicksForInterval = (interval, alpha) => {
-                if (!interval || alpha < 0.01) return;
-                const screenSpacing = interval * viewTransform.scale;
-                if (screenSpacing < 40) return;
+            if (isPolar) {
+                // For polar mode, calculate r-axis ticks
+                const maxRadiusData = Math.hypot(Math.max(Math.abs(topLeftData.x), Math.abs(bottomRightData.x)), Math.max(Math.abs(topLeftData.y), Math.abs(bottomRightData.y))) * 1.1;
                 
                 for (let r_data = interval; r_data <= maxRadiusData; r_data += interval) {
-                    if (Math.abs(r_data) < GEOMETRY_CALCULATION_EPSILON) continue;
-                    
-                    const currentAlpha = drawnPositions.get(r_data) || 0;
-                    drawnPositions.set(r_data, Math.max(currentAlpha, alpha));
+                    if (Math.abs(r_data) < localZeroThreshold) continue;
+                    const existing = drawnXPositions.get(r_data);
+                    if (!existing) {
+                        drawnXPositions.set(r_data, { alpha, isCoarser });
+                    } else if (isCoarser) {
+                        drawnXPositions.set(r_data, { alpha: Math.max(existing.alpha, alpha), isCoarser: true });
+                    } else {
+                        if (!existing.isCoarser) {
+                            drawnXPositions.set(r_data, { alpha: Math.max(existing.alpha, alpha), isCoarser: false });
+                        }
+                    }
                 }
-            };
-            
-            addTicksForInterval(interval1, alpha1);
-            addTicksForInterval(interval2, alpha2);
-            
-            // Draw all ticks with their maximum alpha
-            drawnPositions.forEach((maxAlpha, r_data) => {
-                const currentTickLabelColor = `rgba(${AXIS_TICK_LABEL_COLOR.join(',')}, ${AXIS_TICK_LABEL_ALPHA * maxAlpha})`;
-                ctx.strokeStyle = currentTickLabelColor;
-                let sigFigsForLabel = 0;
-                const screenSpacing = Math.max(
-                    interval1 ? interval1 * viewTransform.scale : 0,
-                    interval2 ? interval2 * viewTransform.scale : 0
-                );
-                if (screenSpacing > 80) sigFigsForLabel = 3; else if (screenSpacing > 40) sigFigsForLabel = 2; else if (screenSpacing > 20) sigFigsForLabel = 1; else sigFigsForLabel = 0;
-                
-                // Determine which interval this tick belongs to for decimal places
-                let sourceInterval = interval1;
-                if (interval2 && Math.abs(r_data % interval2) < Math.abs(r_data % interval1)) {
-                    sourceInterval = interval2;
-                }
-                const decimalPlacesInInterval = sourceInterval > 0 ? -Math.floor(Math.log10(sourceInterval)) : 0;
-                if (decimalPlacesInInterval > 0) {
-                    sigFigsForLabel = Math.max(sigFigsForLabel, decimalPlacesInInterval + 1);
-                }
-                
-                const labelText = formatNumber(r_data, sigFigsForLabel);
-                const stableIdPart = r_data.toExponential(15);
-                
-                const pX = dataToScreen({ x: r_data, y: 0 });
-                if (pX.x > -AXIS_LABEL_PADDING && pX.x < canvasWidth + AXIS_LABEL_PADDING) {
-                    ctx.beginPath(); ctx.moveTo(pX.x, origin.y - AXIS_TICK_SIZE / 2); ctx.lineTo(pX.x, origin.y + AXIS_TICK_SIZE / 2); ctx.stroke();
-                    updateHtmlLabel({ id: `polartick-r-x-${stableIdPart}`, content: labelText, x: pX.x, y: origin.y + AXIS_TICK_SIZE + AXIS_LABEL_OFFSET, color: currentTickLabelColor, fontSize: AXIS_TICK_FONT_SIZE, options: { textAlign: 'center', textBaseline: 'top' } });
-                }
-                const pNegX = dataToScreen({ x: -r_data, y: 0 });
-                if (pNegX.x > -AXIS_LABEL_PADDING && pNegX.x < canvasWidth + AXIS_LABEL_PADDING) {
-                    ctx.beginPath(); ctx.moveTo(pNegX.x, origin.y - AXIS_TICK_SIZE / 2); ctx.lineTo(pNegX.x, origin.y + AXIS_TICK_SIZE / 2); ctx.stroke();
-                    updateHtmlLabel({ id: `polartick-r-negx-${stableIdPart}`, content: labelText, x: pNegX.x, y: origin.y + AXIS_TICK_SIZE + AXIS_LABEL_OFFSET, color: currentTickLabelColor, fontSize: AXIS_TICK_FONT_SIZE, options: { textAlign: 'center', textBaseline: 'top' } });
-                }
-                const pPosY = dataToScreen({ x: 0, y: r_data });
-                if (pPosY.y > -AXIS_LABEL_PADDING && pPosY.y < canvasHeight + AXIS_LABEL_PADDING) {
-                    ctx.beginPath(); ctx.moveTo(origin.x - AXIS_TICK_SIZE / 2, pPosY.y); ctx.lineTo(origin.x + AXIS_TICK_SIZE / 2, pPosY.y); ctx.stroke();
-                    updateHtmlLabel({ id: `polartick-r-posy-${stableIdPart}`, content: labelText, x: origin.x - AXIS_TICK_SIZE - AXIS_LABEL_OFFSET, y: pPosY.y, color: currentTickLabelColor, fontSize: AXIS_TICK_FONT_SIZE, options: { textAlign: 'right', textBaseline: 'middle' } });
-                }
-                const pNegY = dataToScreen({ x: 0, y: -r_data });
-                if (pNegY.y > -AXIS_LABEL_PADDING && pNegY.y < canvasHeight + AXIS_LABEL_PADDING) {
-                    ctx.beginPath(); ctx.moveTo(origin.x - AXIS_TICK_SIZE / 2, pNegY.y); ctx.lineTo(origin.x + AXIS_TICK_SIZE / 2, pNegY.y); ctx.stroke();
-                    updateHtmlLabel({ id: `polartick-r-negy-${stableIdPart}`, content: labelText, x: origin.x - AXIS_TICK_SIZE - AXIS_LABEL_OFFSET, y: pNegY.y, color: currentTickLabelColor, fontSize: AXIS_TICK_FONT_SIZE, options: { textAlign: 'right', textBaseline: 'middle' } });
-                }
-            });
-        };
-        
-        drawTicksAndLabelsPolar(interval1, alpha1, interval2, alpha2);
-        drawPolarReferenceCircle(ctx, htmlOverlay, updateHtmlLabel, 0, 0, state, dataToScreen, lastAngularGridState);
-    } else {
-        if (origin.y > 0 && origin.y < canvasHeight) drawAxisWithArrows(0, origin.y, canvasWidth, origin.y);
-        if (origin.x > 0 && origin.x < canvasWidth) drawAxisWithArrows(origin.x, canvasHeight, origin.x, 0);
-        let xLabel = 'x';
-        let yLabel = 'y';
-        if (coordsDisplayMode === 'complex') {
-            xLabel = '\\mathrm{Re}';
-            yLabel = '\\mathrm{Im}';
-        }
-        updateHtmlLabel({ id: 'axis-label-x', content: xLabel, x: canvasWidth - AXIS_ARROW_SIZE - 20, y: origin.y - 10, color: AXIS_COLOR, fontSize: AXIS_NAME_FONT_SIZE, options: { textAlign: 'center', textBaseline: 'bottom' } });
-        updateHtmlLabel({ id: 'axis-label-y', content: yLabel, x: origin.x + 15, y: AXIS_ARROW_SIZE + 20, color: AXIS_COLOR, fontSize: AXIS_NAME_FONT_SIZE, options: { textAlign: 'left', textBaseline: 'middle' } });
-        
-        const drawTicksAndLabelsRectilinear = (interval1, alpha1, interval2, alpha2) => {
-            // Collect all tick positions and their maximum alpha
-            const drawnXPositions = new Map();
-            const drawnYPositions = new Map();
-            
-            const addTicksForInterval = (interval, alpha) => {
-                if (!interval || alpha < 0.01) return;
-                const topLeftData = screenToData({ x: 0, y: 0 });
-                const bottomRightData = screenToData({ x: canvasWidth, y: canvasHeight });
-                const localZeroThreshold = interval * 1e-6;
+            } else {
+                // For rectilinear mode, calculate x and y ticks
                 const startTickX = Math.floor(topLeftData.x / interval) * interval;
                 const endTickX = Math.ceil(bottomRightData.x / interval) * interval;
                 const startTickY = Math.floor(bottomRightData.y / interval) * interval;
@@ -924,59 +916,177 @@ export function drawAxes(ctx, htmlOverlay, state, dataToScreen, screenToData, la
                 
                 for (let x_data = startTickX; x_data <= endTickX; x_data += interval) {
                     if (Math.abs(x_data) < localZeroThreshold) continue;
-                    const currentAlpha = drawnXPositions.get(x_data) || 0;
-                    drawnXPositions.set(x_data, Math.max(currentAlpha, alpha));
+                    const existing = drawnXPositions.get(x_data);
+                    if (!existing) {
+                        drawnXPositions.set(x_data, { alpha, isCoarser });
+                    } else if (isCoarser) {
+                        drawnXPositions.set(x_data, { alpha: Math.max(existing.alpha, alpha), isCoarser: true });
+                    } else {
+                        if (!existing.isCoarser) {
+                            drawnXPositions.set(x_data, { alpha: Math.max(existing.alpha, alpha), isCoarser: false });
+                        }
+                    }
                 }
                 
                 for (let y_data = startTickY; y_data <= endTickY; y_data += interval) {
                     if (Math.abs(y_data) < localZeroThreshold) continue;
-                    const currentAlpha = drawnYPositions.get(y_data) || 0;
-                    drawnYPositions.set(y_data, Math.max(currentAlpha, alpha));
+                    const existing = drawnYPositions.get(y_data);
+                    if (!existing) {
+                        drawnYPositions.set(y_data, { alpha, isCoarser });
+                    } else if (isCoarser) {
+                        drawnYPositions.set(y_data, { alpha: Math.max(existing.alpha, alpha), isCoarser: true });
+                    } else {
+                        if (!existing.isCoarser) {
+                            drawnYPositions.set(y_data, { alpha: Math.max(existing.alpha, alpha), isCoarser: false });
+                        }
+                    }
                 }
-            };
+            }
+        };
+        
+        // Identical logic for determining coarser interval
+        const interval1IsCoarser = !interval2 || interval1 >= interval2;
+        
+        addTicksForInterval(interval1, alpha1, interval1IsCoarser);
+        addTicksForInterval(interval2, alpha2, !interval1IsCoarser);
+        
+        // Draw X-axis ticks (or r-axis ticks in polar mode)
+        drawnXPositions.forEach((tickInfo, x_data) => {
+            // Identical alpha logic - coarser ticks stay opaque, finer ticks fade
+            const effectiveAlpha = tickInfo.isCoarser ? 1.0 : tickInfo.alpha;
+            const tickLabelColor = `rgba(${AXIS_TICK_LABEL_COLOR.join(',')}, ${AXIS_TICK_LABEL_ALPHA * effectiveAlpha})`;
+            ctx.strokeStyle = tickLabelColor;
+            ctx.lineWidth = GRID_LINEWIDTH;
             
-            addTicksForInterval(interval1, alpha1);
-            addTicksForInterval(interval2, alpha2);
+            // Identical screen spacing and sig figs calculation
+            let sourceInterval = interval1;
+            if (interval2 && Math.abs(x_data % interval2) < Math.abs(x_data % interval1)) {
+                sourceInterval = interval2;
+            }
+            const screenSpacing = sourceInterval * viewTransform.scale;
+            let sigFigsForLabel = 0;
+            if (screenSpacing > 80) sigFigsForLabel = 3; 
+            else if (screenSpacing > 40) sigFigsForLabel = 2; 
+            else if (screenSpacing > 20) sigFigsForLabel = 1; 
+            else sigFigsForLabel = 0;
             
-            // Draw X ticks with maximum alpha
-            drawnXPositions.forEach((maxAlpha, x_data) => {
-                const tickLabelColor = `rgba(${AXIS_TICK_LABEL_COLOR.join(',')}, ${AXIS_TICK_LABEL_ALPHA * maxAlpha})`;
-                ctx.strokeStyle = tickLabelColor;
-                ctx.lineWidth = GRID_LINEWIDTH;
+            const decimalPlacesInInterval = sourceInterval > 0 ? -Math.floor(Math.log10(sourceInterval)) : 0;
+            if (decimalPlacesInInterval > 0) {
+                sigFigsForLabel = Math.max(sigFigsForLabel, decimalPlacesInInterval + 1);
+            }
+            
+            if (isPolar) {
+                // Polar r-axis ticks - draw on all 4 directions
+                const labelText = formatNumber(x_data, sigFigsForLabel);
+                const stableIdPart = x_data.toExponential(15);
                 
-                // Determine source interval for formatting
-                let sourceInterval = interval1;
-                if (interval2 && Math.abs(x_data % interval2) < Math.abs(x_data % interval1)) {
-                    sourceInterval = interval2;
-                }
-                const screenSpacing = sourceInterval * viewTransform.scale;
-                let sigFigsForLabel = 0;
-                if (screenSpacing > 80) sigFigsForLabel = 3; else if (screenSpacing > 40) sigFigsForLabel = 2; else if (screenSpacing > 20) sigFigsForLabel = 1; else sigFigsForLabel = 0;
-                const decimalPlacesInInterval = sourceInterval > 0 ? -Math.floor(Math.log10(sourceInterval)) : 0;
-                if (decimalPlacesInInterval > 0) {
-                    sigFigsForLabel = Math.max(sigFigsForLabel, decimalPlacesInInterval + 1);
+                const pX = dataToScreen({ x: x_data, y: 0 });
+                if (pX.x > -AXIS_LABEL_PADDING && pX.x < canvasWidth + AXIS_LABEL_PADDING) {
+                    ctx.beginPath(); 
+                    ctx.moveTo(pX.x, origin.y - AXIS_TICK_SIZE / 2); 
+                    ctx.lineTo(pX.x, origin.y + AXIS_TICK_SIZE / 2); 
+                    ctx.stroke();
+                    updateHtmlLabel({ 
+                        id: `polartick-r-x-${stableIdPart}`, 
+                        content: labelText, 
+                        x: pX.x, 
+                        y: origin.y + AXIS_TICK_SIZE + AXIS_LABEL_OFFSET, 
+                        color: tickLabelColor, 
+                        fontSize: AXIS_TICK_FONT_SIZE, 
+                        options: { textAlign: 'center', textBaseline: 'top' } 
+                    });
                 }
                 
+                const pNegX = dataToScreen({ x: -x_data, y: 0 });
+                if (pNegX.x > -AXIS_LABEL_PADDING && pNegX.x < canvasWidth + AXIS_LABEL_PADDING) {
+                    ctx.beginPath(); 
+                    ctx.moveTo(pNegX.x, origin.y - AXIS_TICK_SIZE / 2); 
+                    ctx.lineTo(pNegX.x, origin.y + AXIS_TICK_SIZE / 2); 
+                    ctx.stroke();
+                    updateHtmlLabel({ 
+                        id: `polartick-r-negx-${stableIdPart}`, 
+                        content: labelText, 
+                        x: pNegX.x, 
+                        y: origin.y + AXIS_TICK_SIZE + AXIS_LABEL_OFFSET, 
+                        color: tickLabelColor, 
+                        fontSize: AXIS_TICK_FONT_SIZE, 
+                        options: { textAlign: 'center', textBaseline: 'top' } 
+                    });
+                }
+                
+                const pPosY = dataToScreen({ x: 0, y: x_data });
+                if (pPosY.y > -AXIS_LABEL_PADDING && pPosY.y < canvasHeight + AXIS_LABEL_PADDING) {
+                    ctx.beginPath(); 
+                    ctx.moveTo(origin.x - AXIS_TICK_SIZE / 2, pPosY.y); 
+                    ctx.lineTo(origin.x + AXIS_TICK_SIZE / 2, pPosY.y); 
+                    ctx.stroke();
+                    updateHtmlLabel({ 
+                        id: `polartick-r-posy-${stableIdPart}`, 
+                        content: labelText, 
+                        x: origin.x - AXIS_TICK_SIZE - AXIS_LABEL_OFFSET, 
+                        y: pPosY.y, 
+                        color: tickLabelColor, 
+                        fontSize: AXIS_TICK_FONT_SIZE, 
+                        options: { textAlign: 'right', textBaseline: 'middle' } 
+                    });
+                }
+                
+                const pNegY = dataToScreen({ x: 0, y: -x_data });
+                if (pNegY.y > -AXIS_LABEL_PADDING && pNegY.y < canvasHeight + AXIS_LABEL_PADDING) {
+                    ctx.beginPath(); 
+                    ctx.moveTo(origin.x - AXIS_TICK_SIZE / 2, pNegY.y); 
+                    ctx.lineTo(origin.x + AXIS_TICK_SIZE / 2, pNegY.y); 
+                    ctx.stroke();
+                    updateHtmlLabel({ 
+                        id: `polartick-r-negy-${stableIdPart}`, 
+                        content: labelText, 
+                        x: origin.x - AXIS_TICK_SIZE - AXIS_LABEL_OFFSET, 
+                        y: pNegY.y, 
+                        color: tickLabelColor, 
+                        fontSize: AXIS_TICK_FONT_SIZE, 
+                        options: { textAlign: 'right', textBaseline: 'middle' } 
+                    });
+                }
+            } else {
+                // Rectilinear x-axis ticks
                 const screenX = dataToScreen({ x: x_data, y: 0 }).x;
-                ctx.beginPath(); ctx.moveTo(screenX, origin.y); ctx.lineTo(screenX, origin.y + AXIS_TICK_SIZE); ctx.stroke();
+                ctx.beginPath(); 
+                ctx.moveTo(screenX, origin.y); 
+                ctx.lineTo(screenX, origin.y + AXIS_TICK_SIZE); 
+                ctx.stroke();
+                
                 const getStableId = (prefix, num) => `${prefix}-${num.toExponential(15)}`;
-                updateHtmlLabel({ id: getStableId('tick-label-x', x_data), content: formatNumber(x_data, sigFigsForLabel), x: screenX, y: origin.y + AXIS_TICK_SIZE + AXIS_LABEL_OFFSET, color: tickLabelColor, fontSize: AXIS_TICK_FONT_SIZE, options: { textAlign: 'center', textBaseline: 'top' } });
-            });
-            
-            // Draw Y ticks with maximum alpha
-            drawnYPositions.forEach((maxAlpha, y_data) => {
-                const tickLabelColor = `rgba(${AXIS_TICK_LABEL_COLOR.join(',')}, ${AXIS_TICK_LABEL_ALPHA * maxAlpha})`;
+                updateHtmlLabel({ 
+                    id: getStableId('tick-label-x', x_data), 
+                    content: formatNumber(x_data, sigFigsForLabel), 
+                    x: screenX, 
+                    y: origin.y + AXIS_TICK_SIZE + AXIS_LABEL_OFFSET, 
+                    color: tickLabelColor, 
+                    fontSize: AXIS_TICK_FONT_SIZE, 
+                    options: { textAlign: 'center', textBaseline: 'top' } 
+                });
+            }
+        });
+        
+        // Draw Y-axis ticks (only for rectilinear mode)
+        if (!isPolar) {
+            drawnYPositions.forEach((tickInfo, y_data) => {
+                const effectiveAlpha = tickInfo.isCoarser ? 1.0 : tickInfo.alpha;
+                const tickLabelColor = `rgba(${AXIS_TICK_LABEL_COLOR.join(',')}, ${AXIS_TICK_LABEL_ALPHA * effectiveAlpha})`;
                 ctx.strokeStyle = tickLabelColor;
                 ctx.lineWidth = GRID_LINEWIDTH;
                 
-                // Determine source interval for formatting
                 let sourceInterval = interval1;
                 if (interval2 && Math.abs(y_data % interval2) < Math.abs(y_data % interval1)) {
                     sourceInterval = interval2;
                 }
                 const screenSpacing = sourceInterval * viewTransform.scale;
                 let sigFigsForLabel = 0;
-                if (screenSpacing > 80) sigFigsForLabel = 3; else if (screenSpacing > 40) sigFigsForLabel = 2; else if (screenSpacing > 20) sigFigsForLabel = 1; else sigFigsForLabel = 0;
+                if (screenSpacing > 80) sigFigsForLabel = 3; 
+                else if (screenSpacing > 40) sigFigsForLabel = 2; 
+                else if (screenSpacing > 20) sigFigsForLabel = 1; 
+                else sigFigsForLabel = 0;
+                
                 const decimalPlacesInInterval = sourceInterval > 0 ? -Math.floor(Math.log10(sourceInterval)) : 0;
                 if (decimalPlacesInInterval > 0) {
                     sigFigsForLabel = Math.max(sigFigsForLabel, decimalPlacesInInterval + 1);
@@ -989,13 +1099,125 @@ export function drawAxes(ctx, htmlOverlay, state, dataToScreen, screenToData, la
                     else if (yLabelContent === '-1') yLabelContent = '-i';
                     else yLabelContent += 'i';
                 }
-                ctx.beginPath(); ctx.moveTo(origin.x, screenY); ctx.lineTo(origin.x - AXIS_TICK_SIZE, screenY); ctx.stroke();
+                
+                ctx.beginPath(); 
+                ctx.moveTo(origin.x, screenY); 
+                ctx.lineTo(origin.x - AXIS_TICK_SIZE, screenY); 
+                ctx.stroke();
+                
                 const getStableId = (prefix, num) => `${prefix}-${num.toExponential(15)}`;
-                updateHtmlLabel({ id: getStableId('tick-label-y', y_data), content: yLabelContent, x: origin.x - AXIS_TICK_SIZE - AXIS_LABEL_OFFSET, y: screenY, color: tickLabelColor, fontSize: AXIS_TICK_FONT_SIZE, options: { textAlign: 'right', textBaseline: 'middle' } });
+                updateHtmlLabel({ 
+                    id: getStableId('tick-label-y', y_data), 
+                    content: yLabelContent, 
+                    x: origin.x - AXIS_TICK_SIZE - AXIS_LABEL_OFFSET, 
+                    y: screenY, 
+                    color: tickLabelColor, 
+                    fontSize: AXIS_TICK_FONT_SIZE, 
+                    options: { textAlign: 'right', textBaseline: 'middle' } 
+                });
             });
-        };
+        }
+    };
+
+    ctx.lineWidth = AXIS_LINE_WIDTH;
+    ctx.strokeStyle = AXIS_COLOR;
+    ctx.fillStyle = AXIS_COLOR;
+
+    if (coordsDisplayMode === 'polar') {
+        const { interval1, interval2, alpha1, alpha2 } = lastGridState;
+        ctx.lineWidth = GRID_LINEWIDTH;
         
-        drawTicksAndLabelsRectilinear(lastGridState.interval1, lastGridState.alpha1, lastGridState.interval2, lastGridState.alpha2);
+        const posXVisible = canvasWidth > origin.x;
+        const negXVisible = 0 < origin.x;
+        const posYVisible = 0 < origin.y;
+        const negYVisible = canvasHeight > origin.y;
+        
+        if (posXVisible) {
+            drawAxisWithArrows(origin.x, origin.y, canvasWidth, origin.y);
+            updateHtmlLabel({ 
+                id: 'axis-label-r-posx', 
+                content: 'r', 
+                x: canvasWidth - AXIS_ARROW_SIZE - X_AXIS_LABEL_ARROW_DIST, 
+                y: origin.y - X_AXIS_LABEL_DISTANCE, 
+                color: AXIS_COLOR, 
+                fontSize: AXIS_NAME_FONT_SIZE, 
+                options: { textAlign: 'center', textBaseline: 'bottom' } 
+            });
+        }
+        
+        if (negXVisible) {
+            drawAxisWithArrows(origin.x, origin.y, 0, origin.y);
+            updateHtmlLabel({ 
+                id: 'axis-label-r-negx', 
+                content: 'r', 
+                x: AXIS_ARROW_SIZE + X_AXIS_LABEL_ARROW_DIST, 
+                y: origin.y - X_AXIS_LABEL_DISTANCE, 
+                color: AXIS_COLOR, 
+                fontSize: AXIS_NAME_FONT_SIZE, 
+                options: { textAlign: 'center', textBaseline: 'bottom' } 
+            });
+        }
+        
+        if (posYVisible) {
+            drawAxisWithArrows(origin.x, origin.y, origin.x, 0);
+            updateHtmlLabel({ 
+                id: 'axis-label-r-posy', 
+                content: 'r', 
+                x: origin.x + Y_AXIS_LABEL_DISTANCE, 
+                y: AXIS_ARROW_SIZE + Y_AXIS_LABEL_ARROW_DIST, 
+                color: AXIS_COLOR, 
+                fontSize: AXIS_NAME_FONT_SIZE, 
+                options: { textAlign: 'left', textBaseline: 'middle' } 
+            });
+        }
+        
+        if (negYVisible) {
+            drawAxisWithArrows(origin.x, origin.y, origin.x, canvasHeight);
+            updateHtmlLabel({ 
+                id: 'axis-label-r-negy', 
+                content: 'r', 
+                x: origin.x + Y_AXIS_LABEL_DISTANCE, 
+                y: canvasHeight - AXIS_ARROW_SIZE - Y_AXIS_LABEL_ARROW_DIST, 
+                color: AXIS_COLOR, 
+                fontSize: AXIS_NAME_FONT_SIZE, 
+                options: { textAlign: 'left', textBaseline: 'middle' } 
+            });
+        }
+        
+        drawTicksAndLabels(interval1, alpha1, interval2, alpha2, true); // true = polar mode
+        drawPolarReferenceCircle(ctx, htmlOverlay, updateHtmlLabel, 0, 0, state, dataToScreen, lastAngularGridState);
+    } else {
+        if (origin.y > 0 && origin.y < canvasHeight) drawAxisWithArrows(0, origin.y, canvasWidth, origin.y);
+        if (origin.x > 0 && origin.x < canvasWidth) drawAxisWithArrows(origin.x, canvasHeight, origin.x, 0);
+        
+        let xLabel = 'x';
+        let yLabel = 'y';
+        if (coordsDisplayMode === 'complex') {
+            xLabel = '\\mathrm{Re}';
+            yLabel = '\\mathrm{Im}';
+        }
+        
+        updateHtmlLabel({ 
+            id: 'axis-label-x', 
+            content: xLabel, 
+            x: canvasWidth - AXIS_ARROW_SIZE - X_AXIS_LABEL_ARROW_DIST, 
+            y: origin.y - X_AXIS_LABEL_DISTANCE, 
+            color: AXIS_COLOR, 
+            fontSize: AXIS_NAME_FONT_SIZE, 
+            options: { textAlign: 'center', textBaseline: 'bottom' } 
+        });
+        
+        updateHtmlLabel({ 
+            id: 'axis-label-y', 
+            content: yLabel, 
+            x: origin.x + Y_AXIS_LABEL_DISTANCE, 
+            y: AXIS_ARROW_SIZE + Y_AXIS_LABEL_ARROW_DIST, 
+            color: AXIS_COLOR, 
+            fontSize: AXIS_NAME_FONT_SIZE, 
+            options: { textAlign: 'left', textBaseline: 'middle' } 
+        });
+        
+        drawTicksAndLabels(lastGridState.interval1, lastGridState.alpha1, lastGridState.interval2, lastGridState.alpha2, false); // false = rectilinear mode
     }
 
     drawZeroTickAndTickLabel(ctx, origin, canvasWidth, canvasHeight, coordsDisplayMode, updateHtmlLabel);
@@ -1017,6 +1239,7 @@ export function drawGrid(ctx, state, dataToScreen, screenToData, lastGridState, 
         const topLeftData = screenToData({ x: 0, y: 0 });
         const bottomRightData = screenToData({ x: canvasWidth, y: canvasHeight });
         const maxDataRadius = Math.hypot(Math.max(Math.abs(topLeftData.x), Math.abs(bottomRightData.x)), Math.max(Math.abs(topLeftData.y), Math.abs(bottomRightData.y)));
+        const transitionRadius = Math.min(canvasWidth, canvasHeight) * 400;
 
         const drawPolarCircles = (interval, alpha) => {
             if (!interval || alpha < 0.01) return;
@@ -1028,11 +1251,33 @@ export function drawGrid(ctx, state, dataToScreen, screenToData, lastGridState, 
             ctx.lineWidth = GRID_LINEWIDTH;
             for (let r = interval; r <= maxDataRadius; r += interval) {
                 const screenRadius = r * viewTransform.scale / dpr;
-                // Assuming isCircleInView function is available from elsewhere
-                if (isCircleInView(origin.x, origin.y, screenRadius, canvasWidth, canvasHeight)) {
-                    ctx.beginPath();
-                    ctx.arc(origin.x, origin.y, screenRadius, 0, 2 * Math.PI);
-                    ctx.stroke();
+                
+                if (screenRadius > transitionRadius) {
+                    const circle = { x: origin.x, y: origin.y, r: screenRadius };
+                    const intersections = getCircleRectIntersections(circle, {x: 0, y: 0, w: canvasWidth, h: canvasHeight});
+                    if (intersections.length >= 2) {
+                        let p1 = intersections[0], p2 = intersections[1], maxDistSq = 0;
+                        for (let i = 0; i < intersections.length; i++) {
+                            for (let j = i + 1; j < intersections.length; j++) {
+                                const dSq = (intersections[i].x - intersections[j].x)**2 + (intersections[i].y - intersections[j].y)**2;
+                                if (dSq > maxDistSq) {
+                                    maxDistSq = dSq;
+                                    p1 = intersections[i];
+                                    p2 = intersections[j];
+                                }
+                            }
+                        }
+                        ctx.beginPath();
+                        ctx.moveTo(p1.x, p1.y);
+                        ctx.lineTo(p2.x, p2.y);
+                        ctx.stroke();
+                    }
+                } else {
+                    if (isCircleInView(origin.x, origin.y, screenRadius, canvasWidth, canvasHeight)) {
+                        ctx.beginPath();
+                        ctx.arc(origin.x, origin.y, screenRadius, 0, 2 * Math.PI);
+                        ctx.stroke();
+                    }
                 }
             }
         };
@@ -1042,6 +1287,12 @@ export function drawGrid(ctx, state, dataToScreen, screenToData, lastGridState, 
 
         const screenRadiusForSpokes = maxDataRadius * viewTransform.scale / dpr;
         const drawnAngles = new Set();
+        
+        const visibleAngleRange = calculateVisibleAngleRange(origin, screenRadiusForSpokes, canvasWidth, canvasHeight);
+        if (!visibleAngleRange) {
+            ctx.restore();
+            return;
+        }
 
         lastAngularGridState.forEach(level => {
             if (level.alpha < 0.01) return;
@@ -1052,18 +1303,28 @@ export function drawGrid(ctx, state, dataToScreen, screenToData, lastGridState, 
             ctx.strokeStyle = `rgba(${GRID_COLOR.join(',')}, ${level.alpha * gridAlpha})`;
             ctx.lineWidth = GRID_LINEWIDTH;
 
-            for (let angle = 0; angle < 360; angle += level.angle) {
-                if (drawnAngles.has(angle)) continue;
+            let anglesToProcess;
+            if (visibleAngleRange.isFullCircle) {
+                anglesToProcess = [];
+                for (let deg = 0; deg < 360; deg += level.angle) {
+                    anglesToProcess.push(deg);
+                }
+            } else {
+                anglesToProcess = generateOptimizedAngleSequence(level.angle, visibleAngleRange.minAngle, visibleAngleRange.maxAngle);
+            }
+
+            anglesToProcess.forEach(angle => {
+                if (drawnAngles.has(angle)) return;
 
                 const rad = angle * Math.PI / 180;
                 const endX = origin.x + screenRadiusForSpokes * Math.cos(rad);
-                const endY = origin.y + screenRadiusForSpokes * Math.sin(rad);
+                const endY = origin.y - screenRadiusForSpokes * Math.sin(rad);
                 ctx.beginPath();
                 ctx.moveTo(origin.x, origin.y);
                 ctx.lineTo(endX, endY);
                 ctx.stroke();
                 drawnAngles.add(angle);
-            }
+            });
         });
 
     } else {
@@ -1101,6 +1362,25 @@ export function drawGrid(ctx, state, dataToScreen, screenToData, lastGridState, 
                 for (let x = startTickX; x <= endTickX; x += interval) {
                     for (let y = startTickY; y <= endTickY; y += interval) {
                         const screenPos = dataToScreen({ x: x, y: y });
+                        ctx.beginPath();
+                        ctx.arc(screenPos.x, screenPos.y, pointRadius, 0, 2 * Math.PI);
+                        ctx.fill();
+                    }
+                }
+            } else if (gridDisplayMode === 'triangular') {
+                ctx.fillStyle = gridElementColor;
+                const pointRadius = GRID_POINT_RADIUS * dpr;
+                const y_step = interval * Math.sqrt(3) / 2;
+                
+                const startTickY_tri = Math.floor(start.y / y_step) * y_step;
+                const endTickY_tri = Math.ceil(end.y / y_step) * y_step;
+                
+                for (let y = startTickY_tri; y <= endTickY_tri; y += y_step) {
+                    const rowIndex = Math.round(y / y_step);
+                    const x_offset = (rowIndex % 2 !== 0) ? interval / 2 : 0;
+                    for (let x = startTickX; x <= endTickX; x += interval) {
+                        const finalX = x + x_offset;
+                        const screenPos = dataToScreen({ x: finalX, y: y });
                         ctx.beginPath();
                         ctx.arc(screenPos.x, screenPos.y, pointRadius, 0, 2 * Math.PI);
                         ctx.fill();
@@ -2207,6 +2487,22 @@ export function drawGridIcon(ctx, rect, mode, isSelected) {
                     ctx.arc(x, y, 1.5, 0, 2 * Math.PI);
                 });
             });
+            ctx.fill();
+            break;
+        case 'triangular':
+            ctx.strokeRect(2, 2, 28, 28);
+            const triRadius = 8;
+            const triCenterX = 16;
+            const triCenterY = 16;
+            ctx.beginPath();
+            ctx.arc(triCenterX, triCenterY, 1.5, 0, 2 * Math.PI);
+            for (let i = 0; i < 6; i++) {
+                const angle = Math.PI / 3 * i;
+                const x = triCenterX + triRadius * Math.cos(angle);
+                const y = triCenterY + triRadius * Math.sin(angle);
+                ctx.moveTo(x, y);
+                ctx.arc(x, y, 1.5, 0, 2 * Math.PI);
+            }
             ctx.fill();
             break;
         case 'polar':
