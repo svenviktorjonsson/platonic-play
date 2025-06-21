@@ -10,20 +10,48 @@ import {
 } from './utils.js';
 
 import {
+    // Import the main THEMES object
+    THEMES,
+
+    // --- GEOMETRY & DRAWING ---
     POINT_RADIUS,
     CENTER_POINT_VISUAL_RADIUS,
     POINT_SELECT_RADIUS,
     LINE_WIDTH,
     DASH_PATTERN,
+
+    // --- INTERACTION ---
     DOUBLE_CLICK_MS,
     DRAG_THRESHOLD,
     EDGE_CLICK_THRESHOLD,
+    EDGE_ID_DELIMITER,
+    MIN_SCALE_VALUE,
+    ZOOM_FACTOR,
+    KEYBOARD_ZOOM_FACTOR,
+    GRID_SNAP_THRESHOLD_FACTOR,
+    BISECTOR_LINE_EXTENSION_FACTOR,
+    
+    // --- DEFAULTS ---
     DEFAULT_CALIBRATION_VIEW_SCALE,
     DEFAULT_REFERENCE_DISTANCE,
     DEFAULT_REFERENCE_ANGLE_RAD,
+
+    // --- UI & TOOLBAR ---
     UI_BUTTON_PADDING,
     UI_TOOLBAR_WIDTH,
     UI_SWATCH_SIZE,
+    MENU_BUTTON_WIDTH,
+    MENU_BUTTON_HEIGHT,
+    TOOLBAR_SECTION_GAP,
+    TOOL_BUTTON_HEIGHT,
+    DISPLAY_ICON_SIZE,
+    DISPLAY_ICON_PADDING,
+    TRANSFORM_ICON_SIZE,
+    TRANSFORM_ICON_PADDING,
+    TRANSFORM_ICON_Y_OFFSET,
+    COLOR_PALETTE_Y_OFFSET,
+
+    // --- SNAPPING PARAMETERS ---
     GEOMETRY_CALCULATION_EPSILON,
     SNAP_STICKINESS_RADIUS_SCREEN,
     LINE_TO_SNAP_RADIUS_SCREEN,
@@ -33,7 +61,42 @@ import {
     DRAW_SNAP_DISTANCE_FACTOR_LIMIT,
     MAX_HISTORY_SIZE,
     NINETY_DEG_ANGLE_SNAP_FRACTIONS,
-    SNAP_FACTORS
+    SNAP_FACTORS,
+
+    // --- ENUMS & LITERALS ---
+    POINT_TYPE_REGULAR,
+    TRANSFORM_TYPE_ROTATE_SCALE,
+    TRANSFORM_TYPE_ROTATE_ONLY,
+    TRANSFORM_TYPE_SCALE_ONLY,
+    COORDS_DISPLAY_MODE_REGULAR,
+    COORDS_DISPLAY_MODE_COMPLEX,
+    COORDS_DISPLAY_MODE_POLAR,
+    COORDS_DISPLAY_MODE_NONE,
+    GRID_DISPLAY_MODE_LINES,
+    GRID_DISPLAY_MODE_POINTS,
+    GRID_DISPLAY_MODE_TRIANGULAR,
+    GRID_DISPLAY_MODE_POLAR,
+    GRID_DISPLAY_MODE_NONE,
+    ANGLE_DISPLAY_MODE_DEGREES,
+    ANGLE_DISPLAY_MODE_RADIANS,
+    ANGLE_DISPLAY_MODE_NONE,
+    DISTANCE_DISPLAY_MODE_ON,
+    DISTANCE_DISPLAY_MODE_NONE,
+    KEY_SPACE,
+    KEY_ESCAPE,
+    KEY_DELETE,
+    KEY_BACKSPACE,
+    KEY_REPEAT,
+    KEY_ZOOM_IN,
+    KEY_ZOOM_IN_PLUS,
+    KEY_ZOOM_OUT,
+    KEY_COPY,
+    KEY_PASTE,
+    KEY_CUT,
+    KEY_UNDO,
+    KEY_REDO,
+    KEY_SELECT_ALL
+
 } from './constants.js';
 
 import {drawPoint, 
@@ -50,10 +113,6 @@ import {drawPoint,
         prepareReferenceElementsTexts,
         drawReferenceElementsGeometry
         } from './renderer.js';
-
-
-
-
 
 
 const canvas = document.getElementById('drawingCanvas');
@@ -98,7 +157,6 @@ let selectedPointIds = [];
 let selectedEdgeIds = [];
 let activeCenterId = null;
 let mousePos = { x: 0, y: 0 };
-let currentColor = '#ffffff';
 let frozenReference_D_g2g = null;
 let isToolbarExpanded = false;
 let isColorPaletteExpanded = false;
@@ -156,10 +214,8 @@ let lastAngularGridState = {
 };
 let labelsToKeepThisFrame = new Set();
 
-
-
-
-
+let activeThemeName = 'dark';
+let currentColor = THEMES[activeThemeName].point;
 
 
 
@@ -442,7 +498,6 @@ function getSnappedPosition(startPoint, mouseScreenPos, shiftPressed) {
         };
     }
 
-    const rawAngle = Math.atan2(mouseDataPos.y - startPoint.y, mouseDataPos.x - startPoint.x);
     const gridSnapThreshold = POINT_SELECT_RADIUS / viewTransform.scale * 0.8;
     let priorityGridCandidate = null;
     
@@ -525,6 +580,7 @@ function getSnappedPosition(startPoint, mouseScreenPos, shiftPressed) {
             }
         }
         
+        const rawAngle = Math.atan2(mouseDataPos.y - startPoint.y, mouseDataPos.x - startPoint.x);
         const snappedTurnRaw = finalAngle - drawingContext.offsetAngleRad;
         const rawTurn = rawAngle - drawingContext.offsetAngleRad;
         const turnOptions = [snappedTurnRaw, snappedTurnRaw + 2 * Math.PI, snappedTurnRaw - 2 * Math.PI];
@@ -549,9 +605,8 @@ function getSnappedPosition(startPoint, mouseScreenPos, shiftPressed) {
     }
 
     const categorizedSnapCandidates = [];
-    const searchExtentData = 1000;
     let closestGridPoint = null;
-    let minGridDistSq = Infinity;
+
     if (gridDisplayMode !== 'none' && lastGridState.interval1) {
         const dominantGridInterval = (lastGridState.alpha2 > lastGridState.alpha1 && lastGridState.interval2) ? lastGridState.interval2 : lastGridState.interval1;
         if (dominantGridInterval > 0) {
@@ -559,33 +614,17 @@ function getSnappedPosition(startPoint, mouseScreenPos, shiftPressed) {
                 const y_step = dominantGridInterval * Math.sqrt(3) / 2;
                 const i_f = (mouseDataPos.x / dominantGridInterval) - (mouseDataPos.y / (dominantGridInterval * Math.sqrt(3)));
                 const j_f = mouseDataPos.y / y_step;
-
-                let i_r = Math.round(i_f);
-                let j_r = Math.round(j_f);
-                let k_r = Math.round(-i_f - j_f);
-
-                const i_diff = Math.abs(i_r - i_f);
-                const j_diff = Math.abs(j_r - j_f);
-                const k_diff = Math.abs(k_r - (-i_f - j_f));
-
-                if (i_diff > j_diff && i_diff > k_diff) {
-                    i_r = -j_r - k_r;
-                } else if (j_diff > k_diff) {
-                    j_r = -i_r - k_r;
-                }
+                let i_r = Math.round(i_f), j_r = Math.round(j_f), k_r = Math.round(-i_f - j_f);
+                const i_diff = Math.abs(i_r - i_f), j_diff = Math.abs(j_r - j_f), k_diff = Math.abs(k_r - (-i_f - j_f));
+                if (i_diff > j_diff && i_diff > k_diff) { i_r = -j_r - k_r; } else if (j_diff > k_diff) { j_r = -i_r - k_r; }
                 const snappedX = i_r * dominantGridInterval + j_r * dominantGridInterval / 2;
                 const snappedY = j_r * y_step;
-                const pos = { x: snappedX, y: snappedY };
-                const dist = distanceSq(mouseDataPos, pos);
-
-                if (dist < minGridDistSq) {
-                    minGridDistSq = dist;
-                    closestGridPoint = { pos: pos, isGridPoint: true, type: 'triangular_grid_snap' };
-                }
+                closestGridPoint = { pos: { x: snappedX, y: snappedY }, isGridPoint: true, type: 'triangular_grid_snap' };
             } else if (gridDisplayMode === 'polar') {
                 const mouseAngleDeg = (Math.atan2(mouseDataPos.y, mouseDataPos.x) * 180 / Math.PI + 360) % 360;
                 const mouseRadius = Math.hypot(mouseDataPos.x, mouseDataPos.y);
                 const snappedRadius = Math.round(mouseRadius / dominantGridInterval) * dominantGridInterval;
+                let bestPolarDist = Infinity;
                 lastAngularGridState.forEach(level => {
                     if (level.alpha > 0.01 && level.angle > 0) {
                         const angularInterval = level.angle;
@@ -593,33 +632,38 @@ function getSnappedPosition(startPoint, mouseScreenPos, shiftPressed) {
                         const snappedAngleRad = snappedAngleDeg * Math.PI / 180;
                         const pos = { x: snappedRadius * Math.cos(snappedAngleRad), y: snappedRadius * Math.sin(snappedAngleRad) };
                         const dist = distanceSq(mouseDataPos, pos);
-                        if (dist < minGridDistSq) {
-                            minGridDistSq = dist;
-                            closestGridPoint = { pos: pos, isGridPoint: true, type: 'polar_grid_snap' };
+                        if (dist < bestPolarDist) {
+                            bestPolarDist = dist;
+                            closestGridPoint = { pos, isGridPoint: true, type: 'polar_grid_snap' };
                         }
                     }
                 });
             } else {
-                const startX = Math.floor((mouseDataPos.x - searchExtentData) / dominantGridInterval) * dominantGridInterval;
-                const endX = Math.ceil((mouseDataPos.x + searchExtentData) / dominantGridInterval) * dominantGridInterval;
-                const startY = Math.floor((mouseDataPos.y - searchExtentData) / dominantGridInterval) * dominantGridInterval;
-                const endY = Math.ceil((mouseDataPos.y + searchExtentData) / dominantGridInterval) * dominantGridInterval;
-                for (let x = startX; x <= endX; x += dominantGridInterval) {
-                    for (let y = startY; y <= endY; y += dominantGridInterval) {
-                        const pos = { x: x, y: y };
-                        const dist = distanceSq(mouseDataPos, pos);
-                        if (dist < minGridDistSq) {
-                            minGridDistSq = dist;
-                            closestGridPoint = { pos: pos, isGridPoint: true, type: 'rect_grid_snap' };
-                        }
+                const baseX = Math.floor(mouseDataPos.x / dominantGridInterval) * dominantGridInterval;
+                const baseY = Math.floor(mouseDataPos.y / dominantGridInterval) * dominantGridInterval;
+                const candidates = [
+                    { x: baseX, y: baseY },
+                    { x: baseX + dominantGridInterval, y: baseY },
+                    { x: baseX, y: baseY + dominantGridInterval },
+                    { x: baseX + dominantGridInterval, y: baseY + dominantGridInterval }
+                ];
+                let bestDistSq = Infinity;
+                let bestPos = null;
+                candidates.forEach(pos => {
+                    const dist = distanceSq(mouseDataPos, pos);
+                    if (dist < bestDistSq) {
+                        bestDistSq = dist;
+                        bestPos = pos;
                     }
-                }
+                });
+                closestGridPoint = { pos: bestPos, isGridPoint: true, type: 'rect_grid_snap' };
             }
         }
     }
     if (closestGridPoint) {
         categorizedSnapCandidates.push(closestGridPoint);
     }
+    
     let closestAngleDistanceSnap = null;
     let minAngleDistSnapSq = Infinity;
     const referenceAngleForSnapping = drawingContext.currentSegmentReferenceA_for_display;
@@ -683,6 +727,7 @@ function getSnappedPosition(startPoint, mouseScreenPos, shiftPressed) {
         if (bestOverallCandidate.angleTurn != null) {
             finalAngleTurn = bestOverallCandidate.angleTurn;
         } else {
+            const rawAngle = Math.atan2(mouseDataPos.y - startPoint.y, mouseDataPos.x - startPoint.x);
             const snappedTurnRaw = finalAngle - drawingContext.offsetAngleRad;
             const rawTurn = rawAngle - drawingContext.offsetAngleRad;
             const turnOptions = [snappedTurnRaw, snappedTurnRaw + 2 * Math.PI, snappedTurnRaw - 2 * Math.PI];
@@ -733,8 +778,8 @@ function getDragSnapPosition(dragOrigin, mouseDataPos) {
             const midPoint = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
             const perpVec = { x: -(p2.y - p1.y), y: p2.x - p1.x };
             if (Math.hypot(perpVec.x, perpVec.y) < GEOMETRY_CALCULATION_EPSILON) continue;
-            const bisectorP1 = { x: midPoint.x - perpVec.x * 100000, y: midPoint.y - perpVec.y * 100000 };
-            const bisectorP2 = { x: midPoint.x + perpVec.x * 100000, y: midPoint.y + perpVec.y * 100000 };
+            const bisectorP1 = { x: midPoint.x - perpVec.x * BISECTOR_LINE_EXTENSION_FACTOR, y: midPoint.y - perpVec.y * BISECTOR_LINE_EXTENSION_FACTOR };
+            const bisectorP2 = { x: midPoint.x + perpVec.x * BISECTOR_LINE_EXTENSION_FACTOR, y: midPoint.y + perpVec.y * BISECTOR_LINE_EXTENSION_FACTOR };
             const closestPointOnLine = getClosestPointOnLineSegment(mouseDataPos, bisectorP1, bisectorP2);
             if (closestPointOnLine.distance < minDistToBisector) {
                 minDistToBisector = closestPointOnLine.distance;
@@ -789,11 +834,11 @@ function getDragSnapPosition(dragOrigin, mouseDataPos) {
                 const startY = Math.floor(bottomRightData.y / dominantGridInterval) * dominantGridInterval;
                 const endY = Math.ceil(topLeftData.y / dominantGridInterval) * dominantGridInterval;
                 for (let x = startX; x <= endX; x += dominantGridInterval) {
-                    const intersection = getLineLineIntersection(bestBisector, { p1: { x: x, y: -100000 }, p2: { x: x, y: 100000 } });
+                    const intersection = getLineLineIntersection(bestBisector, { p1: { x: x, y: -BISECTOR_LINE_EXTENSION_FACTOR }, p2: { x: x, y: BISECTOR_LINE_EXTENSION_FACTOR } });
                     if (intersection) secondOrderCandidates.push(intersection);
                 }
                 for (let y = startY; y <= endY; y += dominantGridInterval) {
-                    const intersection = getLineLineIntersection(bestBisector, { p1: { x: -100000, y: y }, p2: { x: 100000, y: y } });
+                    const intersection = getLineLineIntersection(bestBisector, { p1: { x: -BISECTOR_LINE_EXTENSION_FACTOR, y: y }, p2: { x: BISECTOR_LINE_EXTENSION_FACTOR, y: y } });
                     if (intersection) secondOrderCandidates.push(intersection);
                 }
             }
@@ -879,14 +924,99 @@ function getDragSnapPosition(dragOrigin, mouseDataPos) {
     return { point: mouseDataPos, snapped: false };
 }
 
+
 function initializeCanvasUI() {
     canvasUI.toolbarButton = {
         id: "toolbar-button",
         x: UI_BUTTON_PADDING,
         y: UI_BUTTON_PADDING,
-        width: 36,
-        height: 30,
+        width: MENU_BUTTON_WIDTH,
+        height: MENU_BUTTON_HEIGHT,
         type: "menuButton"
+    };
+}
+
+
+
+function buildTransformPanelUI() {
+    canvasUI.transformIcons = [];
+    const panelX = UI_TOOLBAR_WIDTH + UI_BUTTON_PADDING;
+    const iconY = canvasUI.transformToolButton.y;
+    const iconSize = TRANSFORM_ICON_SIZE;
+    const iconPadding = TRANSFORM_ICON_PADDING;
+    const transformTypes = [TRANSFORM_TYPE_ROTATE_SCALE, TRANSFORM_TYPE_ROTATE_ONLY, TRANSFORM_TYPE_SCALE_ONLY];
+
+    transformTypes.forEach((type, index) => {
+        canvasUI.transformIcons.push({
+            id: `transform-icon-${type}`,
+            type: type,
+            x: panelX + index * (iconSize + iconPadding),
+            y: iconY + TRANSFORM_ICON_Y_OFFSET, // Align vertically with the T button
+            width: iconSize,
+            height: iconSize
+        });
+    });
+}
+
+function buildDisplayPanelUI() {
+    canvasUI.displayIcons = [];
+    if (!canvasUI.displayToolButton) return;
+
+    const panelX = UI_TOOLBAR_WIDTH + UI_BUTTON_PADDING;
+    const iconY = canvasUI.displayToolButton.y;
+    const iconSize = DISPLAY_ICON_SIZE;
+    const iconPadding = DISPLAY_ICON_PADDING;
+
+    const iconGroups = ['coords', 'grid', 'angles', 'distances'];
+
+    iconGroups.forEach((group, index) => {
+        canvasUI.displayIcons.push({
+            id: `display-icon-${group}`,
+            group: group,
+            x: panelX + index * (iconSize + iconPadding),
+            y: iconY,
+            width: iconSize,
+            height: iconSize
+        });
+    });
+}
+
+function buildColorPaletteUI() {
+    canvasUI.colorSwatches = [];
+    const paletteY = canvasUI.colorToolButton.y;
+
+    const removeBtnX = UI_TOOLBAR_WIDTH + UI_BUTTON_PADDING;
+    canvasUI.removeColorButton = {
+        id: "remove-color-button",
+        type: "button",
+        x: removeBtnX,
+        y: paletteY + COLOR_PALETTE_Y_OFFSET,
+        width: UI_SWATCH_SIZE,
+        height: UI_SWATCH_SIZE,
+    };
+
+    const swatchesX = removeBtnX + UI_SWATCH_SIZE + UI_BUTTON_PADDING;
+    recentColors.forEach((color, index) => {
+        canvasUI.colorSwatches.push({
+            id: `swatch-${color}-${index}`,
+            type: "colorSwatch",
+            x: swatchesX + index * (UI_SWATCH_SIZE + UI_BUTTON_PADDING),
+            y: paletteY + COLOR_PALETTE_Y_OFFSET,
+            width: UI_SWATCH_SIZE,
+            height: UI_SWATCH_SIZE,
+            index: index,
+            color: color
+        });
+    });
+
+    const addButtonX = swatchesX + recentColors.length * (UI_SWATCH_SIZE + UI_BUTTON_PADDING);
+    canvasUI.addColorButton = {
+        id: "add-color-button",
+        type: "button",
+        x: addButtonX,
+        y: paletteY + COLOR_PALETTE_Y_OFFSET,
+        width: UI_SWATCH_SIZE,
+        height: UI_SWATCH_SIZE,
     };
 }
 
@@ -905,9 +1035,9 @@ function buildMainToolbarUI() {
         id: "color-tool-button",
         type: "toolButton",
         x: UI_BUTTON_PADDING,
-        y: canvasUI.toolbarButton.y + canvasUI.toolbarButton.height + 20,
+        y: canvasUI.toolbarButton.y + canvasUI.toolbarButton.height + TOOLBAR_SECTION_GAP,
         width: UI_TOOLBAR_WIDTH - (2 * UI_BUTTON_PADDING),
-        height: 40,
+        height: TOOL_BUTTON_HEIGHT,
     };
     
     canvasUI.transformToolButton = {
@@ -916,7 +1046,7 @@ function buildMainToolbarUI() {
         x: UI_BUTTON_PADDING,
         y: canvasUI.colorToolButton.y + canvasUI.colorToolButton.height + UI_BUTTON_PADDING,
         width: UI_TOOLBAR_WIDTH - (2 * UI_BUTTON_PADDING),
-        height: 40,
+        height: TOOL_BUTTON_HEIGHT,
     };
 
     canvasUI.displayToolButton = {
@@ -925,90 +1055,17 @@ function buildMainToolbarUI() {
         x: UI_BUTTON_PADDING,
         y: canvasUI.transformToolButton.y + canvasUI.transformToolButton.height + UI_BUTTON_PADDING,
         width: UI_TOOLBAR_WIDTH - (2 * UI_BUTTON_PADDING),
-        height: 40,
-    };
-}
-
-function buildDisplayPanelUI() {
-    canvasUI.displayIcons = [];
-    if (!canvasUI.displayToolButton) return;
-
-    const panelX = UI_TOOLBAR_WIDTH + UI_BUTTON_PADDING;
-    const iconY = canvasUI.displayToolButton.y;
-    const iconSize = 40;
-    const iconPadding = 15;
-
-    const iconGroups = ['coords', 'grid', 'angles', 'distances'];
-
-    iconGroups.forEach((group, index) => {
-        canvasUI.displayIcons.push({
-            id: `display-icon-${group}`,
-            group: group,
-            x: panelX + index * (iconSize + iconPadding),
-            y: iconY,
-            width: iconSize,
-            height: iconSize
-        });
-    });
-}
-
-function buildTransformPanelUI() {
-    canvasUI.transformIcons = [];
-    const panelX = UI_TOOLBAR_WIDTH + UI_BUTTON_PADDING;
-    const iconY = canvasUI.transformToolButton.y;
-    const iconSize = 30;
-    const iconPadding = 15;
-    const transformTypes = ['center_rotate_scale', 'center_rotate_only', 'center_scale_only'];
-
-    transformTypes.forEach((type, index) => {
-        canvasUI.transformIcons.push({
-            id: `transform-icon-${type}`,
-            type: type,
-            x: panelX + index * (iconSize + iconPadding),
-            y: iconY + 5, // Align vertically with the T button
-            width: iconSize,
-            height: iconSize
-        });
-    });
-}
-
-function buildColorPaletteUI() {
-    canvasUI.colorSwatches = [];
-    // This is the corrected line: The Y position is now based on the color tool button
-    const paletteY = canvasUI.colorToolButton.y;
-
-    const removeBtnX = UI_TOOLBAR_WIDTH + UI_BUTTON_PADDING;
-    canvasUI.removeColorButton = {
-        id: "remove-color-button",
-        type: "button",
-        x: removeBtnX,
-        y: paletteY + 5, // Add a small offset to center it with the button
-        width: UI_SWATCH_SIZE,
-        height: UI_SWATCH_SIZE,
+        height: TOOL_BUTTON_HEIGHT,
     };
 
-    const swatchesX = removeBtnX + UI_SWATCH_SIZE + UI_BUTTON_PADDING;
-    recentColors.forEach((color, index) => {
-        canvasUI.colorSwatches.push({
-            id: `swatch-${color}-${index}`,
-            type: "colorSwatch",
-            x: swatchesX + index * (UI_SWATCH_SIZE + UI_BUTTON_PADDING),
-            y: paletteY + 5, // Add a small offset to center it with the button
-            width: UI_SWATCH_SIZE,
-            height: UI_SWATCH_SIZE,
-            index: index,
-            color: color
-        });
-    });
-
-    const addButtonX = swatchesX + recentColors.length * (UI_SWATCH_SIZE + UI_BUTTON_PADDING);
-    canvasUI.addColorButton = {
-        id: "add-color-button",
-        type: "button",
-        x: addButtonX,
-        y: paletteY + 5, // Add a small offset to center it with the button
-        width: UI_SWATCH_SIZE,
-        height: UI_SWATCH_SIZE,
+    // Add theme toggle button
+    canvasUI.themeToggleButton = {
+        id: "theme-toggle-button",
+        type: "toolButton",
+        x: UI_BUTTON_PADDING,
+        y: canvasUI.displayToolButton.y + canvasUI.displayToolButton.height + UI_BUTTON_PADDING,
+        width: UI_TOOLBAR_WIDTH - (2 * UI_BUTTON_PADDING),
+        height: TOOL_BUTTON_HEIGHT,
     };
 }
 
@@ -1056,6 +1113,22 @@ function handleCanvasUIClick(screenPos) {
             screenPos.y >= dtb.y && screenPos.y <= dtb.y + dtb.height) {
             isDisplayPanelExpanded = !isDisplayPanelExpanded;
             if (isDisplayPanelExpanded) buildDisplayPanelUI();
+            return true;
+        }
+
+        // Add theme toggle button click handler
+        const themeBtn = canvasUI.themeToggleButton;
+        if (themeBtn && screenPos.x >= themeBtn.x && screenPos.x <= themeBtn.x + themeBtn.width &&
+            screenPos.y >= themeBtn.y && screenPos.y <= themeBtn.y + themeBtn.height) {
+            // Toggle between light and dark themes
+            activeThemeName = activeThemeName === 'dark' ? 'light' : 'dark';
+            
+            // Update the current color to match the new theme
+            currentColor = THEMES[activeThemeName].point;
+            
+            // Update color picker to match new theme
+            colorPicker.value = currentColor;
+            
             return true;
         }
     }
@@ -1117,22 +1190,22 @@ function handleCanvasUIClick(screenPos) {
 
                 switch (icon.group) {
                     case 'coords':
-                        const coordsModes = ['none', 'regular', 'complex', 'polar'];
+                        const coordsModes = [COORDS_DISPLAY_MODE_NONE, COORDS_DISPLAY_MODE_REGULAR, COORDS_DISPLAY_MODE_COMPLEX, COORDS_DISPLAY_MODE_POLAR];
                         coordsDisplayMode = coordsModes[(coordsModes.indexOf(coordsDisplayMode) + 1) % coordsModes.length];
                         break;
                     case 'grid':
-                        const gridModes = ['lines', 'points', 'triangular', 'polar', 'none'];
+                        const gridModes = [GRID_DISPLAY_MODE_LINES, GRID_DISPLAY_MODE_POINTS, GRID_DISPLAY_MODE_TRIANGULAR, GRID_DISPLAY_MODE_POLAR, GRID_DISPLAY_MODE_NONE];
                         gridDisplayMode = gridModes[(gridModes.indexOf(gridDisplayMode) + 1) % gridModes.length];
                         break;
                     case 'angles':
-                        const angleModes = ['degrees', 'radians', 'none'];
+                        const angleModes = [ANGLE_DISPLAY_MODE_DEGREES, ANGLE_DISPLAY_MODE_RADIANS, ANGLE_DISPLAY_MODE_NONE];
                         angleDisplayMode = angleModes[(angleModes.indexOf(angleDisplayMode) + 1) % angleModes.length];
-                        showAngles = angleDisplayMode !== 'none';
+                        showAngles = angleDisplayMode !== ANGLE_DISPLAY_MODE_NONE;
                         break;
                     case 'distances':
-                        const distModes = ['on', 'none'];
+                        const distModes = [DISTANCE_DISPLAY_MODE_ON, DISTANCE_DISPLAY_MODE_NONE];
                         distanceDisplayMode = distModes[(distModes.indexOf(distanceDisplayMode) + 1) % distModes.length];
-                        showDistances = distanceDisplayMode === 'on';
+                        showDistances = distanceDisplayMode === DISTANCE_DISPLAY_MODE_ON;
                         break;
                 }
                 return true;
@@ -1173,56 +1246,6 @@ function getPrecedingSegment(pointId, edgesToIgnoreIds = []) {
         }
     }
     return null;
-}
-
-function setCurrentColor(newColor) {
-    const oldColor = currentColor;
-    let changedPoints = [];
-    if (selectedPointIds.length > 0) {
-        selectedPointIds.forEach(id => {
-            const point = findPointById(id);
-            if (point && point.type === 'regular') {
-                changedPoints.push({ id: point.id, oldColor: point.color || oldColor });
-                point.color = newColor;
-            }
-        });
-    }
-    // FIX 2: Prevent transform centers from changing color
-    // activeCenterId is the *last selected* center, not necessarily all selected centers
-    selectedCenterIds.forEach(id => {
-        const center = findPointById(id);
-        // Only if it's explicitly a center point
-        if (center && center.type !== 'regular') {
-            // No color change for centers, they stay white as per drawCenterSymbol
-            // So no need to add to changedPoints here for color
-        }
-    });
-
-    if (changedPoints.length > 0) {
-        const actualUndoState = {
-            points: allPoints.map(p => {
-                const changed = changedPoints.find(cp => cp.id === p.id);
-                // Ensure center points are always stored with 'white' color in undo history if they were just placed
-                if (p.type !== 'regular') {
-                    return { ...p, color: 'white' }; // Centers always white in undo
-                }
-                return changed ? { ...p, color: changed.oldColor } : { ...p };
-            }),
-            edges: JSON.parse(JSON.stringify(allEdges)),
-            selectedPointIds: JSON.parse(JSON.stringify(selectedPointIds)),
-            selectedEdgeIds: JSON.parse(JSON.stringify(selectedEdgeIds)),
-            activeCenterId,
-            selectedCenterIds: JSON.parse(JSON.stringify(selectedCenterIds)), // Ensure selectedCenterIds is saved
-            isDrawingMode,
-            previewLineStartPointId
-        };
-        undoStack.push(actualUndoState);
-        if (undoStack.length > MAX_HISTORY_SIZE) undoStack.shift();
-        redoStack = [];
-    }
-    currentColor = newColor;
-    colorPicker.value = newColor;
-    addToRecentColors(newColor);
 }
 
 function saveStateForUndo() {
@@ -1415,7 +1438,7 @@ function handleCopy() {
     if (pointsToCopyIds.size === 0 && selectedEdgeIds.length === 0) return;
     
     selectedEdgeIds.forEach(edgeId => {
-        const [id1, id2] = edgeId.split('-');
+        const [id1, id2] = edgeId.split(EDGE_ID_DELIMITER);
         pointsToCopyIds.add(id1);
         pointsToCopyIds.add(id2);
     });
@@ -1427,7 +1450,6 @@ function handleCopy() {
     
     clipboard.edges = [];
     selectedEdgeIds.forEach(edgeId => {
-        const [id1, id2] = edgeId.split('-');
         const edge = allEdges.find(e => getEdgeId(e) === edgeId);
         if (edge) clipboard.edges.push({ ...edge });
     });
@@ -1446,10 +1468,7 @@ function handleCopy() {
 }
 
 function handleCut() {
-    const pointsToCutIds = new Set(selectedPointIds);
-    if (activeCenterId) pointsToCutIds.add(activeCenterId);
-    
-    if (pointsToCutIds.size === 0 && selectedEdgeIds.length === 0) return;
+    if (selectedPointIds.length === 0 && selectedEdgeIds.length === 0 && selectedCenterIds.length === 0) return;
     
     saveStateForUndo();
     handleCopy();
@@ -1485,7 +1504,6 @@ function deleteSelectedItems() {
     saveStateForUndo();
     
     selectedEdgeIds.forEach(edgeId => {
-        const [id1, id2] = edgeId.split('-');
         allEdges = allEdges.filter(edge => getEdgeId(edge) !== edgeId);
     });
     
@@ -1530,22 +1548,15 @@ function zoomAt(zoomCenterScreen_css_pixels, scaleFactor) {
     const oldScale = viewTransform.scale;
     let newScale = oldScale * scaleFactor;
 
-    // Prevent scale from becoming zero, which would break calculations.
-    // This value is small enough to be effectively infinite for zooming out.
-    if (newScale < 1e-20) {
-        newScale = 1e-20;
+    if (newScale < MIN_SCALE_VALUE) {
+        newScale = MIN_SCALE_VALUE;
     }
 
     const mouseX_physical = zoomCenterScreen_css_pixels.x * dpr;
     const mouseY_physical = zoomCenterScreen_css_pixels.y * dpr;
 
-    // This is the corrected, numerically stable calculation.
-    // It finds the new offset based on the old one and the scale factor,
-    // which is more robust at extreme zoom levels.
     viewTransform.offsetX = mouseX_physical * (1 - scaleFactor) + viewTransform.offsetX * scaleFactor;
     
-    // The offsetY calculation must account for the canvas's inverted Y-axis.
-    // This was the source of the bug in my previous version.
     viewTransform.offsetY = (canvas.height - mouseY_physical) * (1 - scaleFactor) + viewTransform.offsetY * scaleFactor;
 
     viewTransform.scale = newScale;
@@ -1725,13 +1736,61 @@ function applySelectionLogic(pointIdsToSelect, edgeIdsToSelect, wantsShift, want
     }
 }
 
+function setCurrentColor(newColor) {
+    const oldColor = currentColor;
+    const colors = THEMES[activeThemeName];
+    let changedPoints = [];
+    if (selectedPointIds.length > 0) {
+        selectedPointIds.forEach(id => {
+            const point = findPointById(id);
+            if (point && point.type === POINT_TYPE_REGULAR) {
+                changedPoints.push({ id: point.id, oldColor: point.color || oldColor });
+                point.color = newColor;
+            }
+        });
+    }
+
+    selectedCenterIds.forEach(id => {
+        const center = findPointById(id);
+        if (center && center.type !== POINT_TYPE_REGULAR) {
+            // No color change for centers, they stay white as per drawCenterSymbol
+        }
+    });
+
+    if (changedPoints.length > 0) {
+        const actualUndoState = {
+            points: allPoints.map(p => {
+                const changed = changedPoints.find(cp => cp.id === p.id);
+                if (p.type !== POINT_TYPE_REGULAR) {
+                    return { ...p, color: colors.uiIcon };
+                }
+                return changed ? { ...p, color: changed.oldColor } : { ...p };
+            }),
+            edges: JSON.parse(JSON.stringify(allEdges)),
+            selectedPointIds: JSON.parse(JSON.stringify(selectedPointIds)),
+            selectedEdgeIds: JSON.parse(JSON.stringify(selectedEdgeIds)),
+            activeCenterId,
+            selectedCenterIds: JSON.parse(JSON.stringify(selectedCenterIds)),
+            isDrawingMode,
+            previewLineStartPointId
+        };
+        undoStack.push(actualUndoState);
+        if (undoStack.length > MAX_HISTORY_SIZE) undoStack.shift();
+        redoStack = [];
+    }
+    currentColor = newColor;
+    colorPicker.value = newColor;
+    addToRecentColors(newColor);
+}
+
 function redrawAll() {
     labelsToKeepThisFrame.clear();
+    const colors = THEMES[activeThemeName]; // Get colors from current theme
     const actualCanvasWidth = canvas.width / dpr;
     const actualCanvasHeight = canvas.height / dpr;
     ctx.resetTransform();
     ctx.scale(dpr, dpr);
-    ctx.fillStyle = '#1a1a1a';
+    ctx.fillStyle = colors.background;
     ctx.fillRect(0, 0, actualCanvasWidth, actualCanvasHeight);
 
     const { grid1Interval, grid2Interval, alpha1, alpha2 } = calculateGridIntervals(viewTransform.scale);
@@ -1739,10 +1798,11 @@ function redrawAll() {
 
     lastAngularGridState = getDynamicAngularIntervals(viewTransform, actualCanvasWidth, actualCanvasHeight, dataToScreen);
 
-    drawGrid(ctx, { gridDisplayMode, canvas, dpr, viewTransform, gridAlpha }, dataToScreen, screenToData, lastGridState, lastAngularGridState);
+    // Pass `colors` object in the state parameter to all renderer functions
+    drawGrid(ctx, { gridDisplayMode, canvas, dpr, viewTransform, gridAlpha, colors }, dataToScreen, screenToData, lastGridState, lastAngularGridState);
 
-    if (coordsDisplayMode !== 'none') {
-        const stateForAxes = { canvas, dpr, coordsDisplayMode, viewTransform, angleDisplayMode };
+    if (coordsDisplayMode !== COORDS_DISPLAY_MODE_NONE) {
+        const stateForAxes = { canvas, dpr, coordsDisplayMode, viewTransform, angleDisplayMode, colors };
         drawAxes(ctx, htmlOverlay, stateForAxes, dataToScreen, screenToData, lastGridState, lastAngularGridState, updateHtmlLabel);
     }
 
@@ -1755,20 +1815,22 @@ function redrawAll() {
                 frozen_D_du_to_display: frozenReference_D_du,
                 frozen_D_g2g_to_display: frozenReference_D_g2g
             };
-            const stateForRefGeo = { showAngles, showDistances, viewTransform, mousePos };
+            const stateForRefGeo = { showAngles, showDistances, viewTransform, mousePos, colors };
             drawReferenceElementsGeometry(ctx, frozenDisplayContext, dataToScreen, screenToData, stateForRefGeo);
-            const stateForRefTexts = { showAngles, showDistances, viewTransform, mousePos, frozenReference_D_du, distanceSigFigs, angleDisplayMode };
+            const stateForRefTexts = { showAngles, showDistances, viewTransform, mousePos, frozenReference_D_du, distanceSigFigs, angleDisplayMode, colors };
             prepareReferenceElementsTexts(htmlOverlay, frozenDisplayContext, stateForRefTexts, screenToData, dataToScreen, updateHtmlLabel);
         }
     }
 
     if (transformIndicatorData) {
-        drawTransformIndicators(ctx, htmlOverlay, { transformIndicatorData, angleSigFigs, distanceSigFigs }, dataToScreen, updateHtmlLabel);
+        const stateForTransform = { transformIndicatorData, angleSigFigs, distanceSigFigs, colors };
+        drawTransformIndicators(ctx, htmlOverlay, stateForTransform, dataToScreen, updateHtmlLabel);
         labelsToKeepThisFrame.add('transform-angle-indicator');
         labelsToKeepThisFrame.add('transform-scale-indicator');
     }
 
-    drawAllEdges(ctx, { allEdges, selectedEdgeIds, isDragConfirmed, dragPreviewPoints, currentColor }, dataToScreen, findPointById, getEdgeId);
+    const stateForEdges = { allEdges, selectedEdgeIds, isDragConfirmed, dragPreviewPoints, currentColor, colors };
+    drawAllEdges(ctx, stateForEdges, dataToScreen, findPointById, getEdgeId);
 
     allPoints.forEach(point => {
         let pointToDraw = { ...point };
@@ -1779,7 +1841,7 @@ function redrawAll() {
                 pointToDraw.y = preview.y;
             }
         }
-        drawPoint(ctx, pointToDraw, { selectedPointIds, selectedCenterIds, activeCenterId, currentColor }, dataToScreen);
+        drawPoint(ctx, pointToDraw, { selectedPointIds, selectedCenterIds, activeCenterId, currentColor, colors }, dataToScreen);
     });
 
     if (isDragConfirmed) {
@@ -1787,7 +1849,7 @@ function redrawAll() {
             const draggedVersion = dragPreviewPoints.find(dp => dp.id === p.id);
             return draggedVersion || p;
         });
-        const stateForFeedback = { lastGridState, showDistances, showAngles, distanceSigFigs, angleDisplayMode, angleSigFigs, currentShiftPressed, viewTransform };
+        const stateForFeedback = { lastGridState, showDistances, showAngles, distanceSigFigs, angleDisplayMode, angleSigFigs, currentShiftPressed, viewTransform, colors };
         if (actionContext.targetPoint) {
             drawDragFeedback(ctx, htmlOverlay, actionContext.targetPoint.id, hybridPointStates, stateForFeedback, dataToScreen, findNeighbors, getEdgeId, currentShiftPressed, null, updateHtmlLabel);
         } else if (actionContext.targetEdge) {
@@ -1796,7 +1858,7 @@ function redrawAll() {
             drawDragFeedback(ctx, htmlOverlay, actionContext.targetEdge.id2, hybridPointStates, stateForFeedback, dataToScreen, findNeighbors, getEdgeId, false, draggedEdgeId, updateHtmlLabel);
         }
     } else {
-        const stateForFeedback = { lastGridState, showDistances, showAngles, distanceSigFigs, angleDisplayMode, angleSigFigs, currentShiftPressed, viewTransform };
+        const stateForFeedback = { lastGridState, showDistances, showAngles, distanceSigFigs, angleDisplayMode, angleSigFigs, currentShiftPressed, viewTransform, colors };
         if (selectedPointIds.length === 1 && selectedEdgeIds.length === 0) {
             drawDragFeedback(ctx, htmlOverlay, selectedPointIds[0], allPoints, stateForFeedback, dataToScreen, findNeighbors, getEdgeId, false, null, updateHtmlLabel);
         } else if (selectedEdgeIds.length === 1 && selectedPointIds.length <= 2) {
@@ -1813,7 +1875,7 @@ function redrawAll() {
         const screenPos = dataToScreen(ghostPointPosition);
         ctx.beginPath();
         ctx.arc(screenPos.x, screenPos.y, POINT_RADIUS, 0, 2 * Math.PI);
-        ctx.fillStyle = 'rgba(240, 240, 130, 0.9)';
+        ctx.fillStyle = colors.feedbackSnapped;
         ctx.fill();
     }
 
@@ -1829,23 +1891,23 @@ function redrawAll() {
             ctx.moveTo(startScreen.x, startScreen.y);
             ctx.lineTo(targetScreen.x, targetScreen.y);
             ctx.setLineDash(DASH_PATTERN);
-            ctx.strokeStyle = currentShiftPressed ? 'rgba(240, 240, 130, 0.9)' : currentColor;
+            ctx.strokeStyle = currentShiftPressed ? colors.feedbackSnapped : currentColor;
             ctx.lineWidth = LINE_WIDTH;
             ctx.stroke();
             ctx.setLineDash([]);
             if (snappedData.snapped) {
                 ctx.beginPath();
                 ctx.arc(targetScreen.x, targetScreen.y, POINT_RADIUS, 0, 2 * Math.PI);
-                ctx.fillStyle = 'rgba(240, 240, 130, 0.9)';
+                ctx.fillStyle = colors.feedbackSnapped;
                 ctx.fill();
             }
-            const stateForSnapInfo = { showDistances, showAngles, currentShiftPressed, distanceSigFigs, angleSigFigs, angleDisplayMode, viewTransform, frozenReference_D_du, gridDisplayMode, frozenReference_A_rad };
+            const stateForSnapInfo = { showDistances, showAngles, currentShiftPressed, distanceSigFigs, angleSigFigs, angleDisplayMode, viewTransform, frozenReference_D_du, gridDisplayMode, frozenReference_A_rad, colors };
             prepareSnapInfoTexts(ctx, htmlOverlay, startPoint, targetPosData, snappedData, stateForSnapInfo, dataToScreen, currentPreviewDrawingContext, updateHtmlLabel);
         }
     }
 
     if (isRectangleSelecting && isDragConfirmed) {
-        ctx.strokeStyle = 'rgba(255,255,255,0.7)';
+        ctx.strokeStyle = colors.mouseCoords;
         ctx.lineWidth = 1;
         ctx.setLineDash(DASH_PATTERN);
         const rX = Math.min(rectangleSelectStartPos.x, mousePos.x);
@@ -1856,9 +1918,29 @@ function redrawAll() {
         ctx.setLineDash([]);
     }
 
-    updateMouseCoordinates(htmlOverlay, { coordsDisplayMode, isMouseOverCanvas, currentShiftPressed, ghostPointPosition, gridDisplayMode, lastGridState, angleDisplayMode, canvas, dpr, mousePos}, screenToData, updateHtmlLabel);
-
-    const stateForUI = { dpr, canvasUI, isToolbarExpanded, isColorPaletteExpanded, isTransformPanelExpanded, isDisplayPanelExpanded, isPlacingTransform, placingTransformType, placingSnapPos, mousePos, selectedSwatchIndex, recentColors, coordsDisplayMode, gridDisplayMode, angleDisplayMode, distanceDisplayMode };
+    updateMouseCoordinates(htmlOverlay, { coordsDisplayMode, isMouseOverCanvas, currentShiftPressed, ghostPointPosition, gridDisplayMode, lastGridState, angleDisplayMode, canvas, dpr, mousePos, colors}, screenToData, updateHtmlLabel);
+    
+    const stateForUI = { 
+        dpr, 
+        canvasUI, 
+        isToolbarExpanded, 
+        isColorPaletteExpanded, 
+        isTransformPanelExpanded, 
+        isDisplayPanelExpanded, 
+        isPlacingTransform, 
+        placingTransformType, 
+        placingSnapPos, 
+        mousePos, 
+        selectedSwatchIndex, 
+        recentColors, 
+        activeThemeName, 
+        colors,
+        // Add these missing display mode properties:
+        coordsDisplayMode,
+        gridDisplayMode,
+        angleDisplayMode,
+        distanceDisplayMode
+    };
     drawCanvasUI(ctx, htmlOverlay, stateForUI, updateHtmlLabel);
     
     cleanupHtmlLabels();
@@ -2315,7 +2397,7 @@ canvas.addEventListener('mousedown', (event) => {
                 x: dataPos.x,
                 y: dataPos.y,
                 type: placingTransformType,
-                color: 'white'
+                color: THEMES[activeThemeName].uiIcon
             };
             allPoints.push(newCenter);
             handleCenterSelection(newCenter.id, false, false);
@@ -2678,7 +2760,7 @@ window.addEventListener('keyup', (event) => {
 window.addEventListener('keydown', (event) => {
     const isCtrlOrCmd = event.ctrlKey || event.metaKey;
     
-    if (isCtrlOrCmd && event.key.toLowerCase() === 'r') {
+    if (isCtrlOrCmd && event.key.toLowerCase() === KEY_REPEAT) {
         event.preventDefault();
         if (isDrawingMode && previewLineStartPointId) {
             handleRepeat();
@@ -2695,44 +2777,44 @@ window.addEventListener('keydown', (event) => {
     }
 
     const allowedDuringAction = ['Shift', 'Control', 'Meta', 'Alt', 'Escape', 'Delete', 'Backspace'];
-    if (isActionInProgress && !allowedDuringAction.includes(event.key) && !(isCtrlOrCmd && ['c','x','v','z','y','a','-','=','+'].includes(event.key.toLowerCase()))) return;
+    if (isActionInProgress && !allowedDuringAction.includes(event.key) && !(isCtrlOrCmd && [KEY_COPY,KEY_CUT,KEY_PASTE,KEY_UNDO,KEY_REDO,KEY_SELECT_ALL,KEY_ZOOM_OUT,KEY_ZOOM_IN,KEY_ZOOM_IN_PLUS].includes(event.key.toLowerCase()))) return;
 
-    if (isMouseOverCanvas && isCtrlOrCmd && (event.key === '=' || event.key === '+')) {
+    if (isMouseOverCanvas && isCtrlOrCmd && (event.key === KEY_ZOOM_IN || event.key === KEY_ZOOM_IN_PLUS)) {
         event.preventDefault();
         const centerScreen = { x: (canvas.width/dpr)/2, y: (canvas.height/dpr)/2 };
-        zoomAt(centerScreen, 1.15);
+        zoomAt(centerScreen, KEYBOARD_ZOOM_FACTOR);
         return;
     }
-    if (isMouseOverCanvas && isCtrlOrCmd && event.key === '-') {
+    if (isMouseOverCanvas && isCtrlOrCmd && event.key === KEY_ZOOM_OUT) {
         event.preventDefault();
         const centerScreen = { x: (canvas.width/dpr)/2, y: (canvas.height/dpr)/2 };
-        zoomAt(centerScreen, 1/1.15);
+        zoomAt(centerScreen, 1/KEYBOARD_ZOOM_FACTOR);
         return;
     }
 
-    if (event.key === ' ') {
+    if (event.key === KEY_SPACE) {
         event.preventDefault();
         completeGraphOnSelectedPoints();
-    } else if (event.key === 'Escape') {
+    } else if (event.key === KEY_ESCAPE) {
         performEscapeAction();
-    } else if (event.key === 'Delete' || event.key === 'Backspace') {
+    } else if (event.key === KEY_DELETE || event.key === KEY_BACKSPACE) {
         deleteSelectedItems();
-    } else if (isCtrlOrCmd && event.key.toLowerCase() === 'c') {
+    } else if (isCtrlOrCmd && event.key.toLowerCase() === KEY_COPY) {
         event.preventDefault();
         handleCopy();
-    } else if (isCtrlOrCmd && event.key.toLowerCase() === 'x') {
+    } else if (isCtrlOrCmd && event.key.toLowerCase() === KEY_CUT) {
         event.preventDefault();
         handleCut();
-    } else if (isCtrlOrCmd && event.key.toLowerCase() === 'v') {
+    } else if (isCtrlOrCmd && event.key.toLowerCase() === KEY_PASTE) {
         event.preventDefault();
         handlePaste();
-    } else if (isCtrlOrCmd && event.key.toLowerCase() === 'z' && !event.shiftKey) {
+    } else if (isCtrlOrCmd && event.key.toLowerCase() === KEY_UNDO && !event.shiftKey) {
         event.preventDefault();
         handleUndo();
-    } else if (isCtrlOrCmd && (event.key.toLowerCase() === 'y' || (event.shiftKey && event.key.toLowerCase() === 'z'))) {
+    } else if (isCtrlOrCmd && (event.key.toLowerCase() === KEY_REDO || (event.shiftKey && event.key.toLowerCase() === KEY_UNDO))) {
         event.preventDefault();
         handleRedo();
-    } else if (isCtrlOrCmd && event.key.toLowerCase() === 'a') {
+    } else if (isCtrlOrCmd && event.key.toLowerCase() === KEY_SELECT_ALL) {
         event.preventDefault();
         selectedPointIds = allPoints.filter(p => p.type === 'regular').map(p => p.id);
         selectedEdgeIds = allEdges.map(edge => getEdgeId(edge));

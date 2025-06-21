@@ -19,20 +19,26 @@ import {
     GRID_LINEWIDTH,
     DASH_PATTERN,
     DASH_PATTERN_SMALL,
-    
-    // --- COLORS ---
-    GRID_COLOR,
-    AXIS_COLOR,
-    FROZEN_REFERENCE_COLOR,
-    FEEDBACK_COLOR_SNAPPED,
-    FEEDBACK_COLOR_DEFAULT,
-    GEOMETRY_INFO_TEXT_COLOR,
-    GEOMETRY_INFO_TEXT_COLOR_SNAPPED,
-    
+    DEGREES_IN_CIRCLE,
+    DEGREES_IN_HALF_CIRCLE,
+    DEGREES_IN_QUADRANT,
+    RADIANS_IN_CIRCLE,
+    MIN_ALPHA_FOR_DRAWING,
+    TRIANGULAR_GRID_Y_STEP_FACTOR,
+    POLAR_TO_LINE_TRANSITION_RADIUS_FACTOR,
+    ORIGIN_TICK_ANGLE_RAD,
+    AXIS_MAJOR_TICK_SCALE_FACTOR,
+    AXIS_ARROW_ANGLE_RAD,
+    MAJOR_TICK_LINE_WIDTH,
+    HELPER_LINE_DASH_PATTERN,
+    REF_LINE_DASH_PATTERN,
+
+    // --- INTERACTION ---
+    MIN_TRANSFORM_ACTION_THRESHOLD,
+
     // --- AXES & TICKS ---
     AXIS_LINE_WIDTH,
     AXIS_TICK_SIZE,
-    AXIS_TICK_LABEL_COLOR,
     AXIS_TICK_LABEL_ALPHA,
     AXIS_NAME_FONT_SIZE,
     AXIS_TICK_FONT_SIZE,
@@ -45,10 +51,44 @@ import {
     Y_AXIS_LABEL_ARROW_DIST,
     POLAR_THETA_LABEL_DISTANCE,
     POLAR_THETA_LABEL_ARROW_DIST,
-    
+    ANGLE_PRECISION_FACTOR,
+    BOUNDARY_ANGLE_PRECISION,
+    LABEL_ID_PRECISION_FACTOR,
+    ORIGIN_LABEL_TEXT,
+    POLAR_AXIS_RADIUS_BUFFER_FACTOR,
+    TICK_LABEL_SIGFIG_THRESH_1,
+    TICK_LABEL_SIGFIG_THRESH_2,
+    TICK_LABEL_SIGFIG_THRESH_3,
+    FINE_TICK_ANGLE_THRESHOLD_DEG,
+    IMAGINARY_UNIT_SYMBOL,
+    POLAR_RADIUS_SYMBOL,
+    COMPLEX_REAL_LABEL,
+    COMPLEX_IMAGINARY_LABEL,
+
     // --- DEFAULTS ---
     DEFAULT_REFERENCE_DISTANCE,
-    
+
+    // --- UI & TOOLBAR ---
+    UI_PADDING,
+    UI_ICON_BASE_SIZE,
+    UI_ICON_LINE_WIDTH,
+    UI_ICON_LINE_WIDTH_SMALL,
+    UI_ICON_DASH_PATTERN,
+    UI_ICON_POINT_RADIUS,
+    UI_ICON_LABEL_FONT_SIZE,
+    UI_MENU_ICON_LINE_WIDTH,
+    UI_TRANSFORM_TOOL_LABEL_FONT_SIZE,
+    UI_TRANSFORM_TOOL_LABEL_TEXT,
+    UI_DISPLAY_ICON_BAR_WIDTH_PADDING,
+    UI_DISPLAY_ICON_Y_OFFSET,
+    UI_DISPLAY_ICON_Y_SPACING,
+    UI_DISPLAY_ICON_KNOB_RADIUS,
+    UI_SWATCH_SELECTED_BORDER_WIDTH,
+    UI_BUTTON_BORDER_WIDTH,
+    UI_BUTTON_ICON_PADDING,
+    UI_GHOST_ICON_SIZE,
+    COLOR_WHEEL_FADE_START_RADIUS_FACTOR,
+
     // --- FEEDBACK LABELS & TEXT ---
     FEEDBACK_LABEL_FONT_SIZE,
     FEEDBACK_ARC_RADIUS_SCREEN,
@@ -62,7 +102,28 @@ import {
     REF_CIRCLE_MIN_DISPLAY_RADIUS,
     REF_CIRCLE_MIN_TICK_SPACING,
     REF_CIRCLE_THETA_LABEL_OFFSET,
-    
+    REF_ARC_RADIUS_SCREEN,
+    SNAP_ANGLE_LABEL_OFFSET,
+    TRANSFORM_ANGLE_LABEL_OFFSET,
+    TRANSFORM_SCALE_LABEL_OFFSET,
+    FRACTION_FORMAT_TOLERANCE,
+    FRACTION_FORMAT_MAX_DENOMINATOR,
+    FRACTION_FORMAT_MAX_DENOMINATOR_TRANSFORM,
+    COORD_PRECISION_FACTOR,
+    MAX_COORD_DECIMAL_PLACES,
+    MAX_ANGLE_DECIMAL_PLACES,
+    MOUSE_COORD_FONT_SIZE,
+    KATEX_MINUS_PHANTOM,
+    PI_SYMBOL_KATEX,
+    DELTA_SYMBOL_KATEX,
+    DELTA_EQUALS_KATEX,
+    THETA_EQUALS_KATEX,
+    SELECTION_GLOW_BLUR_RADIUS,
+    SELECTION_GLOW_ALPHA,
+    SELECTION_GLOW_RADIUS_OFFSET,
+    SELECTION_GLOW_LINE_WIDTH,
+    EDGE_SELECTION_GLOW_WIDTH_OFFSET,
+
     // --- GRID CALCULATIONS ---
     GRID_TARGET_SPACING,
     GRID_ALPHA_TRANSITION_START,
@@ -75,16 +136,34 @@ import {
     ANGULAR_GRID_PREDEFINED_LEVELS,
     ANGULAR_GRID_TARGET_SPACING,
     ANGULAR_GRID_FADE_IN_THRESHOLD,
-    
+
     // --- SNAPPING PARAMETERS ---
     GEOMETRY_CALCULATION_EPSILON,
+    FLOATING_POINT_PRECISION_LIMIT,
     VERTICAL_LINE_COS_THRESHOLD,
     NINETY_DEG_ANGLE_SNAP_FRACTIONS,
-    SNAP_FACTORS
+    SNAP_FACTORS,
+
+    // --- ENUMS & LITERALS ---
+    POINT_TYPE_REGULAR,
+    TRANSFORM_TYPE_ROTATE_SCALE,
+    TRANSFORM_TYPE_ROTATE_ONLY,
+    TRANSFORM_TYPE_SCALE_ONLY,
+    COORDS_DISPLAY_MODE_NONE,
+    COORDS_DISPLAY_MODE_REGULAR,
+    COORDS_DISPLAY_MODE_COMPLEX,
+    COORDS_DISPLAY_MODE_POLAR,
+    GRID_DISPLAY_MODE_NONE,
+    GRID_DISPLAY_MODE_LINES,
+    GRID_DISPLAY_MODE_POINTS,
+    GRID_DISPLAY_MODE_TRIANGULAR,
+    GRID_DISPLAY_MODE_POLAR,
+    ANGLE_DISPLAY_MODE_DEGREES,
+    ANGLE_DISPLAY_MODE_RADIANS,
+    ANGLE_DISPLAY_MODE_NONE,
+    DISTANCE_DISPLAY_MODE_ON,
+    DISTANCE_DISPLAY_MODE_NONE
 } from './constants.js';
-
-
-
 
 
 let colorWheelIcon = null
@@ -301,6 +380,12 @@ function getLineCircleIntersections(x1, y1, x2, y2, cx, cy, r) {
 }
 
 function calculateVisibleAngleRange(originScreen, screenRadius, canvasWidth, canvasHeight) {
+    // If origin is visible, show all angles
+    if (originScreen.x >= 0 && originScreen.x <= canvasWidth && 
+        originScreen.y >= 0 && originScreen.y <= canvasHeight) {
+        return { minAngle: 0, maxAngle: 360, isFullCircle: true };
+    }
+
     const rect = {
         left: 0,
         right: canvasWidth,
@@ -406,20 +491,21 @@ function calculateVisibleAngleRange(originScreen, screenRadius, canvasWidth, can
         }
     }
 
-    // The visible range is everything except the largest gap
-    if (maxGap > 180) {
-        // The invisible sector is larger than 180°, so we have a simple range
-        return { 
-            minAngle: maxGapEndAngle, 
-            maxAngle: maxGapStartAngle, 
-            isFullCircle: false 
+    // FIXED: The largest gap represents the INVISIBLE area
+    // The visible range is everything EXCEPT the largest gap
+    if (maxGapEndAngle > maxGapStartAngle) {
+        // Invisible gap doesn't cross 0°, so visible range wraps around 0°
+        return {
+            minAngle: maxGapEndAngle,
+            maxAngle: maxGapStartAngle + 360,
+            isFullCircle: false
         };
     } else {
-        // The invisible sector is smaller than 180°, so we have a wraparound range
-        return { 
-            minAngle: maxGapStartAngle, 
-            maxAngle: maxGapEndAngle + 360, 
-            isFullCircle: false 
+        // Invisible gap crosses 0°, so visible range is normal
+        return {
+            minAngle: maxGapEndAngle,
+            maxAngle: maxGapStartAngle,
+            isFullCircle: false
         };
     }
 }
@@ -427,8 +513,11 @@ function calculateVisibleAngleRange(originScreen, screenRadius, canvasWidth, can
 function generateOptimizedAngleSequence(angleStep, minAngle, maxAngle) {
     const angles = [];
     
-    if (maxAngle > 360) {
-        // Handle wraparound case (e.g., minAngle = 345, maxAngle = 375 means 345-360 and 0-15)
+    // FIXED: Properly detect wraparound case
+    const isWraparound = maxAngle > 360;
+    
+    if (isWraparound) {
+        // Handle wraparound case
         const actualMaxAngle = maxAngle - 360;
         
         // Add angles from minAngle to 360
@@ -465,12 +554,11 @@ function isTickVisible(tickEnd, canvasWidth, canvasHeight) {
            tickEnd.y <= canvasHeight + AXIS_LABEL_PADDING;
 }
 
-export function drawPolarReferenceCircle(ctx, htmlOverlay, updateHtmlLabel, radius, alpha, state, dataToScreen, lastAngularGridState) {
+export function drawPolarReferenceCircle(ctx, htmlOverlay, updateHtmlLabel, radius, alpha, { canvas, dpr, viewTransform, angleDisplayMode, colors }, dataToScreen, lastAngularGridState) {
     if (typeof dataToScreen !== 'function' || typeof updateHtmlLabel !== 'function') {
         return;
     }
 
-    const { canvas, dpr, viewTransform, angleDisplayMode } = state;
     const originScreen = dataToScreen({ x: 0, y: 0 });
     const canvasWidthCSS = canvas.width / dpr;
     const canvasHeightCSS = canvas.height / dpr;
@@ -484,7 +572,7 @@ export function drawPolarReferenceCircle(ctx, htmlOverlay, updateHtmlLabel, radi
     }
 
     ctx.save();
-    ctx.strokeStyle = `rgba(${FEEDBACK_COLOR_DEFAULT.join(',')}, 1.0)`;
+    ctx.strokeStyle = `rgba(${colors.feedbackDefault.join(',')}, 1.0)`;
     ctx.lineWidth = FEEDBACK_LINE_VISUAL_WIDTH;
 
     const transitionRadius = Math.min(canvasWidthCSS, canvasHeightCSS) * 400;
@@ -533,7 +621,8 @@ export function drawPolarReferenceCircle(ctx, htmlOverlay, updateHtmlLabel, radi
     if (!visibleAngleRange) return;
 
     const dataRadius = screenRadius / (viewTransform.scale / dpr);
-    const drawnAngles = new Set();
+    const drawnAnglesSimple = new Set(); // For degrees mode
+    const drawnAnglesComplex = new Map(); // For radians mode - key: "deg-levelAngle"
 
     lastAngularGridState.forEach(level => {
         const tickAlpha = level.alpha;
@@ -543,7 +632,7 @@ export function drawPolarReferenceCircle(ctx, htmlOverlay, updateHtmlLabel, radi
         
         if (screenSeparation < REF_CIRCLE_MIN_TICK_SPACING * 0.5) return;
 
-        const finalColor = `rgba(${FEEDBACK_COLOR_DEFAULT.join(',')}, ${tickAlpha * 0.95})`;
+        const finalColor = `rgba(${colors.feedbackDefault.join(',')}, ${tickAlpha * 0.95})`;
 
         let anglesToProcess;
         if (visibleAngleRange.isFullCircle) {
@@ -560,11 +649,24 @@ export function drawPolarReferenceCircle(ctx, htmlOverlay, updateHtmlLabel, radi
         }
 
         anglesToProcess.forEach(deg => {
-            if (drawnAngles.has(deg) && deg !== 0) return;
-            if (deg === 0 && drawnAngles.has(deg) && level.angle !== 360) return;
+            // Original simple behavior for degrees mode
+            if (angleDisplayMode === 'degrees') {
+                if (drawnAnglesSimple.has(deg)) return;
+            }
+            // For radians mode, allow multiple levels per angle
+            else if (angleDisplayMode === 'radians') {
+                const levelKey = `${deg}-${level.angle}`;
+                if (drawnAnglesComplex.has(levelKey)) return; // This specific level already drawn
+            }
 
             const angleRad = deg * Math.PI / 180;
             let labelOptions = { textAlign: 'center', textBaseline: 'middle' };
+            
+            // In radians mode, use left alignment to minimize visual overlap
+            if (angleDisplayMode === 'radians') {
+                labelOptions = { textAlign: 'left', textBaseline: 'middle' };
+            }
+            
             let labelPos;
 
             ctx.save();
@@ -695,7 +797,10 @@ export function drawPolarReferenceCircle(ctx, htmlOverlay, updateHtmlLabel, radi
             }
 
             if (angleText) {
-                const labelId = `circ-label-${deg}-${dataRadius.toExponential(15)}`;
+                const labelId = angleDisplayMode === 'radians' 
+                    ? `circ-label-${deg}-${level.angle}-${dataRadius.toExponential(15)}`
+                    : `circ-label-${deg}-${dataRadius.toExponential(15)}`;
+                    
                 updateHtmlLabel({ 
                     id: labelId, 
                     content: angleText, 
@@ -705,13 +810,23 @@ export function drawPolarReferenceCircle(ctx, htmlOverlay, updateHtmlLabel, radi
                     fontSize: REF_TEXT_KATEX_FONT_SIZE, 
                     options: labelOptions
                 });
+                
+                // Store tracking info differently for each mode
+                if (angleDisplayMode === 'degrees') {
+                    drawnAnglesSimple.add(deg);
+                } else {
+                    const levelKey = `${deg}-${level.angle}`;
+                    drawnAnglesComplex.set(levelKey, { 
+                        levelAngle: level.angle, 
+                        alpha: tickAlpha,
+                        labelId: labelId 
+                    });
+                }
             }
-            
-            drawnAngles.add(deg);
         });
     });
 
-    const arrowColor = FEEDBACK_COLOR_DEFAULT;
+    const arrowColor = colors.feedbackDefault;
     let stickyArrowAngle = -Infinity;
     const zeroDegPoint = { x: originScreen.x + screenRadius, y: originScreen.y };
     if (zeroDegPoint.x > -AXIS_LABEL_PADDING && zeroDegPoint.x < canvasWidthCSS + AXIS_LABEL_PADDING && zeroDegPoint.y > -AXIS_LABEL_PADDING && zeroDegPoint.y < canvasHeightCSS + AXIS_LABEL_PADDING) {
@@ -823,22 +938,20 @@ export function isCircleInView(circleX, circleY, circleRadius, canvasWidth, canv
     return true;
 }
 
-function drawZeroTickAndTickLabel(ctx, origin, canvasWidth, canvasHeight, coordsDisplayMode, updateHtmlLabel) {
-    const tickColor = `rgba(${AXIS_TICK_LABEL_COLOR.join(',')}, ${AXIS_TICK_LABEL_ALPHA})`;
-    const longTickSize = AXIS_TICK_SIZE * 1.5;
+function drawZeroTickAndTickLabel(ctx, origin, canvasWidth, canvasHeight, coordsDisplayMode, updateHtmlLabel, colors) {
+    const tickColor = `rgba(${colors.axisTickLabel.join(',')}, ${AXIS_TICK_LABEL_ALPHA})`;
+    const longTickSize = AXIS_TICK_SIZE * AXIS_MAJOR_TICK_SCALE_FACTOR;
     
     ctx.save();
     ctx.strokeStyle = tickColor;
-    ctx.lineWidth = 1.5;
+    ctx.lineWidth = MAJOR_TICK_LINE_WIDTH;
     ctx.setLineDash([]);
     
-    // Draw from origin going down-left at 60 degrees, with length measured in y-direction
-    const angle = 60 * Math.PI / 180; // 60 degrees
-    const yLength = longTickSize; // Length in y-direction
-    const xLength = yLength / Math.tan(angle); // Calculate x-component for 60 degree angle
+    const yLength = longTickSize;
+    const xLength = yLength / Math.tan(ORIGIN_TICK_ANGLE_RAD);
     
-    const endX = origin.x - xLength; // Going left (negative x)
-    const endY = origin.y + yLength; // Going down (positive y in canvas coordinates)
+    const endX = origin.x - xLength;
+    const endY = origin.y + yLength;
     
     ctx.beginPath();
     ctx.moveTo(origin.x, origin.y);
@@ -849,7 +962,7 @@ function drawZeroTickAndTickLabel(ctx, origin, canvasWidth, canvasHeight, coords
     
     updateHtmlLabel({
         id: 'tick-label-origin',
-        content: '\\phantom{-}0',
+        content: ORIGIN_LABEL_TEXT,
         x: origin.x - AXIS_TICK_SIZE - AXIS_LABEL_OFFSET,
         y: origin.y + AXIS_TICK_SIZE + AXIS_LABEL_OFFSET,
         color: tickColor,
@@ -858,8 +971,7 @@ function drawZeroTickAndTickLabel(ctx, origin, canvasWidth, canvasHeight, coords
     });
 }
 
-export function drawAxes(ctx, htmlOverlay, state, dataToScreen, screenToData, lastGridState, lastAngularGridState, updateHtmlLabel) {
-    const { canvas, dpr, coordsDisplayMode, viewTransform, angleDisplayMode } = state;
+export function drawAxes(ctx, htmlOverlay, { canvas, dpr, coordsDisplayMode, viewTransform, angleDisplayMode, colors }, dataToScreen, screenToData, lastGridState, lastAngularGridState, updateHtmlLabel) {
     ctx.save();
     const canvasWidth = canvas.width / dpr;
     const canvasHeight = canvas.height / dpr;
@@ -873,26 +985,24 @@ export function drawAxes(ctx, htmlOverlay, state, dataToScreen, screenToData, la
         const angle = Math.atan2(y2 - y1, x2 - x1);
         ctx.beginPath();
         ctx.moveTo(x2, y2);
-        ctx.lineTo(x2 - AXIS_ARROW_SIZE * Math.cos(angle - Math.PI / 6), y2 - AXIS_ARROW_SIZE * Math.sin(angle - Math.PI / 6));
-        ctx.lineTo(x2 - AXIS_ARROW_SIZE * Math.cos(angle + Math.PI / 6), y2 - AXIS_ARROW_SIZE * Math.sin(angle + Math.PI / 6));
+        ctx.lineTo(x2 - AXIS_ARROW_SIZE * Math.cos(angle - AXIS_ARROW_ANGLE_RAD), y2 - AXIS_ARROW_SIZE * Math.sin(angle - AXIS_ARROW_ANGLE_RAD));
+        ctx.lineTo(x2 - AXIS_ARROW_SIZE * Math.cos(angle + AXIS_ARROW_ANGLE_RAD), y2 - AXIS_ARROW_SIZE * Math.sin(angle + AXIS_ARROW_ANGLE_RAD));
         ctx.closePath();
         ctx.fill();
     };
 
-    // Unified tick drawing function for both modes
     const drawTicksAndLabels = (interval1, alpha1, interval2, alpha2, isPolar) => {
         const drawnXPositions = new Map();
         const drawnYPositions = new Map();
         
         const addTicksForInterval = (interval, alpha, isCoarser) => {
-            if (!interval || alpha < 0.01) return;
+            if (!interval || alpha < MIN_ALPHA_FOR_DRAWING) return;
             const topLeftData = screenToData({ x: 0, y: 0 });
             const bottomRightData = screenToData({ x: canvasWidth, y: canvasHeight });
-            const localZeroThreshold = interval * 1e-6;
+            const localZeroThreshold = interval * GEOMETRY_CALCULATION_EPSILON;
             
             if (isPolar) {
-                // For polar mode, calculate r-axis ticks
-                const maxRadiusData = Math.hypot(Math.max(Math.abs(topLeftData.x), Math.abs(bottomRightData.x)), Math.max(Math.abs(topLeftData.y), Math.abs(bottomRightData.y))) * 1.1;
+                const maxRadiusData = Math.hypot(Math.max(Math.abs(topLeftData.x), Math.abs(bottomRightData.x)), Math.max(Math.abs(topLeftData.y), Math.abs(bottomRightData.y))) * POLAR_AXIS_RADIUS_BUFFER_FACTOR;
                 
                 for (let r_data = interval; r_data <= maxRadiusData; r_data += interval) {
                     if (Math.abs(r_data) < localZeroThreshold) continue;
@@ -908,7 +1018,6 @@ export function drawAxes(ctx, htmlOverlay, state, dataToScreen, screenToData, la
                     }
                 }
             } else {
-                // For rectilinear mode, calculate x and y ticks
                 const startTickX = Math.floor(topLeftData.x / interval) * interval;
                 const endTickX = Math.ceil(bottomRightData.x / interval) * interval;
                 const startTickY = Math.floor(bottomRightData.y / interval) * interval;
@@ -944,30 +1053,26 @@ export function drawAxes(ctx, htmlOverlay, state, dataToScreen, screenToData, la
             }
         };
         
-        // Identical logic for determining coarser interval
         const interval1IsCoarser = !interval2 || interval1 >= interval2;
         
         addTicksForInterval(interval1, alpha1, interval1IsCoarser);
         addTicksForInterval(interval2, alpha2, !interval1IsCoarser);
         
-        // Draw X-axis ticks (or r-axis ticks in polar mode)
         drawnXPositions.forEach((tickInfo, x_data) => {
-            // Identical alpha logic - coarser ticks stay opaque, finer ticks fade
             const effectiveAlpha = tickInfo.isCoarser ? 1.0 : tickInfo.alpha;
-            const tickLabelColor = `rgba(${AXIS_TICK_LABEL_COLOR.join(',')}, ${AXIS_TICK_LABEL_ALPHA * effectiveAlpha})`;
+            const tickLabelColor = `rgba(${colors.axisTickLabel.join(',')}, ${AXIS_TICK_LABEL_ALPHA * effectiveAlpha})`;
             ctx.strokeStyle = tickLabelColor;
             ctx.lineWidth = GRID_LINEWIDTH;
             
-            // Identical screen spacing and sig figs calculation
             let sourceInterval = interval1;
             if (interval2 && Math.abs(x_data % interval2) < Math.abs(x_data % interval1)) {
                 sourceInterval = interval2;
             }
             const screenSpacing = sourceInterval * viewTransform.scale;
             let sigFigsForLabel = 0;
-            if (screenSpacing > 80) sigFigsForLabel = 3; 
-            else if (screenSpacing > 40) sigFigsForLabel = 2; 
-            else if (screenSpacing > 20) sigFigsForLabel = 1; 
+            if (screenSpacing > TICK_LABEL_SIGFIG_THRESH_1) sigFigsForLabel = 3; 
+            else if (screenSpacing > TICK_LABEL_SIGFIG_THRESH_2) sigFigsForLabel = 2; 
+            else if (screenSpacing > TICK_LABEL_SIGFIG_THRESH_3) sigFigsForLabel = 1; 
             else sigFigsForLabel = 0;
             
             const decimalPlacesInInterval = sourceInterval > 0 ? -Math.floor(Math.log10(sourceInterval)) : 0;
@@ -976,12 +1081,14 @@ export function drawAxes(ctx, htmlOverlay, state, dataToScreen, screenToData, la
             }
             
             if (isPolar) {
-                // Polar r-axis ticks - draw on all 4 directions
                 const labelText = formatNumber(x_data, sigFigsForLabel);
                 const stableIdPart = x_data.toExponential(15);
                 
+                const isYAxisOnScreen = origin.y > -AXIS_LABEL_PADDING && origin.y < canvasHeight + AXIS_LABEL_PADDING;
+                const isXAxisOnScreen = origin.x > -AXIS_LABEL_PADDING && origin.x < canvasWidth + AXIS_LABEL_PADDING;
+
                 const pX = dataToScreen({ x: x_data, y: 0 });
-                if (pX.x > -AXIS_LABEL_PADDING && pX.x < canvasWidth + AXIS_LABEL_PADDING) {
+                if (isYAxisOnScreen && pX.x > -AXIS_LABEL_PADDING && pX.x < canvasWidth + AXIS_LABEL_PADDING) {
                     ctx.beginPath(); 
                     ctx.moveTo(pX.x, origin.y - AXIS_TICK_SIZE / 2); 
                     ctx.lineTo(pX.x, origin.y + AXIS_TICK_SIZE / 2); 
@@ -998,7 +1105,7 @@ export function drawAxes(ctx, htmlOverlay, state, dataToScreen, screenToData, la
                 }
                 
                 const pNegX = dataToScreen({ x: -x_data, y: 0 });
-                if (pNegX.x > -AXIS_LABEL_PADDING && pNegX.x < canvasWidth + AXIS_LABEL_PADDING) {
+                if (isYAxisOnScreen && pNegX.x > -AXIS_LABEL_PADDING && pNegX.x < canvasWidth + AXIS_LABEL_PADDING) {
                     ctx.beginPath(); 
                     ctx.moveTo(pNegX.x, origin.y - AXIS_TICK_SIZE / 2); 
                     ctx.lineTo(pNegX.x, origin.y + AXIS_TICK_SIZE / 2); 
@@ -1015,7 +1122,7 @@ export function drawAxes(ctx, htmlOverlay, state, dataToScreen, screenToData, la
                 }
                 
                 const pPosY = dataToScreen({ x: 0, y: x_data });
-                if (pPosY.y > -AXIS_LABEL_PADDING && pPosY.y < canvasHeight + AXIS_LABEL_PADDING) {
+                if (isXAxisOnScreen && pPosY.y > -AXIS_LABEL_PADDING && pPosY.y < canvasHeight + AXIS_LABEL_PADDING) {
                     ctx.beginPath(); 
                     ctx.moveTo(origin.x - AXIS_TICK_SIZE / 2, pPosY.y); 
                     ctx.lineTo(origin.x + AXIS_TICK_SIZE / 2, pPosY.y); 
@@ -1032,7 +1139,7 @@ export function drawAxes(ctx, htmlOverlay, state, dataToScreen, screenToData, la
                 }
                 
                 const pNegY = dataToScreen({ x: 0, y: -x_data });
-                if (pNegY.y > -AXIS_LABEL_PADDING && pNegY.y < canvasHeight + AXIS_LABEL_PADDING) {
+                if (isXAxisOnScreen && pNegY.y > -AXIS_LABEL_PADDING && pNegY.y < canvasHeight + AXIS_LABEL_PADDING) {
                     ctx.beginPath(); 
                     ctx.moveTo(origin.x - AXIS_TICK_SIZE / 2, pNegY.y); 
                     ctx.lineTo(origin.x + AXIS_TICK_SIZE / 2, pNegY.y); 
@@ -1048,7 +1155,6 @@ export function drawAxes(ctx, htmlOverlay, state, dataToScreen, screenToData, la
                     });
                 }
             } else {
-                // Rectilinear x-axis ticks
                 const screenX = dataToScreen({ x: x_data, y: 0 }).x;
                 ctx.beginPath(); 
                 ctx.moveTo(screenX, origin.y); 
@@ -1068,11 +1174,10 @@ export function drawAxes(ctx, htmlOverlay, state, dataToScreen, screenToData, la
             }
         });
         
-        // Draw Y-axis ticks (only for rectilinear mode)
         if (!isPolar) {
             drawnYPositions.forEach((tickInfo, y_data) => {
                 const effectiveAlpha = tickInfo.isCoarser ? 1.0 : tickInfo.alpha;
-                const tickLabelColor = `rgba(${AXIS_TICK_LABEL_COLOR.join(',')}, ${AXIS_TICK_LABEL_ALPHA * effectiveAlpha})`;
+                const tickLabelColor = `rgba(${colors.axisTickLabel.join(',')}, ${AXIS_TICK_LABEL_ALPHA * effectiveAlpha})`;
                 ctx.strokeStyle = tickLabelColor;
                 ctx.lineWidth = GRID_LINEWIDTH;
                 
@@ -1082,9 +1187,9 @@ export function drawAxes(ctx, htmlOverlay, state, dataToScreen, screenToData, la
                 }
                 const screenSpacing = sourceInterval * viewTransform.scale;
                 let sigFigsForLabel = 0;
-                if (screenSpacing > 80) sigFigsForLabel = 3; 
-                else if (screenSpacing > 40) sigFigsForLabel = 2; 
-                else if (screenSpacing > 20) sigFigsForLabel = 1; 
+                if (screenSpacing > TICK_LABEL_SIGFIG_THRESH_1) sigFigsForLabel = 3; 
+                else if (screenSpacing > TICK_LABEL_SIGFIG_THRESH_2) sigFigsForLabel = 2; 
+                else if (screenSpacing > TICK_LABEL_SIGFIG_THRESH_3) sigFigsForLabel = 1; 
                 else sigFigsForLabel = 0;
                 
                 const decimalPlacesInInterval = sourceInterval > 0 ? -Math.floor(Math.log10(sourceInterval)) : 0;
@@ -1094,10 +1199,10 @@ export function drawAxes(ctx, htmlOverlay, state, dataToScreen, screenToData, la
                 
                 const screenY = dataToScreen({ x: 0, y: y_data }).y;
                 let yLabelContent = formatNumber(y_data, sigFigsForLabel);
-                if (coordsDisplayMode === 'complex' && yLabelContent !== "0") {
-                    if (yLabelContent === '1') yLabelContent = 'i';
-                    else if (yLabelContent === '-1') yLabelContent = '-i';
-                    else yLabelContent += 'i';
+                if (coordsDisplayMode === COORDS_DISPLAY_MODE_COMPLEX && yLabelContent !== "0") {
+                    if (yLabelContent === '1') yLabelContent = IMAGINARY_UNIT_SYMBOL;
+                    else if (yLabelContent === '-1') yLabelContent = `-${IMAGINARY_UNIT_SYMBOL}`;
+                    else yLabelContent += IMAGINARY_UNIT_SYMBOL;
                 }
                 
                 ctx.beginPath(); 
@@ -1120,10 +1225,10 @@ export function drawAxes(ctx, htmlOverlay, state, dataToScreen, screenToData, la
     };
 
     ctx.lineWidth = AXIS_LINE_WIDTH;
-    ctx.strokeStyle = AXIS_COLOR;
-    ctx.fillStyle = AXIS_COLOR;
+    ctx.strokeStyle = colors.axis;
+    ctx.fillStyle = colors.axis;
 
-    if (coordsDisplayMode === 'polar') {
+    if (coordsDisplayMode === COORDS_DISPLAY_MODE_POLAR) {
         const { interval1, interval2, alpha1, alpha2 } = lastGridState;
         ctx.lineWidth = GRID_LINEWIDTH;
         
@@ -1136,10 +1241,10 @@ export function drawAxes(ctx, htmlOverlay, state, dataToScreen, screenToData, la
             drawAxisWithArrows(origin.x, origin.y, canvasWidth, origin.y);
             updateHtmlLabel({ 
                 id: 'axis-label-r-posx', 
-                content: 'r', 
+                content: POLAR_RADIUS_SYMBOL, 
                 x: canvasWidth - AXIS_ARROW_SIZE - X_AXIS_LABEL_ARROW_DIST, 
                 y: origin.y - X_AXIS_LABEL_DISTANCE, 
-                color: AXIS_COLOR, 
+                color: colors.axis, 
                 fontSize: AXIS_NAME_FONT_SIZE, 
                 options: { textAlign: 'center', textBaseline: 'bottom' } 
             });
@@ -1149,10 +1254,10 @@ export function drawAxes(ctx, htmlOverlay, state, dataToScreen, screenToData, la
             drawAxisWithArrows(origin.x, origin.y, 0, origin.y);
             updateHtmlLabel({ 
                 id: 'axis-label-r-negx', 
-                content: 'r', 
+                content: POLAR_RADIUS_SYMBOL, 
                 x: AXIS_ARROW_SIZE + X_AXIS_LABEL_ARROW_DIST, 
                 y: origin.y - X_AXIS_LABEL_DISTANCE, 
-                color: AXIS_COLOR, 
+                color: colors.axis, 
                 fontSize: AXIS_NAME_FONT_SIZE, 
                 options: { textAlign: 'center', textBaseline: 'bottom' } 
             });
@@ -1162,10 +1267,10 @@ export function drawAxes(ctx, htmlOverlay, state, dataToScreen, screenToData, la
             drawAxisWithArrows(origin.x, origin.y, origin.x, 0);
             updateHtmlLabel({ 
                 id: 'axis-label-r-posy', 
-                content: 'r', 
+                content: POLAR_RADIUS_SYMBOL, 
                 x: origin.x + Y_AXIS_LABEL_DISTANCE, 
                 y: AXIS_ARROW_SIZE + Y_AXIS_LABEL_ARROW_DIST, 
-                color: AXIS_COLOR, 
+                color: colors.axis, 
                 fontSize: AXIS_NAME_FONT_SIZE, 
                 options: { textAlign: 'left', textBaseline: 'middle' } 
             });
@@ -1175,26 +1280,26 @@ export function drawAxes(ctx, htmlOverlay, state, dataToScreen, screenToData, la
             drawAxisWithArrows(origin.x, origin.y, origin.x, canvasHeight);
             updateHtmlLabel({ 
                 id: 'axis-label-r-negy', 
-                content: 'r', 
+                content: POLAR_RADIUS_SYMBOL, 
                 x: origin.x + Y_AXIS_LABEL_DISTANCE, 
                 y: canvasHeight - AXIS_ARROW_SIZE - Y_AXIS_LABEL_ARROW_DIST, 
-                color: AXIS_COLOR, 
+                color: colors.axis, 
                 fontSize: AXIS_NAME_FONT_SIZE, 
                 options: { textAlign: 'left', textBaseline: 'middle' } 
             });
         }
         
-        drawTicksAndLabels(interval1, alpha1, interval2, alpha2, true); // true = polar mode
-        drawPolarReferenceCircle(ctx, htmlOverlay, updateHtmlLabel, 0, 0, state, dataToScreen, lastAngularGridState);
+        drawTicksAndLabels(interval1, alpha1, interval2, alpha2, true);
+        drawPolarReferenceCircle(ctx, htmlOverlay, updateHtmlLabel, 0, 0, { canvas, dpr, coordsDisplayMode, viewTransform, angleDisplayMode, colors }, dataToScreen, lastAngularGridState);
     } else {
         if (origin.y > 0 && origin.y < canvasHeight) drawAxisWithArrows(0, origin.y, canvasWidth, origin.y);
         if (origin.x > 0 && origin.x < canvasWidth) drawAxisWithArrows(origin.x, canvasHeight, origin.x, 0);
         
         let xLabel = 'x';
         let yLabel = 'y';
-        if (coordsDisplayMode === 'complex') {
-            xLabel = '\\mathrm{Re}';
-            yLabel = '\\mathrm{Im}';
+        if (coordsDisplayMode === COORDS_DISPLAY_MODE_COMPLEX) {
+            xLabel = COMPLEX_REAL_LABEL;
+            yLabel = COMPLEX_IMAGINARY_LABEL;
         }
         
         updateHtmlLabel({ 
@@ -1202,7 +1307,7 @@ export function drawAxes(ctx, htmlOverlay, state, dataToScreen, screenToData, la
             content: xLabel, 
             x: canvasWidth - AXIS_ARROW_SIZE - X_AXIS_LABEL_ARROW_DIST, 
             y: origin.y - X_AXIS_LABEL_DISTANCE, 
-            color: AXIS_COLOR, 
+            color: colors.axis, 
             fontSize: AXIS_NAME_FONT_SIZE, 
             options: { textAlign: 'center', textBaseline: 'bottom' } 
         });
@@ -1212,22 +1317,22 @@ export function drawAxes(ctx, htmlOverlay, state, dataToScreen, screenToData, la
             content: yLabel, 
             x: origin.x + Y_AXIS_LABEL_DISTANCE, 
             y: AXIS_ARROW_SIZE + Y_AXIS_LABEL_ARROW_DIST, 
-            color: AXIS_COLOR, 
+            color: colors.axis, 
             fontSize: AXIS_NAME_FONT_SIZE, 
             options: { textAlign: 'left', textBaseline: 'middle' } 
         });
         
-        drawTicksAndLabels(lastGridState.interval1, lastGridState.alpha1, lastGridState.interval2, lastGridState.alpha2, false); // false = rectilinear mode
+        drawTicksAndLabels(lastGridState.interval1, lastGridState.alpha1, lastGridState.interval2, lastGridState.alpha2, false);
     }
 
-    drawZeroTickAndTickLabel(ctx, origin, canvasWidth, canvasHeight, coordsDisplayMode, updateHtmlLabel);
+    drawZeroTickAndTickLabel(ctx, origin, canvasWidth, canvasHeight, coordsDisplayMode, updateHtmlLabel, colors);
 
     ctx.restore();
 }
 
-export function drawGrid(ctx, state, dataToScreen, screenToData, lastGridState, lastAngularGridState) {
-    const { gridDisplayMode, canvas, dpr, viewTransform, gridAlpha } = state;
-    if (gridDisplayMode === 'none') return;
+export function drawGrid(ctx, { gridDisplayMode, canvas, dpr, viewTransform, gridAlpha, colors }, dataToScreen, screenToData, lastGridState, lastAngularGridState) {
+    
+    if (gridDisplayMode === GRID_DISPLAY_MODE_NONE) return;
 
     ctx.save();
 
@@ -1235,19 +1340,19 @@ export function drawGrid(ctx, state, dataToScreen, screenToData, lastGridState, 
     const canvasWidth = canvas.width / dpr;
     const canvasHeight = canvas.height / dpr;
 
-    if (gridDisplayMode === 'polar') {
+    if (gridDisplayMode === GRID_DISPLAY_MODE_POLAR) {
         const topLeftData = screenToData({ x: 0, y: 0 });
         const bottomRightData = screenToData({ x: canvasWidth, y: canvasHeight });
         const maxDataRadius = Math.hypot(Math.max(Math.abs(topLeftData.x), Math.abs(bottomRightData.x)), Math.max(Math.abs(topLeftData.y), Math.abs(bottomRightData.y)));
-        const transitionRadius = Math.min(canvasWidth, canvasHeight) * 400;
+        const transitionRadius = Math.min(canvasWidth, canvasHeight) * POLAR_TO_LINE_TRANSITION_RADIUS_FACTOR;
 
         const drawPolarCircles = (interval, alpha) => {
-            if (!interval || alpha < 0.01) return;
+            if (!interval || alpha < MIN_ALPHA_FOR_DRAWING) return;
             
             const screenSpacing = interval * viewTransform.scale / dpr;
             if (screenSpacing < GRID_POLAR_CIRCLE_MIN_SPACING) return;
 
-            ctx.strokeStyle = `rgba(${GRID_COLOR.join(',')}, ${alpha * gridAlpha})`;
+            ctx.strokeStyle = `rgba(${colors.grid.join(',')}, ${alpha * gridAlpha})`;
             ctx.lineWidth = GRID_LINEWIDTH;
             for (let r = interval; r <= maxDataRadius; r += interval) {
                 const screenRadius = r * viewTransform.scale / dpr;
@@ -1275,7 +1380,7 @@ export function drawGrid(ctx, state, dataToScreen, screenToData, lastGridState, 
                 } else {
                     if (isCircleInView(origin.x, origin.y, screenRadius, canvasWidth, canvasHeight)) {
                         ctx.beginPath();
-                        ctx.arc(origin.x, origin.y, screenRadius, 0, 2 * Math.PI);
+                        ctx.arc(origin.x, origin.y, screenRadius, 0, RADIANS_IN_CIRCLE);
                         ctx.stroke();
                     }
                 }
@@ -1288,29 +1393,38 @@ export function drawGrid(ctx, state, dataToScreen, screenToData, lastGridState, 
         const screenRadiusForSpokes = maxDataRadius * viewTransform.scale / dpr;
         const drawnAngles = new Set();
         
-        const visibleAngleRange = calculateVisibleAngleRange(origin, screenRadiusForSpokes, canvasWidth, canvasHeight);
-        if (!visibleAngleRange) {
+        let visibleAngleInfo = null;
+        if (screenRadiusForSpokes < canvasWidth * 10) {
+            visibleAngleInfo = { ranges: [[0, 360]], isFullCircle: true };
+        } else {
+            visibleAngleInfo = calculateVisibleAngleRange(origin, screenRadiusForSpokes, canvasWidth, canvasHeight);
+        }
+
+        if (!visibleAngleInfo) {
             ctx.restore();
             return;
         }
 
         lastAngularGridState.forEach(level => {
-            if (level.alpha < 0.01) return;
+            if (level.alpha < MIN_ALPHA_FOR_DRAWING) return;
 
             const screenSeparation = screenRadiusForSpokes * (level.angle * Math.PI / 180);
             if (screenSeparation < GRID_POLAR_SPOKE_MIN_SPACING && screenRadiusForSpokes > GRID_POLAR_SPOKE_MIN_RADIUS) return;
 
-            ctx.strokeStyle = `rgba(${GRID_COLOR.join(',')}, ${level.alpha * gridAlpha})`;
+            ctx.strokeStyle = `rgba(${colors.grid.join(',')}, ${level.alpha * gridAlpha})`;
             ctx.lineWidth = GRID_LINEWIDTH;
 
-            let anglesToProcess;
-            if (visibleAngleRange.isFullCircle) {
-                anglesToProcess = [];
-                for (let deg = 0; deg < 360; deg += level.angle) {
+            let anglesToProcess = [];
+            if (visibleAngleInfo.isFullCircle) {
+                for (let deg = 0; deg < DEGREES_IN_CIRCLE; deg += level.angle) {
                     anglesToProcess.push(deg);
                 }
             } else {
-                anglesToProcess = generateOptimizedAngleSequence(level.angle, visibleAngleRange.minAngle, visibleAngleRange.maxAngle);
+                visibleAngleInfo.ranges.forEach(range => {
+                    const [min, max] = range;
+                    anglesToProcess.push(...generateOptimizedAngleSequence(level.angle, min, max));
+                });
+                anglesToProcess = [...new Set(anglesToProcess)];
             }
 
             anglesToProcess.forEach(angle => {
@@ -1329,8 +1443,8 @@ export function drawGrid(ctx, state, dataToScreen, screenToData, lastGridState, 
 
     } else {
         const drawGridElements = (interval, alpha) => {
-            if (!interval || alpha < 0.01) return;
-            const gridElementColor = `rgba(${GRID_COLOR.join(',')}, ${alpha * gridAlpha})`;
+            if (!interval || alpha < MIN_ALPHA_FOR_DRAWING) return;
+            const gridElementColor = `rgba(${colors.grid.join(',')}, ${alpha * gridAlpha})`;
 
             const start = screenToData({ x: 0, y: canvasHeight });
             const end = screenToData({ x: canvasWidth, y: 0 });
@@ -1339,7 +1453,7 @@ export function drawGrid(ctx, state, dataToScreen, screenToData, lastGridState, 
             const startTickY = Math.floor(start.y / interval) * interval;
             const endTickY = Math.ceil(end.y / interval) * interval;
 
-            if (gridDisplayMode === 'lines') {
+            if (gridDisplayMode === GRID_DISPLAY_MODE_LINES) {
                 ctx.strokeStyle = gridElementColor;
                 ctx.lineWidth = GRID_LINEWIDTH;
                 for (let x = startTickX; x <= endTickX; x += interval) {
@@ -1356,21 +1470,21 @@ export function drawGrid(ctx, state, dataToScreen, screenToData, lastGridState, 
                     ctx.lineTo(canvasWidth, screenY);
                     ctx.stroke();
                 }
-            } else if (gridDisplayMode === 'points') {
+            } else if (gridDisplayMode === GRID_DISPLAY_MODE_POINTS) {
                 ctx.fillStyle = gridElementColor;
                 const pointRadius = GRID_POINT_RADIUS * dpr;
                 for (let x = startTickX; x <= endTickX; x += interval) {
                     for (let y = startTickY; y <= endTickY; y += interval) {
                         const screenPos = dataToScreen({ x: x, y: y });
                         ctx.beginPath();
-                        ctx.arc(screenPos.x, screenPos.y, pointRadius, 0, 2 * Math.PI);
+                        ctx.arc(screenPos.x, screenPos.y, pointRadius, 0, RADIANS_IN_CIRCLE);
                         ctx.fill();
                     }
                 }
-            } else if (gridDisplayMode === 'triangular') {
+            } else if (gridDisplayMode === GRID_DISPLAY_MODE_TRIANGULAR) {
                 ctx.fillStyle = gridElementColor;
                 const pointRadius = GRID_POINT_RADIUS * dpr;
-                const y_step = interval * Math.sqrt(3) / 2;
+                const y_step = interval * TRIANGULAR_GRID_Y_STEP_FACTOR;
                 
                 const startTickY_tri = Math.floor(start.y / y_step) * y_step;
                 const endTickY_tri = Math.ceil(end.y / y_step) * y_step;
@@ -1382,7 +1496,7 @@ export function drawGrid(ctx, state, dataToScreen, screenToData, lastGridState, 
                         const finalX = x + x_offset;
                         const screenPos = dataToScreen({ x: finalX, y: y });
                         ctx.beginPath();
-                        ctx.arc(screenPos.x, screenPos.y, pointRadius, 0, 2 * Math.PI);
+                        ctx.arc(screenPos.x, screenPos.y, pointRadius, 0, RADIANS_IN_CIRCLE);
                         ctx.fill();
                     }
                 }
@@ -1408,9 +1522,9 @@ export function drawAngleArc(ctx, centerScreen, dataStartAngleRad, dataEndAngleR
     ctx.restore();
 }
 
-function drawCenterSymbol(ctx, point, dataToScreen) {
+function drawCenterSymbol(ctx, point, dataToScreen, colors) {
     const screenPos = dataToScreen(point); const radius = CENTER_POINT_VISUAL_RADIUS;
-    ctx.strokeStyle = 'white';
+    ctx.strokeStyle = colors.defaultStroke;
     ctx.setLineDash([]); ctx.lineWidth = LINE_WIDTH;
     if (point.type === 'center_rotate_scale') {
         ctx.beginPath(); ctx.arc(screenPos.x, screenPos.y, radius, 0, 2 * Math.PI); ctx.stroke();
@@ -1424,10 +1538,9 @@ function drawCenterSymbol(ctx, point, dataToScreen) {
     }
 }
 
-export function drawPoint(ctx, point, state, dataToScreen) {
-    const { selectedPointIds, selectedCenterIds, activeCenterId, currentColor } = state;
-    let isSelected;
-    if (point.type === 'regular') {
+export function drawPoint(ctx, point, { selectedPointIds, selectedCenterIds, activeCenterId, currentColor, colors }, dataToScreen) {
+        let isSelected;
+    if (point.type === POINT_TYPE_REGULAR) {
         isSelected = selectedPointIds.includes(point.id);
     } else {
         isSelected = selectedCenterIds.includes(point.id);
@@ -1436,39 +1549,38 @@ export function drawPoint(ctx, point, state, dataToScreen) {
     const pointColor = point.color || currentColor;
     const screenPos = dataToScreen(point);
 
-    if (point.type !== 'regular') {
-        drawCenterSymbol(ctx, point, dataToScreen);
+    if (point.type !== POINT_TYPE_REGULAR) {
+        drawCenterSymbol(ctx, point, dataToScreen, colors);
     } else {
         ctx.beginPath();
-        ctx.arc(screenPos.x, screenPos.y, POINT_RADIUS, 0, 2 * Math.PI);
+        ctx.arc(screenPos.x, screenPos.y, POINT_RADIUS, 0, RADIANS_IN_CIRCLE);
         ctx.fillStyle = pointColor;
         ctx.fill();
     }
 
     if (isSelected) {
         ctx.save();
-        ctx.shadowColor = point.id === activeCenterId ? '#00ffff' : '#4da6ff';
-        ctx.shadowBlur = 15;
-        ctx.globalAlpha = 0.8;
+        ctx.shadowColor = point.id === activeCenterId ? colors.activeCenterGlow : colors.selectionGlow;
+        ctx.shadowBlur = SELECTION_GLOW_BLUR_RADIUS;
+        ctx.globalAlpha = SELECTION_GLOW_ALPHA;
 
         ctx.beginPath();
-        const glowRadius = point.type !== 'regular' ? CENTER_POINT_VISUAL_RADIUS + 3 : POINT_RADIUS + 3;
-        ctx.arc(screenPos.x, screenPos.y, glowRadius, 0, 2 * Math.PI);
-        ctx.strokeStyle = point.id === activeCenterId ? '#00ffff' : '#4da6ff';
-        ctx.lineWidth = 2;
+        const glowRadius = point.type !== POINT_TYPE_REGULAR ? CENTER_POINT_VISUAL_RADIUS + SELECTION_GLOW_RADIUS_OFFSET : POINT_RADIUS + SELECTION_GLOW_RADIUS_OFFSET;
+        ctx.arc(screenPos.x, screenPos.y, glowRadius, 0, RADIANS_IN_CIRCLE);
+        ctx.strokeStyle = point.id === activeCenterId ? colors.activeCenterGlow : colors.selectionGlow;
+        ctx.lineWidth = SELECTION_GLOW_LINE_WIDTH;
         ctx.stroke();
 
         ctx.restore();
     }
 }
 
-export function drawAllEdges(ctx, state, dataToScreen, findPointById, getEdgeId) {
-    const { allEdges, selectedEdgeIds, isDragConfirmed, dragPreviewPoints, currentColor } = state;
+export function drawAllEdges(ctx, { allEdges, selectedEdgeIds, isDragConfirmed, dragPreviewPoints, currentColor, colors }, dataToScreen, findPointById, getEdgeId) {
     ctx.lineWidth = LINE_WIDTH;
     allEdges.forEach(edge => {
         const p1_orig = findPointById(edge.id1);
         const p2_orig = findPointById(edge.id2);
-        if (!p1_orig || !p2_orig || p1_orig.type !== 'regular' || p2_orig.type !== 'regular') return;
+        if (!p1_orig || !p2_orig || p1_orig.type !== POINT_TYPE_REGULAR || p2_orig.type !== POINT_TYPE_REGULAR) return;
 
         let p1_render = { ...p1_orig };
         let p2_render = { ...p2_orig };
@@ -1511,23 +1623,19 @@ export function drawAllEdges(ctx, state, dataToScreen, findPointById, getEdgeId)
             ctx.beginPath();
             ctx.moveTo(p1Screen.x, p1Screen.y);
             ctx.lineTo(p2Screen.x, p2Screen.y);
-            ctx.strokeStyle = '#4da6ff';
-            ctx.globalAlpha = 0.8;
-            ctx.lineWidth = LINE_WIDTH + 4;
+            ctx.strokeStyle = colors.selectionGlow;
+            ctx.globalAlpha = SELECTION_GLOW_ALPHA;
+            ctx.lineWidth = LINE_WIDTH + EDGE_SELECTION_GLOW_WIDTH_OFFSET;
             ctx.stroke();
             ctx.globalAlpha = 1.0;
         }
     });
     ctx.setLineDash([]);
-    ctx.strokeStyle = 'white';
+    ctx.strokeStyle = colors.defaultStroke;
 }
 
-export function drawDragFeedback(ctx, htmlOverlay, targetPointId, currentPointStates, state, dataToScreen, findNeighbors, getEdgeId, isSnapping = false, excludedEdgeId = null, updateHtmlLabel = null) {
-    const { lastGridState, showDistances, showAngles, distanceSigFigs, angleDisplayMode, angleSigFigs, currentShiftPressed } = state;
-    const feedbackColor = isSnapping ? FEEDBACK_COLOR_SNAPPED : `rgba(${FEEDBACK_COLOR_DEFAULT.join(',')}, 1.0)`;
-    const katexFontSize = FEEDBACK_LABEL_FONT_SIZE;
-    const ARC_RADIUS_SCREEN = FEEDBACK_ARC_RADIUS_SCREEN;
-    const LABEL_OFFSET_DIST_SCREEN = FEEDBACK_DISTANCE_LABEL_OFFSET_SCREEN;
+export function drawDragFeedback(ctx, htmlOverlay, targetPointId, currentPointStates, { lastGridState, showDistances, showAngles, distanceSigFigs, angleDisplayMode, angleSigFigs, currentShiftPressed, viewTransform, colors }, dataToScreen, findNeighbors, getEdgeId, isSnapping = false, excludedEdgeId = null, updateHtmlLabel = null) {
+        const feedbackColor = isSnapping ? colors.feedbackSnapped : `rgba(${colors.feedbackDefault.join(',')}, 1.0)`;
 
     const livePoints = new Map(currentPointStates.map(p => [p.id, { ...p }]));
     const getLivePoint = (id) => livePoints.get(id);
@@ -1584,31 +1692,27 @@ export function drawDragFeedback(ctx, htmlOverlay, targetPointId, currentPointSt
                 const midX = (vertexScreen.x + neighborScreen.x) / 2;
                 const midY = (vertexScreen.y + neighborScreen.y) / 2;
 
-                let textOffset = LABEL_OFFSET_DIST_SCREEN;
-
                 const labelId = `drag-dist-${vertex.id}-${neighbor.id}`;
 
                 if (Math.abs(Math.cos(edgeAngleScreen)) < VERTICAL_LINE_COS_THRESHOLD) {
-                    const distanceTextX = midX + textOffset;
+                    const distanceTextX = midX + FEEDBACK_DISTANCE_LABEL_OFFSET_SCREEN;
                     const distanceTextY = midY;
-                    updateHtmlLabel({ id: labelId, content: distText, x: distanceTextX, y: distanceTextY, color: feedbackColor, fontSize: katexFontSize, options: { textAlign: 'center', textBaseline: 'middle', rotation: 90 } }, htmlOverlay);
+                    updateHtmlLabel({ id: labelId, content: distText, x: distanceTextX, y: distanceTextY, color: feedbackColor, fontSize: FEEDBACK_LABEL_FONT_SIZE, options: { textAlign: 'center', textBaseline: 'middle', rotation: 90 } }, htmlOverlay);
                 } else {
                     let textPerpAngle = edgeAngleScreen - Math.PI / 2;
                     if (Math.sin(textPerpAngle) > 0) {
                         textPerpAngle += Math.PI;
                     }
-                    const distanceTextX = midX + Math.cos(textPerpAngle) * textOffset;
-                    const distanceTextY = midY + Math.sin(textPerpAngle) * textOffset;
+                    const distanceTextX = midX + Math.cos(textPerpAngle) * FEEDBACK_DISTANCE_LABEL_OFFSET_SCREEN;
+                    const distanceTextY = midY + Math.sin(textPerpAngle) * FEEDBACK_DISTANCE_LABEL_OFFSET_SCREEN;
 
                     let rotationDeg = edgeAngleScreen * (180 / Math.PI);
                     if (rotationDeg > 90 || rotationDeg < -90) {
                         rotationDeg += 180;
                     }
 
-                    updateHtmlLabel({ id: labelId, content: distText, x: distanceTextX, y: distanceTextY, color: feedbackColor, fontSize: katexFontSize, options: { textAlign: 'center', textBaseline: 'middle', rotation: rotationDeg } }, htmlOverlay);
+                    updateHtmlLabel({ id: labelId, content: distText, x: distanceTextX, y: distanceTextY, color: feedbackColor, fontSize: FEEDBACK_LABEL_FONT_SIZE, options: { textAlign: 'center', textBaseline: 'middle', rotation: rotationDeg } }, htmlOverlay);
                 }
-            } else {
-                
             }
         }
     });
@@ -1629,28 +1733,28 @@ export function drawDragFeedback(ctx, htmlOverlay, targetPointId, currentPointSt
             const angle2_data = Math.atan2(v2.y, v2.x);
             let angleToDisplayRad = angle2_data - angle1_data;
             if (angleToDisplayRad < 0) {
-                angleToDisplayRad += 2 * Math.PI;
+                angleToDisplayRad += RADIANS_IN_CIRCLE;
             }
             if (angleToDisplayRad < GEOMETRY_CALCULATION_EPSILON) continue;
-            const LABEL_RADIUS_SCREEN = ANGLE_LABEL_RADIUS_SCREEN;
+            
             const bisectorAngle = angle1_data + (angleToDisplayRad / 2);
             ctx.save();
             ctx.strokeStyle = feedbackColor;
             ctx.lineWidth = FEEDBACK_LINE_VISUAL_WIDTH;
             ctx.beginPath();
-            ctx.arc(vertexScreen.x, vertexScreen.y, ARC_RADIUS_SCREEN, -angle1_data, -angle2_data, false);
+            ctx.arc(vertexScreen.x, vertexScreen.y, FEEDBACK_ARC_RADIUS_SCREEN, -angle1_data, -angle2_data, false);
             ctx.stroke();
             ctx.restore();
 
             let angleText;
-            if (angleDisplayMode === 'degrees') {
-                angleText = `${formatNumber(angleToDisplayRad * (180 / Math.PI), angleSigFigs)}^{\\circ}`;
-            } else if (angleDisplayMode === 'radians') {
+            if (angleDisplayMode === ANGLE_DISPLAY_MODE_DEGREES) {
+                angleText = `${formatNumber(angleToDisplayRad * (DEGREES_IN_HALF_CIRCLE / Math.PI), angleSigFigs)}^{\\circ}`;
+            } else if (angleDisplayMode === ANGLE_DISPLAY_MODE_RADIANS) {
                 if (currentShiftPressed) {
-                    angleText = formatFraction(angleToDisplayRad / Math.PI, 0.001, 6) + '\\pi';
-                    if (angleText.startsWith("1\\pi")) angleText = "\\pi";
-                    if (angleText.startsWith("-1\\pi")) angleText = "-\\pi";
-                    if (angleText === "0\\pi") angleText = "0";
+                    angleText = formatFraction(angleToDisplayRad / Math.PI, FRACTION_FORMAT_TOLERANCE, FRACTION_FORMAT_MAX_DENOMINATOR) + PI_SYMBOL_KATEX;
+                    if (angleText.startsWith(`1${PI_SYMBOL_KATEX}`)) angleText = PI_SYMBOL_KATEX;
+                    if (angleText.startsWith(`-1${PI_SYMBOL_KATEX}`)) angleText = `-${PI_SYMBOL_KATEX}`;
+                    if (angleText === `0${PI_SYMBOL_KATEX}`) angleText = "0";
                 } else {
                     angleText = formatNumber(angleToDisplayRad, angleSigFigs);
                 }
@@ -1658,30 +1762,19 @@ export function drawDragFeedback(ctx, htmlOverlay, targetPointId, currentPointSt
 
             if (angleText) {
                 const angleLabelDataPos = {
-                    x: vertex.x + (LABEL_RADIUS_SCREEN / state.viewTransform.scale) * Math.cos(bisectorAngle),
-                    y: vertex.y + (LABEL_RADIUS_SCREEN / state.viewTransform.scale) * Math.sin(bisectorAngle)
+                    x: vertex.x + (ANGLE_LABEL_RADIUS_SCREEN / viewTransform.scale) * Math.cos(bisectorAngle),
+                    y: vertex.y + (ANGLE_LABEL_RADIUS_SCREEN / viewTransform.scale) * Math.sin(bisectorAngle)
                 };
                 const angleLabelScreenPos = dataToScreen(angleLabelDataPos);
                 const labelId = `drag-angle-${vertex.id}-${p1.id}-${p2.id}`;
-                updateHtmlLabel({ id: labelId, content: angleText, x: angleLabelScreenPos.x, y: angleLabelScreenPos.y, color: feedbackColor, fontSize: katexFontSize, options: { textAlign: 'center', textBaseline: 'middle' } }, htmlOverlay);
-            } else {
-                
+                updateHtmlLabel({ id: labelId, content: angleText, x: angleLabelScreenPos.x, y: angleLabelScreenPos.y, color: feedbackColor, fontSize: FEEDBACK_LABEL_FONT_SIZE, options: { textAlign: 'center', textBaseline: 'middle' } }, htmlOverlay);
             }
         }
-    } else {
-        neighbors.forEach(neighbor1 => {
-            neighbors.forEach(neighbor2 => {
-                if (neighbor1.id !== neighbor2.id) {
-                    
-                }
-            });
-        });
     }
 }
 
-export function drawTransformIndicators(ctx, htmlOverlay, state, dataToScreen, updateHtmlLabel) {
-    const { transformIndicatorData, angleSigFigs, distanceSigFigs } = state;
-    if (!transformIndicatorData) return;
+export function drawTransformIndicators(ctx, htmlOverlay, { transformIndicatorData, angleSigFigs, distanceSigFigs, colors }, dataToScreen, updateHtmlLabel) {
+        if (!transformIndicatorData) return;
 
     const { center, startPos, currentPos, rotation, scale, isSnapping, snappedScaleValue, transformType } = transformIndicatorData;
 
@@ -1689,8 +1782,7 @@ export function drawTransformIndicators(ctx, htmlOverlay, state, dataToScreen, u
     const startScreen = dataToScreen(startPos);
     const currentScreen = dataToScreen(currentPos);
 
-    const color = isSnapping ? 'rgba(240, 240, 130, 0.95)' : 'rgba(230, 230, 230, 0.95)';
-    const katexFontSize = 12;
+    const color = isSnapping ? colors.feedbackSnapped : colors.feedbackDefault_STATIC;
 
     const startVecScreen = { x: startScreen.x - centerScreen.x, y: startScreen.y - centerScreen.y };
     const currentVecScreen = { x: currentScreen.x - centerScreen.x, y: currentScreen.y - centerScreen.y };
@@ -1702,7 +1794,7 @@ export function drawTransformIndicators(ctx, htmlOverlay, state, dataToScreen, u
     ctx.save();
     ctx.setLineDash(DASH_PATTERN);
     ctx.strokeStyle = color;
-    ctx.lineWidth = 1;
+    ctx.lineWidth = FEEDBACK_LINE_VISUAL_WIDTH;
 
     ctx.beginPath();
     ctx.moveTo(centerScreen.x, centerScreen.y);
@@ -1716,7 +1808,7 @@ export function drawTransformIndicators(ctx, htmlOverlay, state, dataToScreen, u
 
     ctx.setLineDash([]);
 
-    if (transformType !== 'center_scale_only' && Math.abs(rotation) > 0.001) {
+    if (transformType !== TRANSFORM_TYPE_SCALE_ONLY && Math.abs(rotation) > MIN_TRANSFORM_ACTION_THRESHOLD) {
         const screenRotation = -rotation;
         const anticlockwise = screenRotation < 0;
         ctx.beginPath();
@@ -1725,22 +1817,22 @@ export function drawTransformIndicators(ctx, htmlOverlay, state, dataToScreen, u
     }
     ctx.restore();
 
-    if (transformType !== 'center_scale_only' && Math.abs(rotation) > 0.001) {
-        const angleDeg = rotation * (180 / Math.PI);
+    if (transformType !== TRANSFORM_TYPE_SCALE_ONLY && Math.abs(rotation) > MIN_TRANSFORM_ACTION_THRESHOLD) {
+        const angleDeg = rotation * (DEGREES_IN_HALF_CIRCLE / Math.PI);
         const angleText = `${formatNumber(angleDeg, angleSigFigs)}^{\\circ}`;
         const angleDiff = normalizeAngleToPi(currentAngleScreen - startAngleScreen);
         const bisectorAngle = startAngleScreen + angleDiff / 2;
-        const labelRadius = arcRadius + 20;
+        const labelRadius = arcRadius + TRANSFORM_ANGLE_LABEL_OFFSET;
         const angleTextX = centerScreen.x + labelRadius * Math.cos(bisectorAngle);
         const angleTextY = centerScreen.y + labelRadius * Math.sin(bisectorAngle);
 
-        updateHtmlLabel({ id: 'transform-angle-indicator', content: angleText, x: angleTextX, y: angleTextY, color: color, fontSize: katexFontSize, options: { textAlign: 'center', textBaseline: 'middle' } }, htmlOverlay);
+        updateHtmlLabel({ id: 'transform-angle-indicator', content: angleText, x: angleTextX, y: angleTextY, color: color, fontSize: FEEDBACK_LABEL_FONT_SIZE, options: { textAlign: 'center', textBaseline: 'middle' } }, htmlOverlay);
     }
 
-    if (transformType !== 'center_rotate_only' && Math.abs(scale - 1) > 0.001) {
+    if (transformType !== TRANSFORM_TYPE_ROTATE_ONLY && Math.abs(scale - 1) > MIN_TRANSFORM_ACTION_THRESHOLD) {
         let scaleText;
         if (isSnapping && snappedScaleValue !== null) {
-            scaleText = `\\times ${formatFraction(snappedScaleValue, 0.001, 10)}`;
+            scaleText = `\\times ${formatFraction(snappedScaleValue, FRACTION_FORMAT_TOLERANCE, FRACTION_FORMAT_MAX_DENOMINATOR_TRANSFORM)}`;
         } else {
             scaleText = `\\times ${formatNumber(scale, distanceSigFigs)}`;
         }
@@ -1748,31 +1840,28 @@ export function drawTransformIndicators(ctx, htmlOverlay, state, dataToScreen, u
         const midX = (centerScreen.x + currentScreen.x) / 2;
         const midY = (centerScreen.y + currentScreen.y) / 2;
         let textPerpAngle = currentAngleScreen - Math.PI / 2;
-        const textOffset = 18;
-        const scaleTextX = midX + Math.cos(textPerpAngle) * textOffset;
-        const scaleTextY = midY + Math.sin(textPerpAngle) * textOffset;
+        const scaleTextX = midX + Math.cos(textPerpAngle) * TRANSFORM_SCALE_LABEL_OFFSET;
+        const scaleTextY = midY + Math.sin(textPerpAngle) * TRANSFORM_SCALE_LABEL_OFFSET;
 
-        let rotationDeg = currentAngleScreen * (180 / Math.PI);
-        if (rotationDeg > 90 || rotationDeg < -90) {
-            rotationDeg += 180;
+        let rotationDeg = currentAngleScreen * (DEGREES_IN_HALF_CIRCLE / Math.PI);
+        if (rotationDeg > DEGREES_IN_QUADRANT || rotationDeg < -DEGREES_IN_QUADRANT) {
+            rotationDeg += DEGREES_IN_HALF_CIRCLE;
         }
 
-        updateHtmlLabel({ id: 'transform-scale-indicator', content: scaleText, x: scaleTextX, y: scaleTextY, color: color, fontSize: katexFontSize, options: { textAlign: 'center', textBaseline: 'bottom', rotation: rotationDeg } }, htmlOverlay);
+        updateHtmlLabel({ id: 'transform-scale-indicator', content: scaleText, x: scaleTextX, y: scaleTextY, color: color, fontSize: FEEDBACK_LABEL_FONT_SIZE, options: { textAlign: 'center', textBaseline: 'bottom', rotation: rotationDeg } }, htmlOverlay);
     }
 }
 
-export function drawReferenceElementsGeometry(ctx, context, dataToScreen, screenToData, state) {
-    if ((!state.showAngles && !state.showDistances) || !context.frozen_Origin_Data_to_display) return;
-    const { viewTransform } = state;
-
+export function drawReferenceElementsGeometry(ctx, context, dataToScreen, screenToData, { showAngles, showDistances, viewTransform, mousePos, colors }) {
+    if ((!showAngles && !showDistances) || !context.frozen_Origin_Data_to_display) return;
+    
     const startPointData = context.frozen_Origin_Data_to_display;
-    const mouseDataPos = screenToData(state.mousePos);
+    const mouseDataPos = screenToData(mousePos);
     const previewDistance = distance(startPointData, mouseDataPos);
-    const epsilon = 1e-6;
-    if (previewDistance < epsilon) return;
+    
+    if (previewDistance < GEOMETRY_CALCULATION_EPSILON) return;
 
-    const refElementColor = FROZEN_REFERENCE_COLOR;
-    const ARC_RADIUS_SCREEN_REF = 35;
+    const refElementColor = colors.frozenReference;
 
     const turnAngleData = context.displayAngleA_valueRad_for_A_equals_label;
     const baseAngleData = context.frozen_A_baseRad_to_display !== null ? context.frozen_A_baseRad_to_display : 0;
@@ -1784,11 +1873,11 @@ export function drawReferenceElementsGeometry(ctx, context, dataToScreen, screen
     const absoluteAngleForRefLine = baseAngleData + turnAngleData;
 
     ctx.save();
-    ctx.lineWidth = 1;
+    ctx.lineWidth = FEEDBACK_LINE_VISUAL_WIDTH;
     ctx.strokeStyle = refElementColor;
 
-    if (state.showAngles && context.displayAngleA_valueRad_for_A_equals_label !== null && Math.abs(context.displayAngleA_valueRad_for_A_equals_label) > epsilon) {
-        const effectiveRadiusForLine = ARC_RADIUS_SCREEN_REF + ctx.lineWidth / 2;
+    if (showAngles && context.displayAngleA_valueRad_for_A_equals_label !== null && Math.abs(context.displayAngleA_valueRad_for_A_equals_label) > GEOMETRY_CALCULATION_EPSILON) {
+        const effectiveRadiusForLine = REF_ARC_RADIUS_SCREEN + ctx.lineWidth / 2;
 
         const dottedLineEndPointData = {
             x: startPointData.x + Math.cos(baseAngleData) * (effectiveRadiusForLine / viewTransform.scale),
@@ -1799,44 +1888,40 @@ export function drawReferenceElementsGeometry(ctx, context, dataToScreen, screen
         ctx.beginPath();
         ctx.moveTo(frozenOriginScreen.x, frozenOriginScreen.y);
         ctx.lineTo(dottedLineEndPointScreen.x, dottedLineEndPointScreen.y);
-        ctx.setLineDash([1, 3]);
+        ctx.setLineDash(REF_LINE_DASH_PATTERN);
         ctx.stroke();
 
-        drawAngleArc(ctx, frozenOriginScreen, baseAngleData, absoluteAngleForRefLine, ARC_RADIUS_SCREEN_REF, refElementColor, false);
+        drawAngleArc(ctx, frozenOriginScreen, baseAngleData, absoluteAngleForRefLine, REF_ARC_RADIUS_SCREEN, refElementColor, false);
     }
     ctx.restore();
 }
 
-export function prepareSnapInfoTexts(ctx, htmlOverlay, startPointData, targetDataPos, snappedOutput, state, dataToScreen, drawingContext, updateHtmlLabel) {
-    const { showDistances, showAngles, currentShiftPressed, distanceSigFigs, angleSigFigs, angleDisplayMode, viewTransform } = state;
-    const epsilon = GEOMETRY_CALCULATION_EPSILON;
-    if ((!showAngles && !showDistances) || snappedOutput.distance < epsilon) {
+export function prepareSnapInfoTexts(ctx, htmlOverlay, startPointData, targetDataPos, snappedOutput, { showDistances, showAngles, currentShiftPressed, distanceSigFigs, angleSigFigs, angleDisplayMode, viewTransform, frozenReference_D_du, gridDisplayMode, frozenReference_A_rad, colors }, dataToScreen, drawingContext, updateHtmlLabel) {
+    if ((!showAngles && !showDistances) || snappedOutput.distance < GEOMETRY_CALCULATION_EPSILON) {
         return;
     }
 
     const startScreen = dataToScreen(startPointData);
     const { angle: snappedAbsoluteAngleDeg, distance: snappedDistanceData, lengthSnapFactor, angleSnapFactor, angleTurn, gridToGridSquaredSum, gridInterval } = snappedOutput;
-    const { offsetAngleRad, isFirstSegmentBeingDrawn, currentSegmentReferenceA_for_display, currentSegmentReferenceD } = drawingContext;
-    const currentElementColor = currentShiftPressed ? GEOMETRY_INFO_TEXT_COLOR_SNAPPED : GEOMETRY_INFO_TEXT_COLOR;
-    const katexFontSize = 12;
-    const ARC_RADIUS_SCREEN_SNAP = 30;
+    const { offsetAngleRad, isFirstSegmentBeingDrawn } = drawingContext;
+    const currentElementColor = currentShiftPressed ? colors.geometryInfoTextSnapped : colors.geometryInfoText;
     const currentLineAbsoluteAngle = Math.atan2(targetDataPos.y - startPointData.y, targetDataPos.x - startPointData.x);
 
     if (showDistances) {
         let distanceText = '';
 
-        if (currentShiftPressed && !isFirstSegmentBeingDrawn && state.frozenReference_D_du !== null) {
+        if (currentShiftPressed && !isFirstSegmentBeingDrawn && frozenReference_D_du !== null) {
             const currentExactDistance = snappedDistanceData;
 
             if (gridToGridSquaredSum !== null && gridInterval) {
                 const actualGridDistance = gridInterval * Math.sqrt(gridToGridSquaredSum);
-                if (Math.abs(actualGridDistance - state.frozenReference_D_du) < epsilon) {
-                    distanceText = '\\delta';
+                if (Math.abs(actualGridDistance - frozenReference_D_du) < GEOMETRY_CALCULATION_EPSILON) {
+                    distanceText = DELTA_SYMBOL_KATEX;
                 } else {
-                    const ratio = actualGridDistance / state.frozenReference_D_du;
+                    const ratio = actualGridDistance / frozenReference_D_du;
                     let foundFraction = false;
                     for (const factor of SNAP_FACTORS) {
-                        if (Math.abs(ratio - factor) < epsilon) {
+                        if (Math.abs(ratio - factor) < GEOMETRY_CALCULATION_EPSILON) {
                             distanceText = formatSnapFactor(factor, 'D');
                             foundFraction = true;
                             break;
@@ -1849,11 +1934,11 @@ export function prepareSnapInfoTexts(ctx, htmlOverlay, startPointData, targetDat
                         distanceText = formatSimplifiedRoot(roundedFinalCoeff, radicand);
                     }
                 }
-            } else if (state.frozenReference_D_du > epsilon) {
-                const ratio = currentExactDistance / state.frozenReference_D_du;
+            } else if (frozenReference_D_du > GEOMETRY_CALCULATION_EPSILON) {
+                const ratio = currentExactDistance / frozenReference_D_du;
                 let foundFraction = false;
                 for (const factor of SNAP_FACTORS) {
-                    if (Math.abs(ratio - factor) < epsilon) {
+                    if (Math.abs(ratio - factor) < GEOMETRY_CALCULATION_EPSILON) {
                         distanceText = formatSnapFactor(factor, 'D');
                         foundFraction = true;
                         break;
@@ -1865,7 +1950,7 @@ export function prepareSnapInfoTexts(ctx, htmlOverlay, startPointData, targetDat
             } else {
                 distanceText = formatNumber(snappedDistanceData, distanceSigFigs);
             }
-        } else if (currentShiftPressed && isFirstSegmentBeingDrawn && state.gridDisplayMode !== 'none' && gridInterval) {
+        } else if (currentShiftPressed && isFirstSegmentBeingDrawn && gridDisplayMode !== GRID_DISPLAY_MODE_NONE && gridInterval) {
             if (gridToGridSquaredSum !== null && gridInterval) {
                 if (gridToGridSquaredSum >= 0) {
                     const [coeff, radicand] = simplifySquareRoot(gridToGridSquaredSum);
@@ -1886,17 +1971,16 @@ export function prepareSnapInfoTexts(ctx, htmlOverlay, startPointData, targetDat
             const edgeAngleScreen = Math.atan2(endScreenPos.y - startScreenPos.y, endScreenPos.x - startScreenPos.x);
             const midX = (startScreenPos.x + endScreenPos.x) / 2;
             const midY = (startScreenPos.y + endScreenPos.y) / 2;
-            let textOffset = 18;
 
             if (Math.abs(Math.cos(edgeAngleScreen)) < VERTICAL_LINE_COS_THRESHOLD) {
-                const distanceTextX = midX + textOffset;
+                const distanceTextX = midX + FEEDBACK_DISTANCE_LABEL_OFFSET_SCREEN;
                 const distanceTextY = midY;
-                updateHtmlLabel({ id: 'snap-dist', content: distanceText, x: distanceTextX, y: distanceTextY, color: currentElementColor, fontSize: katexFontSize, options: { textAlign: 'center', textBaseline: 'middle', rotation: 90 } }, htmlOverlay);
+                updateHtmlLabel({ id: 'snap-dist', content: distanceText, x: distanceTextX, y: distanceTextY, color: currentElementColor, fontSize: FEEDBACK_LABEL_FONT_SIZE, options: { textAlign: 'center', textBaseline: 'middle', rotation: 90 } }, htmlOverlay);
             } else {
                 let textPerpAngle;
                 const baseAngleForArc = isFirstSegmentBeingDrawn ? 0 : offsetAngleRad;
 
-                if (showAngles && snappedDistanceData > epsilon && Math.abs(angleTurn) > epsilon) {
+                if (showAngles && snappedDistanceData > GEOMETRY_CALCULATION_EPSILON && Math.abs(angleTurn) > GEOMETRY_CALCULATION_EPSILON) {
                     const canvasStartAngle = -baseAngleForArc;
                     const canvasEndAngle = -currentLineAbsoluteAngle;
                     const sumCos = Math.cos(canvasStartAngle) + Math.cos(canvasEndAngle);
@@ -1913,25 +1997,25 @@ export function prepareSnapInfoTexts(ctx, htmlOverlay, startPointData, targetDat
                         textPerpAngle += Math.PI;
                     }
                 }
-                const distanceTextX = midX + Math.cos(textPerpAngle) * textOffset;
-                const distanceTextY = midY + Math.sin(textPerpAngle) * textOffset;
-                let rotationDeg = edgeAngleScreen * (180 / Math.PI);
-                if (rotationDeg > 90 || rotationDeg < -90) {
-                    rotationDeg += 180;
+                const distanceTextX = midX + Math.cos(textPerpAngle) * FEEDBACK_DISTANCE_LABEL_OFFSET_SCREEN;
+                const distanceTextY = midY + Math.sin(textPerpAngle) * FEEDBACK_DISTANCE_LABEL_OFFSET_SCREEN;
+                let rotationDeg = edgeAngleScreen * (DEGREES_IN_HALF_CIRCLE / Math.PI);
+                if (rotationDeg > DEGREES_IN_QUADRANT || rotationDeg < -DEGREES_IN_QUADRANT) {
+                    rotationDeg += DEGREES_IN_HALF_CIRCLE;
                 }
-                updateHtmlLabel({ id: 'snap-dist', content: distanceText, x: distanceTextX, y: distanceTextY, color: currentElementColor, fontSize: katexFontSize, options: { textAlign: 'center', textBaseline: 'middle', rotation: rotationDeg } }, htmlOverlay);
+                updateHtmlLabel({ id: 'snap-dist', content: distanceText, x: distanceTextX, y: distanceTextY, color: currentElementColor, fontSize: FEEDBACK_LABEL_FONT_SIZE, options: { textAlign: 'center', textBaseline: 'middle', rotation: rotationDeg } }, htmlOverlay);
             }
         }
     }
 
-    if (showAngles && snappedDistanceData > epsilon && Math.abs(angleTurn) > epsilon) {
+    if (showAngles && snappedDistanceData > GEOMETRY_CALCULATION_EPSILON && Math.abs(angleTurn) > GEOMETRY_CALCULATION_EPSILON) {
         const baseAngleForArc = isFirstSegmentBeingDrawn ? 0 : offsetAngleRad;
 
-        drawAngleArc(ctx, startScreen, baseAngleForArc, currentLineAbsoluteAngle, ARC_RADIUS_SCREEN_SNAP, currentElementColor);
+        drawAngleArc(ctx, startScreen, baseAngleForArc, currentLineAbsoluteAngle, FEEDBACK_ARC_RADIUS_SCREEN, currentElementColor);
 
         ctx.save();
         ctx.beginPath();
-        const effectiveRadiusForLine = ARC_RADIUS_SCREEN_SNAP + ctx.lineWidth / 2;
+        const effectiveRadiusForLine = FEEDBACK_ARC_RADIUS_SCREEN + ctx.lineWidth / 2;
         const baseLineEndData = {
             x: startPointData.x + (effectiveRadiusForLine / viewTransform.scale) * Math.cos(baseAngleForArc),
             y: startPointData.y + (effectiveRadiusForLine / viewTransform.scale) * Math.sin(baseAngleForArc)
@@ -1939,100 +2023,94 @@ export function prepareSnapInfoTexts(ctx, htmlOverlay, startPointData, targetDat
         const baseLineEndScreen = dataToScreen(baseLineEndData);
         ctx.moveTo(startScreen.x, startScreen.y);
         ctx.lineTo(baseLineEndScreen.x, baseLineEndScreen.y);
-        ctx.strokeStyle = 'rgba(180, 180, 180, 0.6)';
-        ctx.setLineDash([2, 3]);
-        ctx.lineWidth = 1;
+        ctx.strokeStyle = colors.helperLine;
+        ctx.setLineDash(HELPER_LINE_DASH_PATTERN);
+        ctx.lineWidth = FEEDBACK_LINE_VISUAL_WIDTH;
         ctx.stroke();
         ctx.restore();
 
         let angleText = '';
-        const canReferToTheta = !isFirstSegmentBeingDrawn && state.frozenReference_A_rad !== null && Math.abs(state.frozenReference_A_rad) > epsilon;
+        const canReferToTheta = !isFirstSegmentBeingDrawn && frozenReference_A_rad !== null && Math.abs(frozenReference_A_rad) > GEOMETRY_CALCULATION_EPSILON;
 
-        if (angleDisplayMode === 'degrees') {
+        if (angleDisplayMode === ANGLE_DISPLAY_MODE_DEGREES) {
             if (currentShiftPressed && canReferToTheta) {
-                const referenceAngleRad = Math.abs(currentSegmentReferenceA_for_display);
+                const referenceAngleRad = Math.abs(drawingContext.currentSegmentReferenceA_for_display);
                 let potentialFactor = null;
 
                 if (typeof angleSnapFactor === 'number') {
                     potentialFactor = angleSnapFactor;
                 } else if (angleTurn !== null) {
-                    if (Math.abs(referenceAngleRad) > epsilon) {
+                    if (Math.abs(referenceAngleRad) > GEOMETRY_CALCULATION_EPSILON) {
                         const calculatedFactor = angleTurn / referenceAngleRad;
                         for (const frac of NINETY_DEG_ANGLE_SNAP_FRACTIONS) {
-                            if (Math.abs(Math.abs(calculatedFactor) - frac) < epsilon) {
+                            if (Math.abs(Math.abs(calculatedFactor) - frac) < GEOMETRY_CALCULATION_EPSILON) {
                                 potentialFactor = calculatedFactor < 0 ? -frac : frac;
                                 break;
                             }
                         }
                     }
                 }
-                if (potentialFactor !== null && Math.abs(potentialFactor) > epsilon) {
+                if (potentialFactor !== null && Math.abs(potentialFactor) > GEOMETRY_CALCULATION_EPSILON) {
                     angleText = formatSnapFactor(potentialFactor, 'A');
                 } else {
-                    // Keep the original sign of angleTurn for consistent display
-                    let degrees = angleTurn * (180 / Math.PI);
-                    if (Math.abs(degrees) > epsilon) {
+                    let degrees = angleTurn * (DEGREES_IN_HALF_CIRCLE / Math.PI);
+                    if (Math.abs(degrees) > GEOMETRY_CALCULATION_EPSILON) {
                         angleText = `${formatNumber(degrees, angleSigFigs)}^{\\circ}`;
                     }
                 }
             } else {
                 let angleToFormatRad = isFirstSegmentBeingDrawn ? currentLineAbsoluteAngle : angleTurn;
-                // For drawing mode with shift, preserve the natural sign of the angle
                 if (currentShiftPressed && !isFirstSegmentBeingDrawn) {
-                    // Keep angleTurn as is, don't normalize to [-π, π]
-                    let angleToFormatDeg = angleToFormatRad * (180 / Math.PI);
-                    if (Math.abs(angleToFormatDeg) > epsilon) {
+                    let angleToFormatDeg = angleToFormatRad * (DEGREES_IN_HALF_CIRCLE / Math.PI);
+                    if (Math.abs(angleToFormatDeg) > GEOMETRY_CALCULATION_EPSILON) {
                         angleText = `${formatNumber(angleToFormatDeg, angleSigFigs)}^{\\circ}`;
                     }
                 } else {
-                    let angleToFormatDeg = normalizeAngleToPi(angleToFormatRad) * (180 / Math.PI);
-                    if (Math.abs(angleToFormatDeg) > epsilon) {
+                    let angleToFormatDeg = normalizeAngleToPi(angleToFormatRad) * (DEGREES_IN_HALF_CIRCLE / Math.PI);
+                    if (Math.abs(angleToFormatDeg) > GEOMETRY_CALCULATION_EPSILON) {
                         angleText = `${formatNumber(angleToFormatDeg, angleSigFigs)}^{\\circ}`;
                     }
                 }
             }
-        } else if (angleDisplayMode === 'radians') {
+        } else if (angleDisplayMode === ANGLE_DISPLAY_MODE_RADIANS) {
             if (currentShiftPressed && canReferToTheta) {
-                const referenceAngleRad = Math.abs(currentSegmentReferenceA_for_display);
+                const referenceAngleRad = Math.abs(drawingContext.currentSegmentReferenceA_for_display);
                 let potentialFactor = null;
 
                 if (typeof angleSnapFactor === 'number') {
                     potentialFactor = angleSnapFactor;
                 } else if (angleTurn !== null) {
-                    if (Math.abs(referenceAngleRad) > epsilon) {
+                    if (Math.abs(referenceAngleRad) > GEOMETRY_CALCULATION_EPSILON) {
                         const calculatedFactor = angleTurn / referenceAngleRad;
                         for (const frac of NINETY_DEG_ANGLE_SNAP_FRACTIONS) {
-                            if (Math.abs(Math.abs(calculatedFactor) - frac) < epsilon) {
+                            if (Math.abs(Math.abs(calculatedFactor) - frac) < GEOMETRY_CALCULATION_EPSILON) {
                                 potentialFactor = calculatedFactor < 0 ? -frac : frac;
                                 break;
                             }
                         }
                     }
                 }
-                if (potentialFactor !== null && Math.abs(potentialFactor) > epsilon) {
+                if (potentialFactor !== null && Math.abs(potentialFactor) > GEOMETRY_CALCULATION_EPSILON) {
                     const fracStr = formatSnapFactor(potentialFactor, null);
-                    angleText = `${fracStr === '0' ? '0' : fracStr + '\\pi'}`;
-                    if (angleText.startsWith("1\\pi")) angleText = "\\pi";
-                    if (angleText.startsWith("-1\\pi")) angleText = "-\\pi";
+                    angleText = `${fracStr === '0' ? '0' : fracStr + PI_SYMBOL_KATEX}`;
+                    if (angleText.startsWith(`1${PI_SYMBOL_KATEX}`)) angleText = PI_SYMBOL_KATEX;
+                    if (angleText.startsWith(`-1${PI_SYMBOL_KATEX}`)) angleText = `-${PI_SYMBOL_KATEX}`;
                 } else {
-                    // Keep the original sign of angleTurn for consistent display
                     let radians = angleTurn;
-                    if (Math.abs(radians) > epsilon) {
+                    if (Math.abs(radians) > GEOMETRY_CALCULATION_EPSILON) {
                         angleText = formatNumber(radians, angleSigFigs);
                     }
                 }
             } else {
                 let angleToFormatRad = isFirstSegmentBeingDrawn ? currentLineAbsoluteAngle : angleTurn;
-                // For drawing mode with shift, preserve the natural sign of the angle
                 if (currentShiftPressed && !isFirstSegmentBeingDrawn) {
-                    // Keep angleTurn as is, don't normalize to [-π, π]
                     let radians = angleToFormatRad;
-                    if (Math.abs(radians) > epsilon) {
+                    if (Math.abs(radians) > GEOMETRY_CALCULATION_EPSILON) {
                         angleText = formatNumber(radians, angleSigFigs);
                     }
                 } else {
                     let radians = normalizeAngleToPi(angleToFormatRad);
-                    if (Math.abs(radians) > epsilon) {
+                    if (Math.abs(radians) > GEOMETRY_CALCULATION_EPSILON) {
                         angleText = formatNumber(radians, angleSigFigs);
                     }
                 }
@@ -2045,19 +2123,15 @@ export function prepareSnapInfoTexts(ctx, htmlOverlay, startPointData, targetDat
             const sumCos = Math.cos(canvasStartAngle) + Math.cos(canvasEndAngle);
             const sumSin = Math.sin(canvasStartAngle) + Math.sin(canvasEndAngle);
             let bisectorCanvasAngle = Math.atan2(sumSin, sumCos);
-            const labelDistance = 60;
-            const angleTextX = startScreen.x + Math.cos(bisectorCanvasAngle) * labelDistance;
-            const angleTextY = startScreen.y + Math.sin(bisectorCanvasAngle) * labelDistance;
-            updateHtmlLabel({ id: 'snap-angle', content: angleText, x: angleTextX, y: angleTextY, color: currentElementColor, fontSize: katexFontSize, options: { textAlign: 'center', textBaseline: 'middle' } }, htmlOverlay);
+            const angleTextX = startScreen.x + Math.cos(bisectorCanvasAngle) * SNAP_ANGLE_LABEL_OFFSET;
+            const angleTextY = startScreen.y + Math.sin(bisectorCanvasAngle) * SNAP_ANGLE_LABEL_OFFSET;
+            updateHtmlLabel({ id: 'snap-angle', content: angleText, x: angleTextX, y: angleTextY, color: currentElementColor, fontSize: FEEDBACK_LABEL_FONT_SIZE, options: { textAlign: 'center', textBaseline: 'middle' } }, htmlOverlay);
         }
     }
 }
 
-export function prepareReferenceElementsTexts(htmlOverlay, context, state, screenToData, dataToScreen, updateHtmlLabel) {
-    const { showAngles, showDistances, viewTransform, mousePos, frozenReference_D_du, distanceSigFigs, angleDisplayMode } = state;
-    const screenPixelThreshold = REF_TEXT_SCREEN_PIXEL_THRESHOLD;
-    const dataThreshold = screenPixelThreshold / viewTransform.scale;
-    const angleThreshold = GEOMETRY_CALCULATION_EPSILON;
+export function prepareReferenceElementsTexts(htmlOverlay, context, { showAngles, showDistances, viewTransform, mousePos, frozenReference_D_du, distanceSigFigs, angleSigFigs, angleDisplayMode, colors }, screenToData, dataToScreen, updateHtmlLabel) {
+    const dataThreshold = REF_TEXT_SCREEN_PIXEL_THRESHOLD / viewTransform.scale;
 
     let previewDistance = -1;
     if (context.frozen_Origin_Data_to_display) {
@@ -2070,8 +2144,7 @@ export function prepareReferenceElementsTexts(htmlOverlay, context, state, scree
         return;
     }
 
-    const refElementColor = FROZEN_REFERENCE_COLOR;
-    const katexFontSize = REF_TEXT_KATEX_FONT_SIZE;
+    const refElementColor = colors.frozenReference;
 
     const startPointData = context.frozen_Origin_Data_to_display;
     const turnAngleData = context.displayAngleA_valueRad_for_A_equals_label;
@@ -2100,24 +2173,23 @@ export function prepareReferenceElementsTexts(htmlOverlay, context, state, scree
             const [coeff, radicand] = simplifySquareRoot(frozenG2GSquaredSum);
             const finalCoeff = frozenG2GInterval * coeff;
             const roundedFinalCoeff = parseFloat(finalCoeff.toFixed(10));
-            distanceText = `\\delta = ${formatSimplifiedRoot(roundedFinalCoeff, radicand)}`;
+            distanceText = `${DELTA_EQUALS_KATEX}${formatSimplifiedRoot(roundedFinalCoeff, radicand)}`;
         } else {
             const platonicValue = distanceData / DEFAULT_REFERENCE_DISTANCE;
-            distanceText = `\\delta = ${formatNumber(platonicValue, distanceSigFigs)}`;
+            distanceText = `${DELTA_EQUALS_KATEX}${formatNumber(platonicValue, distanceSigFigs)}`;
         }
 
         const edgeAngleScreen = Math.atan2(endPointScreen.y - startPointScreen.y, endPointScreen.x - startPointScreen.x);
         const midX_screen = (startPointScreen.x + endPointScreen.x) / 2;
         const midY_screen = (startPointScreen.y + endPointScreen.y) / 2;
-        const textOffset = REF_TEXT_DISTANCE_LABEL_OFFSET_SCREEN;
-
-        let rotationDeg = edgeAngleScreen * (180 / Math.PI);
-        if (rotationDeg > 90 || rotationDeg < -90) {
-            rotationDeg += 180;
+        
+        let rotationDeg = edgeAngleScreen * (DEGREES_IN_HALF_CIRCLE / Math.PI);
+        if (rotationDeg > DEGREES_IN_QUADRANT || rotationDeg < -DEGREES_IN_QUADRANT) {
+            rotationDeg += DEGREES_IN_HALF_CIRCLE;
         }
         let textPerpAngle;
 
-        if (showAngles && turnAngleData !== null && Math.abs(turnAngleData) > angleThreshold) {
+        if (showAngles && turnAngleData !== null && Math.abs(turnAngleData) > GEOMETRY_CALCULATION_EPSILON) {
             const canvasStartAngle = -baseAngleData;
             const canvasEndAngle = -(baseAngleData + turnAngleData);
             const sumCos = Math.cos(canvasStartAngle) + Math.cos(canvasEndAngle);
@@ -2134,13 +2206,13 @@ export function prepareReferenceElementsTexts(htmlOverlay, context, state, scree
                 textPerpAngle += Math.PI;
             }
         }
-        const textDistLabelX_D = midX_screen + Math.cos(textPerpAngle) * textOffset;
-        const textDistLabelY_D = midY_screen + Math.sin(textPerpAngle) * textOffset;
+        const textDistLabelX_D = midX_screen + Math.cos(textPerpAngle) * REF_TEXT_DISTANCE_LABEL_OFFSET_SCREEN;
+        const textDistLabelY_D = midY_screen + Math.sin(textPerpAngle) * REF_TEXT_DISTANCE_LABEL_OFFSET_SCREEN;
 
-        updateHtmlLabel({ id: 'ref-dist', content: distanceText, x: textDistLabelX_D, y: textDistLabelY_D, color: refElementColor, fontSize: katexFontSize, options: { textAlign: 'center', textBaseline: 'middle', rotation: rotationDeg } }, htmlOverlay);
+        updateHtmlLabel({ id: 'ref-dist', content: distanceText, x: textDistLabelX_D, y: textDistLabelY_D, color: refElementColor, fontSize: REF_TEXT_KATEX_FONT_SIZE, options: { textAlign: 'center', textBaseline: 'middle', rotation: rotationDeg } }, htmlOverlay);
     }
 
-    if (showAngles && turnAngleData !== null && Math.abs(turnAngleData) > angleThreshold) {
+    if (showAngles && turnAngleData !== null && Math.abs(turnAngleData) > GEOMETRY_CALCULATION_EPSILON) {
         const startAngleCanvas = -baseAngleData;
         const endAngleCanvas = -(baseAngleData + turnAngleData);
 
@@ -2153,35 +2225,26 @@ export function prepareReferenceElementsTexts(htmlOverlay, context, state, scree
         const textAngleLabelY_A = startPointScreen.y + Math.sin(bisectorCanvasAngle) * angleLabelOffsetDistance;
 
         let aKatexText = '';
-        if (angleDisplayMode === 'degrees') {
-            // For drawing mode with shift, preserve the natural sign of the angle without normalization
-            let aValueDeg = turnAngleData * (180 / Math.PI);
-            aKatexText = `\\theta = ${formatNumber(aValueDeg, state.angleSigFigs)}^{\\circ}`;
-        } else if (angleDisplayMode === 'radians') {
-            // For drawing mode with shift, preserve the natural sign of the angle without normalization
+        if (angleDisplayMode === ANGLE_DISPLAY_MODE_DEGREES) {
+            let aValueDeg = turnAngleData * (DEGREES_IN_HALF_CIRCLE / Math.PI);
+            aKatexText = `${THETA_EQUALS_KATEX}${formatNumber(aValueDeg, angleSigFigs)}^{\\circ}`;
+        } else if (angleDisplayMode === ANGLE_DISPLAY_MODE_RADIANS) {
             let aValueRad = turnAngleData;
-            aKatexText = `\\theta = ${formatFraction(aValueRad / Math.PI, 0.001, 6)}\\pi`;
-            if (aKatexText === "\\theta = 1\\pi") aKatexText = "\\pi";
-            if (aKatexText === "\\theta = -1\\pi") aKatexText = "-\\pi";
-            if (aKatexText === "\\theta = 0\\pi") aKatexText = "0";
+            aKatexText = `${THETA_EQUALS_KATEX}${formatFraction(aValueRad / Math.PI, FRACTION_FORMAT_TOLERANCE, FRACTION_FORMAT_MAX_DENOMINATOR)}${PI_SYMBOL_KATEX}`;
+            if (aKatexText === `${THETA_EQUALS_KATEX}1${PI_SYMBOL_KATEX}`) aKatexText = PI_SYMBOL_KATEX;
+            if (aKatexText === `${THETA_EQUALS_KATEX}-1${PI_SYMBOL_KATEX}`) aKatexText = `-${PI_SYMBOL_KATEX}`;
+            if (aKatexText === `${THETA_EQUALS_KATEX}0${PI_SYMBOL_KATEX}`) aKatexText = "0";
         }
 
-        updateHtmlLabel({ id: 'ref-angle', content: aKatexText, x: textAngleLabelX_A, y: textAngleLabelY_A, color: refElementColor, fontSize: katexFontSize, options: { textAlign: 'center', textBaseline: 'middle' } }, htmlOverlay);
+        updateHtmlLabel({ id: 'ref-angle', content: aKatexText, x: textAngleLabelX_A, y: textAngleLabelY_A, color: refElementColor, fontSize: REF_TEXT_KATEX_FONT_SIZE, options: { textAlign: 'center', textBaseline: 'middle' } }, htmlOverlay);
     }
 }
 
-export function updateMouseCoordinates(htmlOverlay, state, screenToData, updateHtmlLabel) {
-    const { coordsDisplayMode, isMouseOverCanvas, currentShiftPressed, ghostPointPosition, gridDisplayMode, lastGridState, angleDisplayMode, canvas, dpr, mousePos} = state;
-
-    // If the coordinates should NOT be displayed, simply return.
-    // The main cleanup function in script.js will handle removing the old label
-    // because it wasn't updated on this frame.
-    if (coordsDisplayMode === 'none' || !mousePos || !isMouseOverCanvas) {
+export function updateMouseCoordinates(htmlOverlay, { coordsDisplayMode, isMouseOverCanvas, currentShiftPressed, ghostPointPosition, gridDisplayMode, lastGridState, angleDisplayMode, canvas, dpr, mousePos, colors}, screenToData, updateHtmlLabel) {
+    
+    if (coordsDisplayMode === COORDS_DISPLAY_MODE_NONE || !mousePos || !isMouseOverCanvas) {
         return;
     }
-
-    // If we get here, it means we SHOULD display the coordinates.
-    // The rest of the function calculates and updates the label.
 
     let displayPos;
     if (currentShiftPressed && ghostPointPosition) {
@@ -2191,55 +2254,55 @@ export function updateMouseCoordinates(htmlOverlay, state, screenToData, updateH
     }
 
     let effectiveGridInterval = 1;
-    if (gridDisplayMode !== 'none' && lastGridState && lastGridState.interval1) {
+    if (gridDisplayMode !== GRID_DISPLAY_MODE_NONE && lastGridState && lastGridState.interval1) {
         effectiveGridInterval = (lastGridState.alpha2 > lastGridState.alpha1 && lastGridState.interval2) ? lastGridState.interval2 : lastGridState.interval1;
     }
 
     let decimalPlaces = 0;
     if (effectiveGridInterval > 0) {
-        decimalPlaces = Math.max(0, -Math.floor(Math.log10(effectiveGridInterval * 0.999)));
-        decimalPlaces = Math.min(decimalPlaces + 1, 6);
+        decimalPlaces = Math.max(0, -Math.floor(Math.log10(effectiveGridInterval * COORD_PRECISION_FACTOR)));
+        decimalPlaces = Math.min(decimalPlaces + 1, MAX_COORD_DECIMAL_PLACES);
     }
 
-    const angleDecimalPlaces = Math.min(decimalPlaces + 1, 4);
+    const angleDecimalPlaces = Math.min(decimalPlaces + 1, MAX_ANGLE_DECIMAL_PLACES);
     let textContent = '';
 
     switch (coordsDisplayMode) {
-        case 'regular': {
+        case COORDS_DISPLAY_MODE_REGULAR: {
             let xValue = displayPos.x;
             let yValue = displayPos.y;
             let xText = xValue.toFixed(decimalPlaces);
-            if (xValue >= 0) xText = `\\hphantom{-}${xText}`;
+            if (xValue >= 0) xText = `${KATEX_MINUS_PHANTOM}${xText}`;
             let yText = yValue.toFixed(decimalPlaces);
-            if (yValue >= 0) yText = `\\hphantom{-}${yText}`;
+            if (yValue >= 0) yText = `${KATEX_MINUS_PHANTOM}${yText}`;
             textContent = `\\begin{pmatrix*}[r] x \\\\ y \\end{pmatrix*} = \\begin{pmatrix*}[r] ${xText} \\\\ ${yText} \\end{pmatrix*}`;
             break;
         }
-        case 'complex': {
+        case COORDS_DISPLAY_MODE_COMPLEX: {
             let reValue = displayPos.x;
             let imValue = displayPos.y;
             let rePart = reValue.toFixed(decimalPlaces);
-            if (reValue >= 0) rePart = `\\hphantom{-}${rePart}`;
+            if (reValue >= 0) rePart = `${KATEX_MINUS_PHANTOM}${rePart}`;
             let imPartAbs = Math.abs(imValue).toFixed(decimalPlaces);
             const sign = imValue < 0 ? '-' : '+';
-            textContent = `z = ${rePart} ${sign} ${imPartAbs}i`;
+            textContent = `z = ${rePart} ${sign} ${imPartAbs}${IMAGINARY_UNIT_SYMBOL}`;
             break;
         }
-        case 'polar': {
+        case COORDS_DISPLAY_MODE_POLAR: {
             let rValue = Math.hypot(displayPos.x, displayPos.y);
             let thetaRaw = Math.atan2(displayPos.y, displayPos.x);
             let rText = rValue.toFixed(decimalPlaces);
-            if (rValue >= 0) rText = `\\hphantom{-}${rText}`;
+            if (rValue >= 0) rText = `${KATEX_MINUS_PHANTOM}${rText}`;
             let angleStr;
-            if (angleDisplayMode === 'degrees') {
+            if (angleDisplayMode === ANGLE_DISPLAY_MODE_DEGREES) {
                 let thetaDeg = normalizeAngleDegrees(thetaRaw * 180 / Math.PI);
                 angleStr = thetaDeg.toFixed(angleDecimalPlaces);
-                if (thetaDeg >= 0) angleStr = `\\hphantom{-}${angleStr}`;
+                if (thetaDeg >= 0) angleStr = `${KATEX_MINUS_PHANTOM}${angleStr}`;
                 angleStr += `^{\\circ}`;
             } else {
                 let thetaRad = normalizeAngleToPi(thetaRaw);
                 angleStr = thetaRad.toFixed(angleDecimalPlaces);
-                if (thetaRad >= 0) angleStr = `\\hphantom{-}${angleStr}`;
+                if (thetaRad >= 0) angleStr = `${KATEX_MINUS_PHANTOM}${angleStr}`;
             }
             textContent = `\\begin{pmatrix*}[r] r \\\\ \\theta \\end{pmatrix*} = \\begin{pmatrix*}[r] ${rText} \\\\ ${angleStr} \\end{pmatrix*}`;
             break;
@@ -2247,8 +2310,7 @@ export function updateMouseCoordinates(htmlOverlay, state, screenToData, updateH
     }
 
     const canvasWidth = canvas.width / dpr;
-    const padding = 10;
-    updateHtmlLabel({ id: 'mouse-coord-text', content: textContent, x: canvasWidth - padding, y: padding, color: 'rgba(255, 255, 255, 0.7)', fontSize: 14, options: { textAlign: 'right', textBaseline: 'top' } }, htmlOverlay);
+    updateHtmlLabel({ id: 'mouse-coord-text', content: textContent, x: canvasWidth - UI_PADDING, y: UI_PADDING, color: colors.mouseCoords, fontSize: MOUSE_COORD_FONT_SIZE, options: { textAlign: 'right', textBaseline: 'top' } }, htmlOverlay);
 }
 
 export function createColorWheelIcon(size, dpr) {
@@ -2290,15 +2352,54 @@ export function createColorWheelIcon(size, dpr) {
     return tempCanvas;
 }
 
-export function drawUITransformSymbol(ctx, icon) {
+function drawThemeIcon(ctx, rect, activeThemeName, colors) {
+    ctx.save();
+    const centerX = rect.x + rect.width / 2;
+    const centerY = rect.y + rect.height / 2;
+    const radius = rect.width / 2 * 0.6; // Make icon slightly smaller than button bounds
+
+    ctx.strokeStyle = colors.uiIcon;
+    ctx.fillStyle = colors.uiIcon;
+    ctx.lineWidth = 2;
+
+    if (activeThemeName === 'dark') {
+        // Draw a Sun Icon
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, radius * 0.7, 0, 2 * Math.PI);
+        ctx.fill();
+        for (let i = 0; i < 8; i++) {
+            const angle = (i / 8) * 2 * Math.PI;
+            const startX = centerX + Math.cos(angle) * (radius * 0.85);
+            const startY = centerY + Math.sin(angle) * (radius * 0.85);
+            const endX = centerX + Math.cos(angle) * (radius * 1.1);
+            const endY = centerY + Math.sin(angle) * (radius * 1.1);
+            ctx.beginPath();
+            ctx.moveTo(startX, startY);
+            ctx.lineTo(endX, endY);
+            ctx.stroke();
+        }
+    } else {
+        // Draw a Moon Icon
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, radius, 0, 2 * Math.PI);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(centerX - 5, centerY - 3, radius, 0, 2 * Math.PI);
+        ctx.fillStyle = colors.background; // Use background color to "cut out" the crescent
+        ctx.fill();
+    }
+    ctx.restore();
+}
+
+export function drawUITransformSymbol(ctx, icon, colors) {
     const screenPos = { x: icon.x + icon.width / 2, y: icon.y + icon.height / 2 };
     const radius = icon.width / 2;
-    ctx.strokeStyle = 'white';
+    ctx.strokeStyle = colors.uiIcon;
     ctx.setLineDash([]);
-    ctx.lineWidth = 2;
-    if (icon.type === 'center_rotate_scale') {
+    ctx.lineWidth = UI_ICON_LINE_WIDTH;
+    if (icon.type === TRANSFORM_TYPE_ROTATE_SCALE) {
         ctx.beginPath();
-        ctx.arc(screenPos.x, screenPos.y, radius, 0, 2 * Math.PI);
+        ctx.arc(screenPos.x, screenPos.y, radius, 0, RADIANS_IN_CIRCLE);
         ctx.stroke();
         ctx.beginPath();
         ctx.moveTo(screenPos.x - radius, screenPos.y);
@@ -2308,11 +2409,11 @@ export function drawUITransformSymbol(ctx, icon) {
         ctx.moveTo(screenPos.x, screenPos.y - radius);
         ctx.lineTo(screenPos.x, screenPos.y + radius);
         ctx.stroke();
-    } else if (icon.type === 'center_rotate_only') {
+    } else if (icon.type === TRANSFORM_TYPE_ROTATE_ONLY) {
         ctx.beginPath();
-        ctx.arc(screenPos.x, screenPos.y, radius, 0, 2 * Math.PI);
+        ctx.arc(screenPos.x, screenPos.y, radius, 0, RADIANS_IN_CIRCLE);
         ctx.stroke();
-    } else if (icon.type === 'center_scale_only') {
+    } else if (icon.type === TRANSFORM_TYPE_SCALE_ONLY) {
         ctx.beginPath();
         ctx.moveTo(screenPos.x - radius, screenPos.y);
         ctx.lineTo(screenPos.x + radius, screenPos.y);
@@ -2324,17 +2425,17 @@ export function drawUITransformSymbol(ctx, icon) {
     }
 }
 
-export function drawCoordsIcon(ctx, rect, mode, isSelected, htmlOverlay, updateHtmlLabel) {
-    const colorStrong = isSelected ? '#F9FAFB' : '#9CA3AF';
+export function drawCoordsIcon(ctx, rect, mode, isSelected, htmlOverlay, updateHtmlLabel, colors) {
+    const colorStrong = isSelected ? colors.uiIconSelected : colors.uiIconDefault;
     const center = { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
     ctx.save();
     ctx.translate(center.x, center.y);
-    const scale = rect.width / 32;
+    const scale = rect.width / UI_ICON_BASE_SIZE;
     ctx.scale(scale, scale);
     ctx.translate(-16, -16);
     const x_offset = 1;
     ctx.strokeStyle = colorStrong;
-    ctx.lineWidth = 1.5;
+    ctx.lineWidth = UI_ICON_LINE_WIDTH_SMALL;
     ctx.lineCap = 'round';
     ctx.beginPath();
     ctx.moveTo(2 + x_offset, 30); ctx.lineTo(30 + x_offset, 30);
@@ -2345,31 +2446,31 @@ export function drawCoordsIcon(ctx, rect, mode, isSelected, htmlOverlay, updateH
     let labelPos = { x: 17 + x_offset, y: 8 };
     let label = '';
     switch (mode) {
-        case 'regular':
-            ctx.setLineDash([2, 2]);
+        case COORDS_DISPLAY_MODE_REGULAR:
+            ctx.setLineDash(UI_ICON_DASH_PATTERN);
             ctx.beginPath();
             ctx.moveTo(point.x, point.y); ctx.lineTo(point.x, 30);
             ctx.moveTo(point.x, point.y); ctx.lineTo(2 + x_offset, point.y);
             ctx.stroke();
             ctx.setLineDash([]);
             ctx.beginPath();
-            ctx.arc(point.x, point.y, 1.5, 0, 2 * Math.PI);
+            ctx.arc(point.x, point.y, UI_ICON_POINT_RADIUS, 0, RADIANS_IN_CIRCLE);
             ctx.fill();
             label = '(x,y)';
             break;
-        case 'complex':
-            ctx.setLineDash([2, 2]);
+        case COORDS_DISPLAY_MODE_COMPLEX:
+            ctx.setLineDash(UI_ICON_DASH_PATTERN);
             ctx.beginPath();
             ctx.moveTo(2 + x_offset, 30); ctx.lineTo(point.x, point.y);
             ctx.stroke();
             ctx.setLineDash([]);
             ctx.beginPath();
-            ctx.arc(point.x, point.y, 1.5, 0, 2 * Math.PI);
+            ctx.arc(point.x, point.y, UI_ICON_POINT_RADIUS, 0, RADIANS_IN_CIRCLE);
             ctx.fill();
             label = 'x+iy';
             break;
-        case 'polar':
-            ctx.setLineDash([2, 2]);
+        case COORDS_DISPLAY_MODE_POLAR:
+            ctx.setLineDash(UI_ICON_DASH_PATTERN);
             ctx.beginPath();
             ctx.moveTo(2 + x_offset, 30); ctx.lineTo(point.x, point.y);
             ctx.stroke();
@@ -2378,31 +2479,31 @@ export function drawCoordsIcon(ctx, rect, mode, isSelected, htmlOverlay, updateH
             ctx.stroke();
             ctx.setLineDash([]);
             ctx.beginPath();
-            ctx.arc(point.x, point.y, 1.5, 0, 2 * Math.PI);
+            ctx.arc(point.x, point.y, UI_ICON_POINT_RADIUS, 0, RADIANS_IN_CIRCLE);
             ctx.fill();
             label = '(r,\\theta)';
             break;
-        case 'none':
+        case COORDS_DISPLAY_MODE_NONE:
             break;
     }
     ctx.restore();
     if (label) {
         const labelId = 'icon-label-coords';
-        updateHtmlLabel({ id: labelId, content: label, x: center.x + (labelPos.x - 16) * scale, y: center.y + (labelPos.y - 16) * scale, color: isSelected ? '#E0F2FE' : '#D1D5DB', fontSize: 10, options: { textAlign: 'center', textBaseline: 'middle' } }, htmlOverlay);
-        
+        const labelColor = isSelected ? colors.uiTextSelected : colors.uiTextDefault;
+        updateHtmlLabel({ id: labelId, content: label, x: center.x + (labelPos.x - 16) * scale, y: center.y + (labelPos.y - 16) * scale, color: labelColor, fontSize: UI_ICON_LABEL_FONT_SIZE, options: { textAlign: 'center', textBaseline: 'middle' } }, htmlOverlay);
     }
 }
 
-export function drawAngleIcon(ctx, rect, mode, isSelected, htmlOverlay, updateHtmlLabel) {
-    const colorStrong = isSelected ? '#F9FAFB' : '#9CA3AF';
+export function drawAngleIcon(ctx, rect, mode, isSelected, htmlOverlay, updateHtmlLabel, colors) {
+    const colorStrong = isSelected ? colors.uiIconSelected : colors.uiIconDefault;
     const center = { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
     ctx.save();
     ctx.translate(center.x, center.y);
-    const scale = rect.width / 32;
+    const scale = rect.width / UI_ICON_BASE_SIZE;
     ctx.scale(scale, scale);
     ctx.translate(-16, -16);
     ctx.strokeStyle = colorStrong;
-    ctx.lineWidth = 1.5;
+    ctx.lineWidth = UI_ICON_LINE_WIDTH_SMALL;
     const p1 = { x: 28, y: 30 };
     const p2 = { x: 4, y: 30 };
     const p3 = { x: 16, y: 8 };
@@ -2413,111 +2514,111 @@ export function drawAngleIcon(ctx, rect, mode, isSelected, htmlOverlay, updateHt
     ctx.stroke();
     let label = '';
     let labelPos = { x: 20, y: 22 };
-    if (mode !== 'none') {
+    if (mode !== ANGLE_DISPLAY_MODE_NONE) {
         ctx.beginPath();
         const angle = Math.atan2(p3.y - p2.y, p3.x - p2.x);
         ctx.arc(p2.x, p2.y, 8, angle, 0);
         ctx.stroke();
-        if (mode === 'degrees') {
+        if (mode === ANGLE_DISPLAY_MODE_DEGREES) {
             label = '60^\\circ';
-        } else if (mode === 'radians') {
+        } else if (mode === ANGLE_DISPLAY_MODE_RADIANS) {
             label = '\\pi/3';
         }
     }
     ctx.restore();
     if (label) {
         const labelId = 'icon-label-angles';
-        updateHtmlLabel({ id: labelId, content: label, x: center.x + (labelPos.x - 16) * scale, y: center.y + (labelPos.y - 16) * scale, color: isSelected ? '#E0F2FE' : '#D1D5DB', fontSize: 10, options: { textAlign: 'center', textBaseline: 'middle' } }, htmlOverlay);
-        
+        const labelColor = isSelected ? colors.uiTextSelected : colors.uiTextDefault;
+        updateHtmlLabel({ id: labelId, content: label, x: center.x + (labelPos.x - 16) * scale, y: center.y + (labelPos.y - 16) * scale, color: labelColor, fontSize: UI_ICON_LABEL_FONT_SIZE, options: { textAlign: 'center', textBaseline: 'middle' } }, htmlOverlay);
     }
 }
 
-export function drawDistanceIcon(ctx, rect, mode, isSelected, htmlOverlay, updateHtmlLabel) {
-    const colorStrong = isSelected ? '#F9FAFB' : '#9CA3AF';
+export function drawDistanceIcon(ctx, rect, mode, isSelected, htmlOverlay, updateHtmlLabel, colors) {
+    const colorStrong = isSelected ? colors.uiIconSelected : colors.uiIconDefault;
     const center = { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
     ctx.save();
     ctx.translate(center.x, center.y);
-    const scale = rect.width / 32;
+    const scale = rect.width / UI_ICON_BASE_SIZE;
     ctx.scale(scale, scale);
     ctx.translate(-16, -16);
     ctx.strokeStyle = colorStrong;
-    ctx.lineWidth = 1.5;
+    ctx.lineWidth = UI_ICON_LINE_WIDTH_SMALL;
     ctx.beginPath();
     ctx.moveTo(2, 30);
     ctx.lineTo(30, 30);
     ctx.stroke();
     let label = '';
     let labelPos = { x: 16, y: 22 };
-    if (mode === 'on') {
+    if (mode === DISTANCE_DISPLAY_MODE_ON) {
         label = '3.14';
     }
     ctx.restore();
     if (label) {
         const labelId = 'icon-label-distances';
-        updateHtmlLabel({ id: labelId, content: label, x: center.x + (labelPos.x - 16) * scale, y: center.y + (labelPos.y - 16) * scale, color: isSelected ? '#E0F2FE' : '#D1D5DB', fontSize: 12, options: { textAlign: 'center', textBaseline: 'middle' } }, htmlOverlay);
-        
+        const labelColor = isSelected ? colors.uiTextSelected : colors.uiTextDefault;
+        updateHtmlLabel({ id: labelId, content: label, x: center.x + (labelPos.x - 16) * scale, y: center.y + (labelPos.y - 16) * scale, color: labelColor, fontSize: 12, options: { textAlign: 'center', textBaseline: 'middle' } }, htmlOverlay);
     }
 }
 
-export function drawGridIcon(ctx, rect, mode, isSelected) {
-    const colorStrong = isSelected ? '#F9FAFB' : '#9CA3AF';
+export function drawGridIcon(ctx, rect, mode, isSelected, colors) {
+    const colorStrong = isSelected ? colors.uiIconSelected : colors.uiIconDefault;
     const center = { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
     ctx.save();
     ctx.translate(center.x, center.y);
-    const scale = rect.width / 32;
+    const scale = rect.width / UI_ICON_BASE_SIZE;
     ctx.scale(scale, scale);
     ctx.translate(-16, -16);
     ctx.strokeStyle = colorStrong;
     ctx.fillStyle = colorStrong;
-    ctx.lineWidth = 1.5;
+    ctx.lineWidth = UI_ICON_LINE_WIDTH_SMALL;
     switch (mode) {
-        case 'lines':
+        case GRID_DISPLAY_MODE_LINES:
             ctx.strokeRect(2, 2, 28, 28);
             ctx.beginPath();
             ctx.moveTo(2, 16); ctx.lineTo(30, 16);
             ctx.moveTo(16, 2); ctx.lineTo(16, 30);
             ctx.stroke();
             break;
-        case 'points':
+        case GRID_DISPLAY_MODE_POINTS:
             ctx.strokeRect(2, 2, 28, 28);
             ctx.beginPath();
             [8, 16, 24].forEach(x => {
                 [8, 16, 24].forEach(y => {
                     ctx.moveTo(x, y);
-                    ctx.arc(x, y, 1.5, 0, 2 * Math.PI);
+                    ctx.arc(x, y, UI_ICON_POINT_RADIUS, 0, RADIANS_IN_CIRCLE);
                 });
             });
             ctx.fill();
             break;
-        case 'triangular':
+        case GRID_DISPLAY_MODE_TRIANGULAR:
             ctx.strokeRect(2, 2, 28, 28);
             const triRadius = 8;
             const triCenterX = 16;
             const triCenterY = 16;
             ctx.beginPath();
-            ctx.arc(triCenterX, triCenterY, 1.5, 0, 2 * Math.PI);
+            ctx.arc(triCenterX, triCenterY, UI_ICON_POINT_RADIUS, 0, RADIANS_IN_CIRCLE);
             for (let i = 0; i < 6; i++) {
                 const angle = Math.PI / 3 * i;
                 const x = triCenterX + triRadius * Math.cos(angle);
                 const y = triCenterY + triRadius * Math.sin(angle);
                 ctx.moveTo(x, y);
-                ctx.arc(x, y, 1.5, 0, 2 * Math.PI);
+                ctx.arc(x, y, UI_ICON_POINT_RADIUS, 0, RADIANS_IN_CIRCLE);
             }
             ctx.fill();
             break;
-        case 'polar':
+        case GRID_DISPLAY_MODE_POLAR:
             ctx.beginPath();
-            ctx.arc(16, 16, 14, 0, 2 * Math.PI);
+            ctx.arc(16, 16, 14, 0, RADIANS_IN_CIRCLE);
             ctx.stroke();
             ctx.beginPath();
-            ctx.arc(16, 16, 7, 0, 2 * Math.PI);
+            ctx.arc(16, 16, 7, 0, RADIANS_IN_CIRCLE);
             ctx.stroke();
             ctx.beginPath();
             ctx.moveTo(2, 16); ctx.lineTo(30, 16);
             ctx.moveTo(16, 2); ctx.lineTo(16, 30);
             ctx.stroke();
             break;
-        case 'none':
+        case GRID_DISPLAY_MODE_NONE:
             ctx.strokeRect(2, 2, 28, 28);
             break;
     }
@@ -2525,48 +2626,56 @@ export function drawGridIcon(ctx, rect, mode, isSelected) {
 }
 
 export function drawDisplayIcon(ctx, icon, state, htmlOverlay, updateHtmlLabel) {
-    const { coordsDisplayMode, gridDisplayMode, angleDisplayMode, distanceDisplayMode } = state;
+    const { coordsDisplayMode, gridDisplayMode, angleDisplayMode, distanceDisplayMode, colors } = state;
+    console.log(`Drawing ${icon.group} icon:`, {
+        coordsDisplayMode,
+        gridDisplayMode, 
+        angleDisplayMode,
+        distanceDisplayMode
+    });
     let isSelected = false;
     switch (icon.group) {
         case 'coords':
-            isSelected = coordsDisplayMode !== 'none';
+            isSelected = coordsDisplayMode !== COORDS_DISPLAY_MODE_NONE;
             break;
         case 'grid':
-            isSelected = gridDisplayMode !== 'none';
+            isSelected = gridDisplayMode !== GRID_DISPLAY_MODE_NONE;
             break;
         case 'angles':
-            isSelected = angleDisplayMode !== 'none';
+            isSelected = angleDisplayMode !== ANGLE_DISPLAY_MODE_NONE;
             break;
         case 'distances':
-            isSelected = distanceDisplayMode === 'on';
+            isSelected = distanceDisplayMode === DISTANCE_DISPLAY_MODE_ON;
             break;
     }
     const rect = { x: icon.x, y: icon.y, width: icon.width, height: icon.height };
     switch (icon.group) {
         case 'coords':
-            drawCoordsIcon(ctx, rect, coordsDisplayMode, isSelected, htmlOverlay, updateHtmlLabel);
+            drawCoordsIcon(ctx, rect, coordsDisplayMode, isSelected, htmlOverlay, updateHtmlLabel, colors);
             break;
         case 'grid':
-            drawGridIcon(ctx, rect, gridDisplayMode, isSelected);
+            drawGridIcon(ctx, rect, gridDisplayMode, isSelected, colors);
             break;
         case 'angles':
-            drawAngleIcon(ctx, rect, angleDisplayMode, isSelected, htmlOverlay, updateHtmlLabel);
+            drawAngleIcon(ctx, rect, angleDisplayMode, isSelected, htmlOverlay, updateHtmlLabel, colors);
             break;
         case 'distances':
-            drawDistanceIcon(ctx, rect, distanceDisplayMode, isSelected, htmlOverlay, updateHtmlLabel);
+            drawDistanceIcon(ctx, rect, distanceDisplayMode, isSelected, htmlOverlay, updateHtmlLabel, colors);
             break;
     }
 }
 
 export function drawCanvasUI(ctx, htmlOverlay, state, updateHtmlLabel) {
-    const { dpr, canvasUI, isToolbarExpanded, isColorPaletteExpanded, isTransformPanelExpanded, isDisplayPanelExpanded, isPlacingTransform, placingTransformType, placingSnapPos, mousePos, selectedSwatchIndex, recentColors } = state;
+    // The state object is now passed through correctly
+    const { dpr, canvasUI, isToolbarExpanded, isColorPaletteExpanded, isTransformPanelExpanded, isDisplayPanelExpanded, isPlacingTransform, placingTransformType, placingSnapPos, mousePos, selectedSwatchIndex, recentColors, activeThemeName, colors } = state;
+    
     ctx.save();
     ctx.resetTransform();
     ctx.scale(dpr, dpr);
 
     const btn = canvasUI.toolbarButton;
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.8)";
-    ctx.lineWidth = 3;
+    ctx.strokeStyle = colors.uiDefault;
+    ctx.lineWidth = UI_MENU_ICON_LINE_WIDTH;
     ctx.beginPath();
     for (let i = 0; i < 3; i++) {
         const lineY = btn.y + 5 + i * 10;
@@ -2586,85 +2695,88 @@ export function drawCanvasUI(ctx, htmlOverlay, state, updateHtmlLabel) {
 
         const ttb = canvasUI.transformToolButton;
         if (ttb) {
-            const ttbLabelColor = "white";
-            updateHtmlLabel({ id: 'transform-tool-label', content: 'T', x: ttb.x + ttb.width / 2, y: ttb.y + ttb.height / 2, color: ttbLabelColor, fontSize: 24, options: { textAlign: 'center', textBaseline: 'middle' } }, htmlOverlay);
-            
+            updateHtmlLabel({ id: 'transform-tool-label', content: UI_TRANSFORM_TOOL_LABEL_TEXT, x: ttb.x + ttb.width / 2, y: ttb.y + ttb.height / 2, color: colors.uiIcon, fontSize: UI_TRANSFORM_TOOL_LABEL_FONT_SIZE, options: { textAlign: 'center', textBaseline: 'middle' } }, htmlOverlay);
         }
 
         const dtb = canvasUI.displayToolButton;
         if (dtb) {
-            const displayButtonColor = "rgba(255, 255, 255, 0.8)";
-            ctx.strokeStyle = displayButtonColor;
-            ctx.fillStyle = displayButtonColor;
-            ctx.lineWidth = 2;
-            const barWidth = dtb.width - 12;
+            ctx.strokeStyle = colors.uiDefault;
+            ctx.fillStyle = colors.uiDefault;
+            ctx.lineWidth = UI_ICON_LINE_WIDTH;
+            const barWidth = dtb.width - UI_DISPLAY_ICON_BAR_WIDTH_PADDING;
             for (let i = 0; i < 3; i++) {
-                const y = dtb.y + 10 + i * 10;
+                const y = dtb.y + UI_DISPLAY_ICON_Y_OFFSET + i * UI_DISPLAY_ICON_Y_SPACING;
                 ctx.beginPath();
                 ctx.moveTo(dtb.x + 6, y);
                 ctx.lineTo(dtb.x + 6 + barWidth, y);
                 ctx.stroke();
                 ctx.beginPath();
-                ctx.arc(dtb.x + 6 + barWidth * (i / 2), y, 3, 0, 2 * Math.PI);
+                ctx.arc(dtb.x + 6 + barWidth * (i / 2), y, UI_DISPLAY_ICON_KNOB_RADIUS, 0, RADIANS_IN_CIRCLE);
                 ctx.fill();
             }
         }
-    }
-
-    if (!isToolbarExpanded) {
         
+        const themeBtn = canvasUI.themeToggleButton;
+        if (themeBtn) {
+            drawThemeIcon(ctx, themeBtn, activeThemeName, colors);
+        }
     }
 
     if (isColorPaletteExpanded) {
         const removeBtn = canvasUI.removeColorButton;
         if (removeBtn) {
-            ctx.strokeStyle = "rgba(255, 255, 255, 0.8)";
-            ctx.lineWidth = 2;
+            ctx.strokeStyle = colors.uiDefault;
+            ctx.lineWidth = UI_BUTTON_BORDER_WIDTH;
             ctx.strokeRect(removeBtn.x, removeBtn.y, removeBtn.width, removeBtn.height);
             ctx.beginPath();
-            ctx.moveTo(removeBtn.x + 7, removeBtn.y + removeBtn.height / 2);
-            ctx.lineTo(removeBtn.x + removeBtn.width - 7, removeBtn.y + removeBtn.height / 2);
+            ctx.moveTo(removeBtn.x + UI_BUTTON_ICON_PADDING, removeBtn.y + removeBtn.height / 2);
+            ctx.lineTo(removeBtn.x + removeBtn.width - UI_BUTTON_ICON_PADDING, removeBtn.y + removeBtn.height / 2);
             ctx.stroke();
         }
         canvasUI.colorSwatches.forEach((swatch, index) => {
             ctx.fillStyle = swatch.color;
             ctx.fillRect(swatch.x, swatch.y, swatch.width, swatch.height);
             if (index === selectedSwatchIndex) {
-                ctx.strokeStyle = "#00ffff";
-                ctx.lineWidth = 3;
+                ctx.strokeStyle = colors.activeCenterGlow;
+                ctx.lineWidth = UI_SWATCH_SELECTED_BORDER_WIDTH;
                 ctx.strokeRect(swatch.x - 1, swatch.y - 1, swatch.width + 2, swatch.height + 2);
             }
         });
         const addBtn = canvasUI.addColorButton;
         if (addBtn) {
-            ctx.strokeStyle = "rgba(255, 255, 255, 0.8)";
-            ctx.lineWidth = 2;
+            ctx.strokeStyle = colors.uiDefault;
+            ctx.lineWidth = UI_BUTTON_BORDER_WIDTH;
             ctx.strokeRect(addBtn.x, addBtn.y, addBtn.width, addBtn.height);
             ctx.beginPath();
-            ctx.moveTo(addBtn.x + addBtn.width / 2, addBtn.y + 7);
-            ctx.lineTo(addBtn.x + addBtn.width / 2, addBtn.y + addBtn.height - 7);
-            ctx.moveTo(addBtn.x + 7, addBtn.y + addBtn.height / 2);
-            ctx.lineTo(addBtn.x + addBtn.width - 7, addBtn.y + addBtn.height / 2);
+            ctx.moveTo(addBtn.x + addBtn.width / 2, addBtn.y + UI_BUTTON_ICON_PADDING);
+            ctx.lineTo(addBtn.x + addBtn.width / 2, addBtn.y + addBtn.height - UI_BUTTON_ICON_PADDING);
+            ctx.moveTo(addBtn.x + UI_BUTTON_ICON_PADDING, addBtn.y + addBtn.height / 2);
+            ctx.lineTo(addBtn.x + addBtn.width - UI_BUTTON_ICON_PADDING, addBtn.y + addBtn.height / 2);
             ctx.stroke();
         }
     }
 
     if (isTransformPanelExpanded) {
         canvasUI.transformIcons.forEach(icon => {
-            drawUITransformSymbol(ctx, icon);
+            drawUITransformSymbol(ctx, icon, colors);
         });
     }
 
     if (isDisplayPanelExpanded) {
         canvasUI.displayIcons.forEach(icon => {
+            // This now correctly passes the complete state object, which contains
+            // the necessary display modes and colors for the icons to draw correctly.
             drawDisplayIcon(ctx, icon, state, htmlOverlay, updateHtmlLabel);
         });
     }
 
     if (isPlacingTransform) {
         const finalDrawPos = placingSnapPos || mousePos;
-        const ghostIcon = { type: placingTransformType, x: finalDrawPos.x - 15, y: finalDrawPos.y - 15, width: 30, height: 30 };
-        drawUITransformSymbol(ctx, ghostIcon);
+        if (finalDrawPos) {
+            const iconHalfSize = UI_GHOST_ICON_SIZE / 2;
+            const ghostIcon = { type: placingTransformType, x: finalDrawPos.x - iconHalfSize, y: finalDrawPos.y - iconHalfSize, width: UI_GHOST_ICON_SIZE, height: UI_GHOST_ICON_SIZE };
+            drawUITransformSymbol(ctx, ghostIcon, colors);
+        }
     }
 
     ctx.restore();

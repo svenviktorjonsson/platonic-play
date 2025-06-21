@@ -1,9 +1,25 @@
+import {
+    SCIENTIFIC_NOTATION_UPPER_BOUND,
+    SCIENTIFIC_NOTATION_LOWER_BOUND,
+    MAX_DECIMAL_PLACES_FORMAT,
+    GEOMETRY_CALCULATION_EPSILON,
+    RADIANS_IN_CIRCLE,
+    DEGREES_IN_CIRCLE,
+    ZERO_TOLERANCE,
+    FRACTION_FORMAT_TOLERANCE,
+    FRACTION_FORMAT_MAX_DENOMINATOR,
+    KATEX_MINUS_PHANTOM,
+    ON_SEGMENT_STRICT_T_MIN,
+    ON_SEGMENT_STRICT_T_MAX,
+    ANGLE_SNAP_THRESHOLD_RAD
+} from './constants.js';
+
 export function formatNumber(value, sigFigs) {
     if (value === 0) return "0";
     const absValue = Math.abs(value);
     const sign = value < 0 ? "-" : "";
     let formattedString;
-    if (absValue >= 1000 || (absValue !== 0 && absValue < 0.001)) {
+    if (absValue >= SCIENTIFIC_NOTATION_UPPER_BOUND || (absValue !== 0 && absValue < SCIENTIFIC_NOTATION_LOWER_BOUND)) {
         const expStr = absValue.toExponential(Math.max(0, sigFigs - 1));
         const parts = expStr.split('e');
         let coefficient = parseFloat(parts[0]).toString();
@@ -25,7 +41,7 @@ export function formatNumber(value, sigFigs) {
         } else {
             decimalPlacesToDisplay = Math.max(0, sigFigs - integerDigits);
         }
-        decimalPlacesToDisplay = Math.min(decimalPlacesToDisplay, 10);
+        decimalPlacesToDisplay = Math.min(decimalPlacesToDisplay, MAX_DECIMAL_PLACES_FORMAT);
         let fixedStr = absValue.toFixed(decimalPlacesToDisplay);
         let num = parseFloat(fixedStr);
         if (Math.abs(num) === 0 && value !== 0) {
@@ -44,7 +60,7 @@ export function generateAngleSnapFractions(maxDenominator, maxResultingMultipleO
     const fractionsSet = new Set();
     fractionsSet.add(0);
     for (let q = 1; q <= maxDenominator; q++) {
-        for (let p = 0; p <= q * maxResultingMultipleOfBase; p++) { // p can be 0 for 0A or 0D
+        for (let p = 0; p <= q * maxResultingMultipleOfBase; p++) {
             fractionsSet.add(p / q);
         }
     }
@@ -53,7 +69,7 @@ export function generateAngleSnapFractions(maxDenominator, maxResultingMultipleO
 
 export function solveForPoint(N1, N2, d1, alpha) {
     const d_n = distance(N1, N2);
-    if (d_n < 1e-6 || Math.sin(alpha) < 1e-6) return [];
+    if (d_n < GEOMETRY_CALCULATION_EPSILON || Math.sin(alpha) < GEOMETRY_CALCULATION_EPSILON) return [];
     const solutions = [];
     const A = 1,
         B = -2 * d1 * Math.cos(alpha),
@@ -76,13 +92,11 @@ export function solveForPoint(N1, N2, d1, alpha) {
 export function generateDistanceSnapFactors() {
     const fractionsSet = new Set();
     fractionsSet.add(0);
-    // Denominators up to 6 for factors <= 1
     for (let q = 1; q <= 6; q++) {
         for (let p = 1; p <= q; p++) {
             fractionsSet.add(p / q);
         }
     }
-    // Denominators 1 and 2 for factors > 1
     for (let i = 1; i <= 10; i++) {
         fractionsSet.add(i);
         if (i > 1) {
@@ -97,22 +111,22 @@ export function generateUniqueId() {
 }
 
 export function normalizeAngle(angleRad) {
-    while (angleRad < 0) angleRad += 2 * Math.PI;
-    while (angleRad >= 2 * Math.PI) angleRad -= 2 * Math.PI;
+    while (angleRad < 0) angleRad += RADIANS_IN_CIRCLE;
+    while (angleRad >= RADIANS_IN_CIRCLE) angleRad -= RADIANS_IN_CIRCLE;
     return angleRad;
 }
 
 export function normalizeAngleToPi(angleRad) {
     angleRad = normalizeAngle(angleRad);
     if (angleRad > Math.PI) {
-        angleRad -= 2 * Math.PI;
+        angleRad -= RADIANS_IN_CIRCLE;
     }
     return angleRad;
 }
 
 export function normalizeAngleDegrees(angleDeg) {
-    while (angleDeg < 0) angleDeg += 360;
-    while (angleDeg >= 360) angleDeg -= 360;
+    while (angleDeg < 0) angleDeg += DEGREES_IN_CIRCLE;
+    while (angleDeg >= DEGREES_IN_CIRCLE) angleDeg -= DEGREES_IN_CIRCLE;
     return angleDeg;
 }
 
@@ -141,12 +155,10 @@ export function getLineCircleIntersection(line, circle) {
 export function getLineLineIntersection(line1, line2) {
     const p1 = line1.p1, p2 = line1.p2, p3 = line2.p1, p4 = line2.p2;
     const den = (p1.x - p2.x) * (p3.y - p4.y) - (p1.y - p2.y) * (p3.x - p4.x);
-    if (Math.abs(den) < 1e-9) return null;
+    if (Math.abs(den) < GEOMETRY_CALCULATION_EPSILON) return null;
     const t = ((p1.x - p3.x) * (p3.y - p4.y) - (p1.y - p3.y) * (p3.x - p4.x)) / den;
     const u = -((p1.x - p2.x) * (p1.y - p3.y) - (p1.y - p2.y) * (p1.x - p3.x)) / den;
     
-    // We are interested in intersections on the infinite bisector line, so we don't check if t is between 0 and 1.
-    // We only care that the intersection happens on the grid line segment, which u controls.
     if (u >= 0 && u <= 1) { 
         return { x: p1.x + t * (p2.x - p1.x), y: p1.y + t * (p2.y - p1.y) };
     }
@@ -174,15 +186,12 @@ export function formatSimplifiedRoot(coeff, radicand, symbol = '') {
     const symString = symbol ? `\\${symbol}` : '';
 
     if (radicand === 1) {
-        // It's a perfect square, no root symbol needed.
         if (coeff === 1 && symbol) return symString;
         return `${coeff}${symString}`;
     }
     if (coeff === 1) {
-        // No coefficient needed.
         return `\\sqrt{${radicand}}${symString}`;
     }
-    // Default case
     return `${coeff}\\sqrt{${radicand}}${symString}`;
 }
 
@@ -208,14 +217,14 @@ export function distance(p1, p2) {
     return Math.sqrt(Math.pow(p1.x - p2.x, 2) + Math.pow(p1.y - p2.y, 2));
 }
 
-export function formatFraction(decimal, tolerance = 0.015, maxDisplayDenominator = 32) {
-    if (Math.abs(decimal) < 0.00001) return "0";
+export function formatFraction(decimal, tolerance = FRACTION_FORMAT_TOLERANCE, maxDisplayDenominator = FRACTION_FORMAT_MAX_DENOMINATOR) {
+    if (Math.abs(decimal) < ZERO_TOLERANCE) return "0";
     const originalSign = decimal < 0 ? "-" : "";
     const absDecimal = Math.abs(decimal);
 
     if (Math.abs(absDecimal - Math.round(absDecimal)) < tolerance) {
-      const rounded = Math.round(absDecimal);
-      return originalSign + rounded.toString();
+        const rounded = Math.round(absDecimal);
+        return originalSign + rounded.toString();
     }
 
     const fractions = [
@@ -234,7 +243,7 @@ export function formatFraction(decimal, tolerance = 0.015, maxDisplayDenominator
 
     for (let currentDen = 1; currentDen <= maxDisplayDenominator; currentDen++) {
         const currentNum = Math.round(absDecimal * currentDen);
-        if (currentNum === 0 && absDecimal > 0.00001) continue;
+        if (currentNum === 0 && absDecimal > ZERO_TOLERANCE) continue;
         if (Math.abs(absDecimal - currentNum / currentDen) < tolerance / currentDen) {
             const common = gcd(currentNum, currentDen);
             const n = currentNum/common;
@@ -244,7 +253,7 @@ export function formatFraction(decimal, tolerance = 0.015, maxDisplayDenominator
         }
     }
     let fixedPrecision = 2;
-         if (absDecimal < 0.01) fixedPrecision = 3;
+        if (absDecimal < 0.01) fixedPrecision = 3;
     else if (absDecimal < 0.1)  fixedPrecision = 2;
     else if (absDecimal < 10)   fixedPrecision = 1;
     else                        fixedPrecision = 0;
@@ -256,7 +265,7 @@ export function formatCoordinateValue(value, decimalPlaces) {
     if (typeof value !== 'number' || isNaN(value)) {
         return '...';
     }
-    const sign = value < 0 ? "-" : "\\phantom{-}";
+    const sign = value < 0 ? "-" : KATEX_MINUS_PHANTOM;
     const fixedValue = Math.abs(value).toFixed(decimalPlaces);
     return sign + fixedValue;
 }
@@ -278,7 +287,7 @@ export function getClosestPointOnLineSegment(p, a, b) {
         return { x: a.x, y: a.y, distance: distance(p, a), onSegmentStrict: true, t: 0 };
     }
     let t = (acx * abx + acy * aby) / lenSqAB;
-    const onSegmentStrict = t > 0.00001 && t < 0.99999;
+    const onSegmentStrict = t > ON_SEGMENT_STRICT_T_MIN && t < ON_SEGMENT_STRICT_T_MAX;
     const clampedT = Math.max(0, Math.min(1, t));
     const closestX = a.x + clampedT * abx;
     const closestY = a.y + clampedT * aby;
@@ -292,7 +301,7 @@ export function getMousePosOnCanvas(event, canvasElement) {
 }
 
 export function snapToAngle(targetAngleRad, offsetAngleRad, angleSnapFractionsArray, baseReferenceAngleRad, forceSnap = false) {
-    if (isNaN(targetAngleRad) || isNaN(offsetAngleRad) || Math.abs(baseReferenceAngleRad) < 1e-9) {
+    if (isNaN(targetAngleRad) || isNaN(offsetAngleRad) || Math.abs(baseReferenceAngleRad) < GEOMETRY_CALCULATION_EPSILON) {
         const defaultAngle = isNaN(offsetAngleRad) ? 0 : offsetAngleRad;
         return { angle: defaultAngle, turn: 0, factor: null };
     }
@@ -301,12 +310,9 @@ export function snapToAngle(targetAngleRad, offsetAngleRad, angleSnapFractionsAr
     let bestTurn = normalizeAngleToPi(targetAngleRad - offsetAngleRad);
     let bestFactor = null;
 
-    // Calculate the maximum allowed snap factor to keep the turn <= 180 degrees (PI).
-    // Add a small tolerance to avoid floating point inaccuracies.
     const maxAllowedFactor = (Math.PI + 0.0001) / Math.abs(baseReferenceAngleRad);
 
     for (const fraction of angleSnapFractionsArray) {
-        // Ensure the snap factor does not result in a turn greater than a half circle.
         if (fraction > maxAllowedFactor) {
             continue;
         }
@@ -334,8 +340,7 @@ export function snapToAngle(targetAngleRad, offsetAngleRad, angleSnapFractionsAr
         }
     }
 
-    const snapThresholdRad = Math.PI / 24;
-    if (forceSnap || minAngleDifference < snapThresholdRad) {
+    if (forceSnap || minAngleDifference < ANGLE_SNAP_THRESHOLD_RAD) {
         return { angle: bestSnappedAngleRad, turn: bestTurn, factor: bestFactor };
     }
 
@@ -346,7 +351,7 @@ export function hslToRgb(h, s, l) {
     let r, g, b;
 
     if (s === 0) {
-        r = g = b = l; // This handles the gray (achromatic) case
+        r = g = b = l;
     } else {
         const hue2rgb = (p, q, t) => {
             if (t < 0) t += 1;
