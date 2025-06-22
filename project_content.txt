@@ -7,6 +7,7 @@ Relevant files and folders (excluding specified patterns):
 ├── index.html
 ├── project_content.txt
 ├── readme.md
+├── refactor.py
 ├── renderer.js
 ├── script.js
 ├── style.css
@@ -19,6 +20,70 @@ Relevant files and folders (excluding specified patterns):
 === constants.js ===
 // constants.js
 
+export const THEMES = {
+  dark: {
+    // Page & Canvas
+    background: '#1a1a1a',
+    htmlBody: '#1e1e1e',
+
+    // Grid & Axes
+    grid: [136, 136, 136],
+    axis: 'rgba(255, 255, 255, 1)',
+    axisTickLabel: [255, 255, 255],
+
+    // Geometry & Feedback
+    defaultStroke: 'white',
+    point: '#ffffff',
+    frozenReference: 'rgba(240, 240, 130, 0.95)',
+    feedbackDefault: [230, 230, 230],
+    feedbackSnapped: 'rgba(240, 240, 130, 0.95)',
+    geometryInfoText: 'rgba(255, 255, 255, 0.95)',
+    geometryInfoTextSnapped: 'rgba(240, 240, 130, 0.95)',
+    mouseCoords: 'rgba(255, 255, 255, 0.7)',
+
+    // UI & Icons
+    uiIcon: 'white',
+    uiIconDefault: '#9CA3AF',
+    uiIconSelected: '#F9FAFB',
+    uiTextSelected: '#E0F2FE',
+    uiTextDefault: '#D1D5DB',
+    uiDefault: 'rgba(255, 255, 255, 0.8)',
+    selectionGlow: '#4da6ff',
+    activeCenterGlow: '#00ffff',
+  },
+  light: {
+    // Page & Canvas
+    background: '#f5f5f5',
+    htmlBody: '#e7e5e4',
+
+    // Grid & Axes
+    grid: [203, 203, 203],
+    axis: 'rgba(0, 0, 0, 1)',
+    axisTickLabel: [0, 0, 0],
+
+    // Geometry & Feedback
+    defaultStroke: 'black',
+    point: '#1f2937',
+    frozenReference: 'rgba(217, 119, 6, 0.95)',
+    feedbackDefault: [50, 50, 50],
+    feedbackSnapped: 'rgba(217, 119, 6, 0.95)',
+    geometryInfoText: 'rgba(0, 0, 0, 0.95)',
+    geometryInfoTextSnapped: 'rgba(217, 119, 6, 0.95)',
+    mouseCoords: 'rgba(0, 0, 0, 0.7)',
+
+    // UI & Icons
+    uiIcon: '#1f2937',
+    uiIconDefault: '#4B5563',
+    uiIconSelected: '#1f2937',
+    uiTextSelected: '#1E40AF',
+    uiTextDefault: '#374151',
+    uiDefault: 'rgba(0, 0, 0, 0.8)',
+    selectionGlow: '#2563EB',
+    activeCenterGlow: '#0891B2',
+  }
+};
+
+
 // --- GEOMETRY & DRAWING ---
 export const POINT_RADIUS = 5;
 export const CENTER_POINT_VISUAL_RADIUS = POINT_RADIUS * 2;
@@ -28,25 +93,38 @@ export const GRID_LINEWIDTH = 1;
 export const DASH_PATTERN = [6, 6];
 export const DASH_PATTERN_SMALL = [3, 3];
 export const SELECTED_INDICATOR_OFFSET = 3;
+export const DEGREES_IN_CIRCLE = 360;
+export const DEGREES_IN_HALF_CIRCLE = 180;
+export const DEGREES_IN_QUADRANT = 90;
+export const RADIANS_IN_CIRCLE = 2 * Math.PI;
+export const MIN_ALPHA_FOR_DRAWING = 0.01;
+export const TRIANGULAR_GRID_Y_STEP_FACTOR = Math.sqrt(3) / 2;
+export const POLAR_TO_LINE_TRANSITION_RADIUS_FACTOR = 400;
+export const ORIGIN_TICK_ANGLE_RAD = Math.PI / 3;
+export const AXIS_MAJOR_TICK_SCALE_FACTOR = 1.5;
+export const AXIS_ARROW_ANGLE_RAD = Math.PI / 6;
+export const MAJOR_TICK_LINE_WIDTH = 1.5;
+export const HELPER_LINE_DASH_PATTERN = [2, 3];
+export const REF_LINE_DASH_PATTERN = [1, 3];
 
 // --- INTERACTION ---
+export const EDGE_ID_DELIMITER = '_EDGE_';
 export const DOUBLE_CLICK_MS = 300;
 export const DRAG_THRESHOLD = 3;
 export const EDGE_CLICK_THRESHOLD = 7;
-
-// --- COLORS ---
-// Colors used for dynamic alpha blending are defined as RGB arrays.
-export const BACKGROUND_COLOR = 'rgba(0,0,0, 1)'; // Static color
-export const GRID_COLOR = [136, 136, 136];
-export const AXIS_COLOR = 'rgba(255, 255, 255, 1)'; // Static color for main axis lines
-export const FROZEN_REFERENCE_COLOR = 'rgba(240, 240, 130, 0.95)'; // Static color
-export const FEEDBACK_COLOR_SNAPPED = 'rgba(240, 240, 130, 0.95)'; // Static color
-export const FEEDBACK_COLOR_DEFAULT = [230, 230, 230];
+export const MIN_SCALE_VALUE = 1e-20;
+export const ZOOM_FACTOR = 1.15;
+export const KEYBOARD_ZOOM_FACTOR = 1.15;
+export const ANGLE_SNAP_THRESHOLD_RAD = Math.PI / 24;
+export const ON_SEGMENT_STRICT_T_MIN = 1e-5;
+export const ON_SEGMENT_STRICT_T_MAX = 1 - 1e-5;
+export const MIN_TRANSFORM_ACTION_THRESHOLD = 0.001;
+export const BISECTOR_LINE_EXTENSION_FACTOR = 100000;
+export const GRID_SNAP_THRESHOLD_FACTOR = 0.8;
 
 // --- AXES & TICKS ---
 export const AXIS_LINE_WIDTH = 1.5;
 export const AXIS_TICK_SIZE = 4;
-export const AXIS_TICK_LABEL_COLOR = [255, 255, 255];
 export const AXIS_TICK_LABEL_ALPHA = 0.9;
 export const AXIS_NAME_FONT_SIZE = 24;
 export const AXIS_TICK_FONT_SIZE = 10;
@@ -60,6 +138,19 @@ export const Y_AXIS_LABEL_DISTANCE = 10;
 export const Y_AXIS_LABEL_ARROW_DIST = 5;
 export const POLAR_THETA_LABEL_DISTANCE = 20;
 export const POLAR_THETA_LABEL_ARROW_DIST = 12;
+export const ANGLE_PRECISION_FACTOR = 1e6;
+export const BOUNDARY_ANGLE_PRECISION = 7;
+export const LABEL_ID_PRECISION_FACTOR = 1e15;
+export const ORIGIN_LABEL_TEXT = '\\phantom{-}0';
+export const POLAR_AXIS_RADIUS_BUFFER_FACTOR = 1.1;
+export const TICK_LABEL_SIGFIG_THRESH_1 = 80;
+export const TICK_LABEL_SIGFIG_THRESH_2 = 40;
+export const TICK_LABEL_SIGFIG_THRESH_3 = 20;
+export const FINE_TICK_ANGLE_THRESHOLD_DEG = 5;
+export const IMAGINARY_UNIT_SYMBOL = 'i';
+export const POLAR_RADIUS_SYMBOL = 'r';
+export const COMPLEX_REAL_LABEL = '\\mathrm{Re}';
+export const COMPLEX_IMAGINARY_LABEL = '\\mathrm{Im}';
 
 // --- DEFAULTS ---
 export const DEFAULT_CALIBRATION_VIEW_SCALE = 80.0;
@@ -71,6 +162,35 @@ export const DEFAULT_POLAR_ANGLE_DIFF = 30;
 export const UI_BUTTON_PADDING = 10;
 export const UI_TOOLBAR_WIDTH = 56;
 export const UI_SWATCH_SIZE = 30;
+export const UI_PADDING = 10;
+export const MENU_BUTTON_WIDTH = 36;
+export const MENU_BUTTON_HEIGHT = 30;
+export const TOOL_BUTTON_HEIGHT = 40;
+export const TOOLBAR_SECTION_GAP = 20;
+export const UI_ICON_BASE_SIZE = 32;
+export const UI_ICON_LINE_WIDTH = 2;
+export const UI_ICON_LINE_WIDTH_SMALL = 1.5;
+export const UI_ICON_DASH_PATTERN = [2, 2];
+export const UI_ICON_POINT_RADIUS = 1.5;
+export const UI_ICON_LABEL_FONT_SIZE = 10;
+export const UI_MENU_ICON_LINE_WIDTH = 3;
+export const TRANSFORM_ICON_SIZE = 30;
+export const TRANSFORM_ICON_PADDING = 15;
+export const TRANSFORM_ICON_Y_OFFSET = 5;
+export const UI_TRANSFORM_TOOL_LABEL_FONT_SIZE = 24;
+export const UI_TRANSFORM_TOOL_LABEL_TEXT = 'T';
+export const DISPLAY_ICON_SIZE = 40;
+export const DISPLAY_ICON_PADDING = 15;
+export const UI_DISPLAY_ICON_BAR_WIDTH_PADDING = 12;
+export const UI_DISPLAY_ICON_Y_OFFSET = 10;
+export const UI_DISPLAY_ICON_Y_SPACING = 10;
+export const UI_DISPLAY_ICON_KNOB_RADIUS = 3;
+export const UI_SWATCH_SELECTED_BORDER_WIDTH = 3;
+export const UI_BUTTON_BORDER_WIDTH = 2;
+export const UI_BUTTON_ICON_PADDING = 7;
+export const UI_GHOST_ICON_SIZE = 30;
+export const COLOR_PALETTE_Y_OFFSET = 5;
+export const COLOR_WHEEL_FADE_START_RADIUS_FACTOR = 0.75;
 
 // --- FEEDBACK LABELS & TEXT ---
 export const FEEDBACK_LABEL_FONT_SIZE = 12;
@@ -85,8 +205,31 @@ export const ANGLE_LABEL_RADIUS_SCREEN = 75;
 export const REF_CIRCLE_MIN_DISPLAY_RADIUS = 20;
 export const REF_CIRCLE_MIN_TICK_SPACING = 8;
 export const REF_CIRCLE_THETA_LABEL_OFFSET = 30;
-export const GEOMETRY_INFO_TEXT_COLOR = 'rgba(255, 255, 255, 0.95)'; // White text for geometry info
-export const GEOMETRY_INFO_TEXT_COLOR_SNAPPED = 'rgba(240, 240, 130, 0.95)'; // Yellow when snapped
+export const REF_ARC_RADIUS_SCREEN = 35;
+export const SNAP_ANGLE_LABEL_OFFSET = 60;
+export const TRANSFORM_ANGLE_LABEL_OFFSET = 20;
+export const TRANSFORM_SCALE_LABEL_OFFSET = 18;
+export const SCIENTIFIC_NOTATION_UPPER_BOUND = 1000;
+export const SCIENTIFIC_NOTATION_LOWER_BOUND = 0.001;
+export const MAX_DECIMAL_PLACES_FORMAT = 10;
+export const ZERO_TOLERANCE = 0.00001;
+export const FRACTION_FORMAT_TOLERANCE = 0.015;
+export const FRACTION_FORMAT_MAX_DENOMINATOR = 32;
+export const FRACTION_FORMAT_MAX_DENOMINATOR_TRANSFORM = 10;
+export const COORD_PRECISION_FACTOR = 0.999;
+export const MAX_COORD_DECIMAL_PLACES = 6;
+export const MAX_ANGLE_DECIMAL_PLACES = 4;
+export const MOUSE_COORD_FONT_SIZE = 14;
+export const KATEX_MINUS_PHANTOM = '\\hphantom{-}';
+export const PI_SYMBOL_KATEX = '\\pi';
+export const DELTA_SYMBOL_KATEX = '\\delta';
+export const DELTA_EQUALS_KATEX = '\\delta = ';
+export const THETA_EQUALS_KATEX = '\\theta = ';
+export const SELECTION_GLOW_BLUR_RADIUS = 15;
+export const SELECTION_GLOW_ALPHA = 0.8;
+export const SELECTION_GLOW_RADIUS_OFFSET = 3;
+export const SELECTION_GLOW_LINE_WIDTH = 2;
+export const EDGE_SELECTION_GLOW_WIDTH_OFFSET = 4;
 
 // --- GRID CALCULATIONS ---
 export const GRID_TARGET_SPACING = 140;
@@ -103,6 +246,7 @@ export const ANGULAR_GRID_FADE_IN_THRESHOLD = 0.01;
 
 // --- SNAPPING PARAMETERS ---
 export const GEOMETRY_CALCULATION_EPSILON = 1e-9;
+export const FLOATING_POINT_PRECISION_LIMIT = 1e-15;
 export const VERTICAL_LINE_COS_THRESHOLD = 0.1;
 export const SNAP_STICKINESS_RADIUS_SCREEN = 30;
 export const LINE_TO_SNAP_RADIUS_SCREEN = 10;
@@ -146,6 +290,42 @@ function generateSnapFactors(maxDenominator, maxInteger) {
 
 export const SNAP_FACTORS = generateSnapFactors(MAX_SNAP_DENOMINATOR, MAX_SNAP_INTEGER);
 
+// --- ENUMS & LITERALS ---
+export const POINT_TYPE_REGULAR = 'regular';
+export const TRANSFORM_TYPE_ROTATE_SCALE = 'center_rotate_scale';
+export const TRANSFORM_TYPE_ROTATE_ONLY = 'center_rotate_only';
+export const TRANSFORM_TYPE_SCALE_ONLY = 'center_scale_only';
+export const COORDS_DISPLAY_MODE_NONE = 'none';
+export const COORDS_DISPLAY_MODE_REGULAR = 'regular';
+export const COORDS_DISPLAY_MODE_COMPLEX = 'complex';
+export const COORDS_DISPLAY_MODE_POLAR = 'polar';
+export const GRID_DISPLAY_MODE_NONE = 'none';
+export const GRID_DISPLAY_MODE_LINES = 'lines';
+export const GRID_DISPLAY_MODE_POINTS = 'points';
+export const GRID_DISPLAY_MODE_TRIANGULAR = 'triangular';
+export const GRID_DISPLAY_MODE_POLAR = 'polar';
+export const ANGLE_DISPLAY_MODE_DEGREES = 'degrees';
+export const ANGLE_DISPLAY_MODE_RADIANS = 'radians';
+export const ANGLE_DISPLAY_MODE_NONE = 'none';
+export const DISTANCE_DISPLAY_MODE_ON = 'on';
+export const DISTANCE_DISPLAY_MODE_NONE = 'none';
+export const KEY_SPACE = ' ';
+export const KEY_ESCAPE = 'Escape';
+export const KEY_DELETE = 'Delete';
+export const KEY_BACKSPACE = 'Backspace';
+export const KEY_REPEAT = 'r';
+export const KEY_ZOOM_IN = '=';
+export const KEY_ZOOM_IN_PLUS = '+';
+export const KEY_ZOOM_OUT = '-';
+export const KEY_COPY = 'c';
+export const KEY_PASTE = 'v';
+export const KEY_CUT = 'x';
+export const KEY_UNDO = 'z';
+export const KEY_REDO = 'y';
+export const KEY_SELECT_ALL = 'a';
+
+
+
 === index.html ===
 <!DOCTYPE html>
 <html lang="en">
@@ -181,6 +361,139 @@ export const SNAP_FACTORS = generateSnapFactors(MAX_SNAP_DENOMINATOR, MAX_SNAP_I
 
 
 
+=== refactor.py ===
+# refactor_signatures.py
+import os
+import re
+
+def update_renderer_signatures():
+    """
+    Updates function signatures in renderer.js to accept the 'colors' object,
+    and updates the internal calls to helper functions.
+    """
+    filename = 'renderer.js'
+    if not os.path.exists(filename):
+        print(f"ERROR: File '{filename}' not found.")
+        return
+
+    try:
+        with open(filename, 'r', encoding='utf-8') as f:
+            content = f.read()
+
+        # This list defines the exact signature replacements.
+        # It finds the old function definition and replaces it with the new one.
+        signature_replacements = [
+            (
+                "export function drawGrid(ctx, state, dataToScreen, screenToData, lastGridState, lastAngularGridState)",
+                "export function drawGrid(ctx, { gridDisplayMode, canvas, dpr, viewTransform, gridAlpha, colors }, dataToScreen, screenToData, lastGridState, lastAngularGridState)"
+            ),
+            (
+                "export function drawAxes(ctx, htmlOverlay, state, dataToScreen, screenToData, lastGridState, lastAngularGridState, updateHtmlLabel)",
+                "export function drawAxes(ctx, htmlOverlay, { canvas, dpr, coordsDisplayMode, viewTransform, angleDisplayMode, colors }, dataToScreen, screenToData, lastGridState, lastAngularGridState, updateHtmlLabel)"
+            ),
+            (
+                "export function drawPoint(ctx, point, state, dataToScreen)",
+                "export function drawPoint(ctx, point, { selectedPointIds, selectedCenterIds, activeCenterId, currentColor, colors }, dataToScreen)"
+            ),
+            (
+                "export function drawAllEdges(ctx, state, dataToScreen, findPointById, getEdgeId)",
+                "export function drawAllEdges(ctx, { allEdges, selectedEdgeIds, isDragConfirmed, dragPreviewPoints, currentColor, colors }, dataToScreen, findPointById, getEdgeId)"
+            ),
+            (
+                "export function drawDragFeedback(ctx, htmlOverlay, targetPointId, currentPointStates, state, dataToScreen, findNeighbors, getEdgeId, isSnapping = false, excludedEdgeId = null, updateHtmlLabel = null)",
+                "export function drawDragFeedback(ctx, htmlOverlay, targetPointId, currentPointStates, { lastGridState, showDistances, showAngles, distanceSigFigs, angleDisplayMode, angleSigFigs, currentShiftPressed, viewTransform, colors }, dataToScreen, findNeighbors, getEdgeId, isSnapping = false, excludedEdgeId = null, updateHtmlLabel = null)"
+            ),
+            (
+                "export function drawTransformIndicators(ctx, htmlOverlay, state, dataToScreen, updateHtmlLabel)",
+                "export function drawTransformIndicators(ctx, htmlOverlay, { transformIndicatorData, angleSigFigs, distanceSigFigs, colors }, dataToScreen, updateHtmlLabel)"
+            ),
+            (
+                "export function drawReferenceElementsGeometry(ctx, context, dataToScreen, screenToData, state)",
+                "export function drawReferenceElementsGeometry(ctx, context, dataToScreen, screenToData, { showAngles, showDistances, viewTransform, mousePos, colors })"
+            ),
+            (
+                "export function prepareSnapInfoTexts(ctx, htmlOverlay, startPointData, targetDataPos, snappedOutput, state, dataToScreen, drawingContext, updateHtmlLabel)",
+                "export function prepareSnapInfoTexts(ctx, htmlOverlay, startPointData, targetDataPos, snappedOutput, { showDistances, showAngles, currentShiftPressed, distanceSigFigs, angleSigFigs, angleDisplayMode, viewTransform, frozenReference_D_du, gridDisplayMode, frozenReference_A_rad, colors }, dataToScreen, drawingContext, updateHtmlLabel)"
+            ),
+            (
+                "export function prepareReferenceElementsTexts(htmlOverlay, context, state, screenToData, dataToScreen, updateHtmlLabel)",
+                "export function prepareReferenceElementsTexts(htmlOverlay, context, { showAngles, showDistances, viewTransform, mousePos, frozenReference_D_du, distanceSigFigs, angleDisplayMode, colors }, screenToData, dataToScreen, updateHtmlLabel)"
+            ),
+            (
+                "export function updateMouseCoordinates(htmlOverlay, state, screenToData, updateHtmlLabel)",
+                "export function updateMouseCoordinates(htmlOverlay, { coordsDisplayMode, isMouseOverCanvas, currentShiftPressed, ghostPointPosition, gridDisplayMode, lastGridState, angleDisplayMode, canvas, dpr, mousePos, colors}, screenToData, updateHtmlLabel)"
+            ),
+            (
+                "export function drawDisplayIcon(ctx, icon, state, htmlOverlay, updateHtmlLabel)",
+                "export function drawDisplayIcon(ctx, icon, { coordsDisplayMode, gridDisplayMode, angleDisplayMode, distanceDisplayMode, colors }, htmlOverlay, updateHtmlLabel)"
+            ),
+            (
+                "export function drawCanvasUI(ctx, htmlOverlay, state, updateHtmlLabel)",
+                "export function drawCanvasUI(ctx, htmlOverlay, { dpr, canvasUI, isToolbarExpanded, isColorPaletteExpanded, isTransformPanelExpanded, isDisplayPanelExpanded, isPlacingTransform, placingTransformType, placingSnapPos, mousePos, selectedSwatchIndex, recentColors, activeThemeName, colors }, updateHtmlLabel)"
+            ),
+            # Helper functions that need the `colors` object passed to them
+            ("function drawZeroTickAndTickLabel(ctx, origin, canvasWidth, canvasHeight, coordsDisplayMode, updateHtmlLabel)", "function drawZeroTickAndTickLabel(ctx, origin, canvasWidth, canvasHeight, coordsDisplayMode, updateHtmlLabel, colors)"),
+            ("function drawCenterSymbol(ctx, point, dataToScreen)", "function drawCenterSymbol(ctx, point, dataToScreen, colors)"),
+            ("function drawUITransformSymbol(ctx, icon)", "function drawUITransformSymbol(ctx, icon, colors)"),
+            ("function drawCoordsIcon(ctx, rect, mode, isSelected, htmlOverlay, updateHtmlLabel)", "function drawCoordsIcon(ctx, rect, mode, isSelected, htmlOverlay, updateHtmlLabel, colors)"),
+            ("function drawAngleIcon(ctx, rect, mode, isSelected, htmlOverlay, updateHtmlLabel)", "function drawAngleIcon(ctx, rect, mode, isSelected, htmlOverlay, updateHtmlLabel, colors)"),
+            ("function drawDistanceIcon(ctx, rect, mode, isSelected, htmlOverlay, updateHtmlLabel)", "function drawDistanceIcon(ctx, rect, mode, isSelected, htmlOverlay, updateHtmlLabel, colors)"),
+            ("function drawGridIcon(ctx, rect, mode, isSelected)", "function drawGridIcon(ctx, rect, mode, isSelected, colors)")
+        ]
+
+        # Update the main function signatures first
+        for find_sig, replace_sig in signature_replacements:
+            if find_sig in content:
+                content = content.replace(find_sig, replace_sig)
+
+        # Then, update the calls to the internal helper functions
+        content = content.replace(
+            "drawZeroTickAndTickLabel(ctx, origin, canvasWidth, canvasHeight, coordsDisplayMode, updateHtmlLabel);",
+            "drawZeroTickAndTickLabel(ctx, origin, canvasWidth, canvasHeight, coordsDisplayMode, updateHtmlLabel, colors);"
+        )
+        content = content.replace(
+            "drawCenterSymbol(ctx, point, dataToScreen);",
+            "drawCenterSymbol(ctx, point, dataToScreen, colors);"
+        )
+        content = content.replace(
+            "drawUITransformSymbol(ctx, ghostIcon);",
+            "drawUITransformSymbol(ctx, ghostIcon, colors);"
+        )
+        content = content.replace(
+            "drawUITransformSymbol(ctx, icon);",
+            "drawUITransformSymbol(ctx, icon, colors);"
+        )
+        # The state object needs to be passed through to the display icon helpers
+        content = content.replace(
+            "drawCoordsIcon(ctx, rect, coordsDisplayMode, isSelected, htmlOverlay, updateHtmlLabel);",
+            "drawCoordsIcon(ctx, rect, coordsDisplayMode, isSelected, htmlOverlay, updateHtmlLabel, colors);"
+        )
+        content = content.replace(
+            "drawGridIcon(ctx, rect, gridDisplayMode, isSelected);",
+            "drawGridIcon(ctx, rect, gridDisplayMode, isSelected, colors);"
+        )
+        content = content.replace(
+            "drawAngleIcon(ctx, rect, angleDisplayMode, isSelected, htmlOverlay, updateHtmlLabel);",
+            "drawAngleIcon(ctx, rect, angleDisplayMode, isSelected, htmlOverlay, updateHtmlLabel, colors);"
+        )
+        content = content.replace(
+            "drawDistanceIcon(ctx, rect, distanceDisplayMode, isSelected, htmlOverlay, updateHtmlLabel);",
+            "drawDistanceIcon(ctx, rect, distanceDisplayMode, isSelected, htmlOverlay, updateHtmlLabel, colors);"
+        )
+        
+        with open(filename, 'w', encoding='utf-8') as f:
+            f.write(content)
+        
+        print(f"SUCCESS: Updated function signatures in '{filename}'.")
+
+    except Exception as e:
+        print(f"ERROR processing {filename}: {e}")
+
+if __name__ == "__main__":
+    print("--- Starting Signature Refactoring Script ---")
+    update_renderer_signatures()
+    print("--- Script Finished ---")
+
 === renderer.js ===
 import {
     formatNumber,
@@ -203,20 +516,26 @@ import {
     GRID_LINEWIDTH,
     DASH_PATTERN,
     DASH_PATTERN_SMALL,
-    
-    // --- COLORS ---
-    GRID_COLOR,
-    AXIS_COLOR,
-    FROZEN_REFERENCE_COLOR,
-    FEEDBACK_COLOR_SNAPPED,
-    FEEDBACK_COLOR_DEFAULT,
-    GEOMETRY_INFO_TEXT_COLOR,
-    GEOMETRY_INFO_TEXT_COLOR_SNAPPED,
-    
+    DEGREES_IN_CIRCLE,
+    DEGREES_IN_HALF_CIRCLE,
+    DEGREES_IN_QUADRANT,
+    RADIANS_IN_CIRCLE,
+    MIN_ALPHA_FOR_DRAWING,
+    TRIANGULAR_GRID_Y_STEP_FACTOR,
+    POLAR_TO_LINE_TRANSITION_RADIUS_FACTOR,
+    ORIGIN_TICK_ANGLE_RAD,
+    AXIS_MAJOR_TICK_SCALE_FACTOR,
+    AXIS_ARROW_ANGLE_RAD,
+    MAJOR_TICK_LINE_WIDTH,
+    HELPER_LINE_DASH_PATTERN,
+    REF_LINE_DASH_PATTERN,
+
+    // --- INTERACTION ---
+    MIN_TRANSFORM_ACTION_THRESHOLD,
+
     // --- AXES & TICKS ---
     AXIS_LINE_WIDTH,
     AXIS_TICK_SIZE,
-    AXIS_TICK_LABEL_COLOR,
     AXIS_TICK_LABEL_ALPHA,
     AXIS_NAME_FONT_SIZE,
     AXIS_TICK_FONT_SIZE,
@@ -229,10 +548,44 @@ import {
     Y_AXIS_LABEL_ARROW_DIST,
     POLAR_THETA_LABEL_DISTANCE,
     POLAR_THETA_LABEL_ARROW_DIST,
-    
+    ANGLE_PRECISION_FACTOR,
+    BOUNDARY_ANGLE_PRECISION,
+    LABEL_ID_PRECISION_FACTOR,
+    ORIGIN_LABEL_TEXT,
+    POLAR_AXIS_RADIUS_BUFFER_FACTOR,
+    TICK_LABEL_SIGFIG_THRESH_1,
+    TICK_LABEL_SIGFIG_THRESH_2,
+    TICK_LABEL_SIGFIG_THRESH_3,
+    FINE_TICK_ANGLE_THRESHOLD_DEG,
+    IMAGINARY_UNIT_SYMBOL,
+    POLAR_RADIUS_SYMBOL,
+    COMPLEX_REAL_LABEL,
+    COMPLEX_IMAGINARY_LABEL,
+
     // --- DEFAULTS ---
     DEFAULT_REFERENCE_DISTANCE,
-    
+
+    // --- UI & TOOLBAR ---
+    UI_PADDING,
+    UI_ICON_BASE_SIZE,
+    UI_ICON_LINE_WIDTH,
+    UI_ICON_LINE_WIDTH_SMALL,
+    UI_ICON_DASH_PATTERN,
+    UI_ICON_POINT_RADIUS,
+    UI_ICON_LABEL_FONT_SIZE,
+    UI_MENU_ICON_LINE_WIDTH,
+    UI_TRANSFORM_TOOL_LABEL_FONT_SIZE,
+    UI_TRANSFORM_TOOL_LABEL_TEXT,
+    UI_DISPLAY_ICON_BAR_WIDTH_PADDING,
+    UI_DISPLAY_ICON_Y_OFFSET,
+    UI_DISPLAY_ICON_Y_SPACING,
+    UI_DISPLAY_ICON_KNOB_RADIUS,
+    UI_SWATCH_SELECTED_BORDER_WIDTH,
+    UI_BUTTON_BORDER_WIDTH,
+    UI_BUTTON_ICON_PADDING,
+    UI_GHOST_ICON_SIZE,
+    COLOR_WHEEL_FADE_START_RADIUS_FACTOR,
+
     // --- FEEDBACK LABELS & TEXT ---
     FEEDBACK_LABEL_FONT_SIZE,
     FEEDBACK_ARC_RADIUS_SCREEN,
@@ -246,7 +599,28 @@ import {
     REF_CIRCLE_MIN_DISPLAY_RADIUS,
     REF_CIRCLE_MIN_TICK_SPACING,
     REF_CIRCLE_THETA_LABEL_OFFSET,
-    
+    REF_ARC_RADIUS_SCREEN,
+    SNAP_ANGLE_LABEL_OFFSET,
+    TRANSFORM_ANGLE_LABEL_OFFSET,
+    TRANSFORM_SCALE_LABEL_OFFSET,
+    FRACTION_FORMAT_TOLERANCE,
+    FRACTION_FORMAT_MAX_DENOMINATOR,
+    FRACTION_FORMAT_MAX_DENOMINATOR_TRANSFORM,
+    COORD_PRECISION_FACTOR,
+    MAX_COORD_DECIMAL_PLACES,
+    MAX_ANGLE_DECIMAL_PLACES,
+    MOUSE_COORD_FONT_SIZE,
+    KATEX_MINUS_PHANTOM,
+    PI_SYMBOL_KATEX,
+    DELTA_SYMBOL_KATEX,
+    DELTA_EQUALS_KATEX,
+    THETA_EQUALS_KATEX,
+    SELECTION_GLOW_BLUR_RADIUS,
+    SELECTION_GLOW_ALPHA,
+    SELECTION_GLOW_RADIUS_OFFSET,
+    SELECTION_GLOW_LINE_WIDTH,
+    EDGE_SELECTION_GLOW_WIDTH_OFFSET,
+
     // --- GRID CALCULATIONS ---
     GRID_TARGET_SPACING,
     GRID_ALPHA_TRANSITION_START,
@@ -259,16 +633,34 @@ import {
     ANGULAR_GRID_PREDEFINED_LEVELS,
     ANGULAR_GRID_TARGET_SPACING,
     ANGULAR_GRID_FADE_IN_THRESHOLD,
-    
+
     // --- SNAPPING PARAMETERS ---
     GEOMETRY_CALCULATION_EPSILON,
+    FLOATING_POINT_PRECISION_LIMIT,
     VERTICAL_LINE_COS_THRESHOLD,
     NINETY_DEG_ANGLE_SNAP_FRACTIONS,
-    SNAP_FACTORS
+    SNAP_FACTORS,
+
+    // --- ENUMS & LITERALS ---
+    POINT_TYPE_REGULAR,
+    TRANSFORM_TYPE_ROTATE_SCALE,
+    TRANSFORM_TYPE_ROTATE_ONLY,
+    TRANSFORM_TYPE_SCALE_ONLY,
+    COORDS_DISPLAY_MODE_NONE,
+    COORDS_DISPLAY_MODE_REGULAR,
+    COORDS_DISPLAY_MODE_COMPLEX,
+    COORDS_DISPLAY_MODE_POLAR,
+    GRID_DISPLAY_MODE_NONE,
+    GRID_DISPLAY_MODE_LINES,
+    GRID_DISPLAY_MODE_POINTS,
+    GRID_DISPLAY_MODE_TRIANGULAR,
+    GRID_DISPLAY_MODE_POLAR,
+    ANGLE_DISPLAY_MODE_DEGREES,
+    ANGLE_DISPLAY_MODE_RADIANS,
+    ANGLE_DISPLAY_MODE_NONE,
+    DISTANCE_DISPLAY_MODE_ON,
+    DISTANCE_DISPLAY_MODE_NONE
 } from './constants.js';
-
-
-
 
 
 let colorWheelIcon = null
@@ -485,6 +877,12 @@ function getLineCircleIntersections(x1, y1, x2, y2, cx, cy, r) {
 }
 
 function calculateVisibleAngleRange(originScreen, screenRadius, canvasWidth, canvasHeight) {
+    // If origin is visible, show all angles
+    if (originScreen.x >= 0 && originScreen.x <= canvasWidth && 
+        originScreen.y >= 0 && originScreen.y <= canvasHeight) {
+        return { minAngle: 0, maxAngle: 360, isFullCircle: true };
+    }
+
     const rect = {
         left: 0,
         right: canvasWidth,
@@ -590,20 +988,21 @@ function calculateVisibleAngleRange(originScreen, screenRadius, canvasWidth, can
         }
     }
 
-    // The visible range is everything except the largest gap
-    if (maxGap > 180) {
-        // The invisible sector is larger than 180°, so we have a simple range
-        return { 
-            minAngle: maxGapEndAngle, 
-            maxAngle: maxGapStartAngle, 
-            isFullCircle: false 
+    // FIXED: The largest gap represents the INVISIBLE area
+    // The visible range is everything EXCEPT the largest gap
+    if (maxGapEndAngle > maxGapStartAngle) {
+        // Invisible gap doesn't cross 0°, so visible range wraps around 0°
+        return {
+            minAngle: maxGapEndAngle,
+            maxAngle: maxGapStartAngle + 360,
+            isFullCircle: false
         };
     } else {
-        // The invisible sector is smaller than 180°, so we have a wraparound range
-        return { 
-            minAngle: maxGapStartAngle, 
-            maxAngle: maxGapEndAngle + 360, 
-            isFullCircle: false 
+        // Invisible gap crosses 0°, so visible range is normal
+        return {
+            minAngle: maxGapEndAngle,
+            maxAngle: maxGapStartAngle,
+            isFullCircle: false
         };
     }
 }
@@ -611,8 +1010,11 @@ function calculateVisibleAngleRange(originScreen, screenRadius, canvasWidth, can
 function generateOptimizedAngleSequence(angleStep, minAngle, maxAngle) {
     const angles = [];
     
-    if (maxAngle > 360) {
-        // Handle wraparound case (e.g., minAngle = 345, maxAngle = 375 means 345-360 and 0-15)
+    // FIXED: Properly detect wraparound case
+    const isWraparound = maxAngle > 360;
+    
+    if (isWraparound) {
+        // Handle wraparound case
         const actualMaxAngle = maxAngle - 360;
         
         // Add angles from minAngle to 360
@@ -649,12 +1051,11 @@ function isTickVisible(tickEnd, canvasWidth, canvasHeight) {
            tickEnd.y <= canvasHeight + AXIS_LABEL_PADDING;
 }
 
-export function drawPolarReferenceCircle(ctx, htmlOverlay, updateHtmlLabel, radius, alpha, state, dataToScreen, lastAngularGridState) {
+export function drawPolarReferenceCircle(ctx, htmlOverlay, updateHtmlLabel, radius, alpha, { canvas, dpr, viewTransform, angleDisplayMode, colors }, dataToScreen, lastAngularGridState) {
     if (typeof dataToScreen !== 'function' || typeof updateHtmlLabel !== 'function') {
         return;
     }
 
-    const { canvas, dpr, viewTransform, angleDisplayMode } = state;
     const originScreen = dataToScreen({ x: 0, y: 0 });
     const canvasWidthCSS = canvas.width / dpr;
     const canvasHeightCSS = canvas.height / dpr;
@@ -668,7 +1069,7 @@ export function drawPolarReferenceCircle(ctx, htmlOverlay, updateHtmlLabel, radi
     }
 
     ctx.save();
-    ctx.strokeStyle = `rgba(${FEEDBACK_COLOR_DEFAULT.join(',')}, 1.0)`;
+    ctx.strokeStyle = `rgba(${colors.feedbackDefault.join(',')}, 1.0)`;
     ctx.lineWidth = FEEDBACK_LINE_VISUAL_WIDTH;
 
     const transitionRadius = Math.min(canvasWidthCSS, canvasHeightCSS) * 400;
@@ -717,7 +1118,8 @@ export function drawPolarReferenceCircle(ctx, htmlOverlay, updateHtmlLabel, radi
     if (!visibleAngleRange) return;
 
     const dataRadius = screenRadius / (viewTransform.scale / dpr);
-    const drawnAngles = new Set();
+    const drawnAnglesSimple = new Set(); // For degrees mode
+    const drawnAnglesComplex = new Map(); // For radians mode - key: "deg-levelAngle"
 
     lastAngularGridState.forEach(level => {
         const tickAlpha = level.alpha;
@@ -727,7 +1129,7 @@ export function drawPolarReferenceCircle(ctx, htmlOverlay, updateHtmlLabel, radi
         
         if (screenSeparation < REF_CIRCLE_MIN_TICK_SPACING * 0.5) return;
 
-        const finalColor = `rgba(${FEEDBACK_COLOR_DEFAULT.join(',')}, ${tickAlpha * 0.95})`;
+        const finalColor = `rgba(${colors.feedbackDefault.join(',')}, ${tickAlpha * 0.95})`;
 
         let anglesToProcess;
         if (visibleAngleRange.isFullCircle) {
@@ -744,11 +1146,24 @@ export function drawPolarReferenceCircle(ctx, htmlOverlay, updateHtmlLabel, radi
         }
 
         anglesToProcess.forEach(deg => {
-            if (drawnAngles.has(deg) && deg !== 0) return;
-            if (deg === 0 && drawnAngles.has(deg) && level.angle !== 360) return;
+            // Original simple behavior for degrees mode
+            if (angleDisplayMode === 'degrees') {
+                if (drawnAnglesSimple.has(deg)) return;
+            }
+            // For radians mode, allow multiple levels per angle
+            else if (angleDisplayMode === 'radians') {
+                const levelKey = `${deg}-${level.angle}`;
+                if (drawnAnglesComplex.has(levelKey)) return; // This specific level already drawn
+            }
 
             const angleRad = deg * Math.PI / 180;
             let labelOptions = { textAlign: 'center', textBaseline: 'middle' };
+            
+            // In radians mode, use left alignment to minimize visual overlap
+            if (angleDisplayMode === 'radians') {
+                labelOptions = { textAlign: 'left', textBaseline: 'middle' };
+            }
+            
             let labelPos;
 
             ctx.save();
@@ -879,7 +1294,10 @@ export function drawPolarReferenceCircle(ctx, htmlOverlay, updateHtmlLabel, radi
             }
 
             if (angleText) {
-                const labelId = `circ-label-${deg}-${dataRadius.toExponential(15)}`;
+                const labelId = angleDisplayMode === 'radians' 
+                    ? `circ-label-${deg}-${level.angle}-${dataRadius.toExponential(15)}`
+                    : `circ-label-${deg}-${dataRadius.toExponential(15)}`;
+                    
                 updateHtmlLabel({ 
                     id: labelId, 
                     content: angleText, 
@@ -889,13 +1307,23 @@ export function drawPolarReferenceCircle(ctx, htmlOverlay, updateHtmlLabel, radi
                     fontSize: REF_TEXT_KATEX_FONT_SIZE, 
                     options: labelOptions
                 });
+                
+                // Store tracking info differently for each mode
+                if (angleDisplayMode === 'degrees') {
+                    drawnAnglesSimple.add(deg);
+                } else {
+                    const levelKey = `${deg}-${level.angle}`;
+                    drawnAnglesComplex.set(levelKey, { 
+                        levelAngle: level.angle, 
+                        alpha: tickAlpha,
+                        labelId: labelId 
+                    });
+                }
             }
-            
-            drawnAngles.add(deg);
         });
     });
 
-    const arrowColor = FEEDBACK_COLOR_DEFAULT;
+    const arrowColor = colors.feedbackDefault;
     let stickyArrowAngle = -Infinity;
     const zeroDegPoint = { x: originScreen.x + screenRadius, y: originScreen.y };
     if (zeroDegPoint.x > -AXIS_LABEL_PADDING && zeroDegPoint.x < canvasWidthCSS + AXIS_LABEL_PADDING && zeroDegPoint.y > -AXIS_LABEL_PADDING && zeroDegPoint.y < canvasHeightCSS + AXIS_LABEL_PADDING) {
@@ -1007,22 +1435,20 @@ export function isCircleInView(circleX, circleY, circleRadius, canvasWidth, canv
     return true;
 }
 
-function drawZeroTickAndTickLabel(ctx, origin, canvasWidth, canvasHeight, coordsDisplayMode, updateHtmlLabel) {
-    const tickColor = `rgba(${AXIS_TICK_LABEL_COLOR.join(',')}, ${AXIS_TICK_LABEL_ALPHA})`;
-    const longTickSize = AXIS_TICK_SIZE * 1.5;
+function drawZeroTickAndTickLabel(ctx, origin, canvasWidth, canvasHeight, coordsDisplayMode, updateHtmlLabel, colors) {
+    const tickColor = `rgba(${colors.axisTickLabel.join(',')}, ${AXIS_TICK_LABEL_ALPHA})`;
+    const longTickSize = AXIS_TICK_SIZE * AXIS_MAJOR_TICK_SCALE_FACTOR;
     
     ctx.save();
     ctx.strokeStyle = tickColor;
-    ctx.lineWidth = 1.5;
+    ctx.lineWidth = MAJOR_TICK_LINE_WIDTH;
     ctx.setLineDash([]);
     
-    // Draw from origin going down-left at 60 degrees, with length measured in y-direction
-    const angle = 60 * Math.PI / 180; // 60 degrees
-    const yLength = longTickSize; // Length in y-direction
-    const xLength = yLength / Math.tan(angle); // Calculate x-component for 60 degree angle
+    const yLength = longTickSize;
+    const xLength = yLength / Math.tan(ORIGIN_TICK_ANGLE_RAD);
     
-    const endX = origin.x - xLength; // Going left (negative x)
-    const endY = origin.y + yLength; // Going down (positive y in canvas coordinates)
+    const endX = origin.x - xLength;
+    const endY = origin.y + yLength;
     
     ctx.beginPath();
     ctx.moveTo(origin.x, origin.y);
@@ -1033,7 +1459,7 @@ function drawZeroTickAndTickLabel(ctx, origin, canvasWidth, canvasHeight, coords
     
     updateHtmlLabel({
         id: 'tick-label-origin',
-        content: '\\phantom{-}0',
+        content: ORIGIN_LABEL_TEXT,
         x: origin.x - AXIS_TICK_SIZE - AXIS_LABEL_OFFSET,
         y: origin.y + AXIS_TICK_SIZE + AXIS_LABEL_OFFSET,
         color: tickColor,
@@ -1042,8 +1468,7 @@ function drawZeroTickAndTickLabel(ctx, origin, canvasWidth, canvasHeight, coords
     });
 }
 
-export function drawAxes(ctx, htmlOverlay, state, dataToScreen, screenToData, lastGridState, lastAngularGridState, updateHtmlLabel) {
-    const { canvas, dpr, coordsDisplayMode, viewTransform, angleDisplayMode } = state;
+export function drawAxes(ctx, htmlOverlay, { canvas, dpr, coordsDisplayMode, viewTransform, angleDisplayMode, colors }, dataToScreen, screenToData, lastGridState, lastAngularGridState, updateHtmlLabel) {
     ctx.save();
     const canvasWidth = canvas.width / dpr;
     const canvasHeight = canvas.height / dpr;
@@ -1057,26 +1482,24 @@ export function drawAxes(ctx, htmlOverlay, state, dataToScreen, screenToData, la
         const angle = Math.atan2(y2 - y1, x2 - x1);
         ctx.beginPath();
         ctx.moveTo(x2, y2);
-        ctx.lineTo(x2 - AXIS_ARROW_SIZE * Math.cos(angle - Math.PI / 6), y2 - AXIS_ARROW_SIZE * Math.sin(angle - Math.PI / 6));
-        ctx.lineTo(x2 - AXIS_ARROW_SIZE * Math.cos(angle + Math.PI / 6), y2 - AXIS_ARROW_SIZE * Math.sin(angle + Math.PI / 6));
+        ctx.lineTo(x2 - AXIS_ARROW_SIZE * Math.cos(angle - AXIS_ARROW_ANGLE_RAD), y2 - AXIS_ARROW_SIZE * Math.sin(angle - AXIS_ARROW_ANGLE_RAD));
+        ctx.lineTo(x2 - AXIS_ARROW_SIZE * Math.cos(angle + AXIS_ARROW_ANGLE_RAD), y2 - AXIS_ARROW_SIZE * Math.sin(angle + AXIS_ARROW_ANGLE_RAD));
         ctx.closePath();
         ctx.fill();
     };
 
-    // Unified tick drawing function for both modes
     const drawTicksAndLabels = (interval1, alpha1, interval2, alpha2, isPolar) => {
         const drawnXPositions = new Map();
         const drawnYPositions = new Map();
         
         const addTicksForInterval = (interval, alpha, isCoarser) => {
-            if (!interval || alpha < 0.01) return;
+            if (!interval || alpha < MIN_ALPHA_FOR_DRAWING) return;
             const topLeftData = screenToData({ x: 0, y: 0 });
             const bottomRightData = screenToData({ x: canvasWidth, y: canvasHeight });
-            const localZeroThreshold = interval * 1e-6;
+            const localZeroThreshold = interval * GEOMETRY_CALCULATION_EPSILON;
             
             if (isPolar) {
-                // For polar mode, calculate r-axis ticks
-                const maxRadiusData = Math.hypot(Math.max(Math.abs(topLeftData.x), Math.abs(bottomRightData.x)), Math.max(Math.abs(topLeftData.y), Math.abs(bottomRightData.y))) * 1.1;
+                const maxRadiusData = Math.hypot(Math.max(Math.abs(topLeftData.x), Math.abs(bottomRightData.x)), Math.max(Math.abs(topLeftData.y), Math.abs(bottomRightData.y))) * POLAR_AXIS_RADIUS_BUFFER_FACTOR;
                 
                 for (let r_data = interval; r_data <= maxRadiusData; r_data += interval) {
                     if (Math.abs(r_data) < localZeroThreshold) continue;
@@ -1092,7 +1515,6 @@ export function drawAxes(ctx, htmlOverlay, state, dataToScreen, screenToData, la
                     }
                 }
             } else {
-                // For rectilinear mode, calculate x and y ticks
                 const startTickX = Math.floor(topLeftData.x / interval) * interval;
                 const endTickX = Math.ceil(bottomRightData.x / interval) * interval;
                 const startTickY = Math.floor(bottomRightData.y / interval) * interval;
@@ -1128,30 +1550,26 @@ export function drawAxes(ctx, htmlOverlay, state, dataToScreen, screenToData, la
             }
         };
         
-        // Identical logic for determining coarser interval
         const interval1IsCoarser = !interval2 || interval1 >= interval2;
         
         addTicksForInterval(interval1, alpha1, interval1IsCoarser);
         addTicksForInterval(interval2, alpha2, !interval1IsCoarser);
         
-        // Draw X-axis ticks (or r-axis ticks in polar mode)
         drawnXPositions.forEach((tickInfo, x_data) => {
-            // Identical alpha logic - coarser ticks stay opaque, finer ticks fade
             const effectiveAlpha = tickInfo.isCoarser ? 1.0 : tickInfo.alpha;
-            const tickLabelColor = `rgba(${AXIS_TICK_LABEL_COLOR.join(',')}, ${AXIS_TICK_LABEL_ALPHA * effectiveAlpha})`;
+            const tickLabelColor = `rgba(${colors.axisTickLabel.join(',')}, ${AXIS_TICK_LABEL_ALPHA * effectiveAlpha})`;
             ctx.strokeStyle = tickLabelColor;
             ctx.lineWidth = GRID_LINEWIDTH;
             
-            // Identical screen spacing and sig figs calculation
             let sourceInterval = interval1;
             if (interval2 && Math.abs(x_data % interval2) < Math.abs(x_data % interval1)) {
                 sourceInterval = interval2;
             }
             const screenSpacing = sourceInterval * viewTransform.scale;
             let sigFigsForLabel = 0;
-            if (screenSpacing > 80) sigFigsForLabel = 3; 
-            else if (screenSpacing > 40) sigFigsForLabel = 2; 
-            else if (screenSpacing > 20) sigFigsForLabel = 1; 
+            if (screenSpacing > TICK_LABEL_SIGFIG_THRESH_1) sigFigsForLabel = 3; 
+            else if (screenSpacing > TICK_LABEL_SIGFIG_THRESH_2) sigFigsForLabel = 2; 
+            else if (screenSpacing > TICK_LABEL_SIGFIG_THRESH_3) sigFigsForLabel = 1; 
             else sigFigsForLabel = 0;
             
             const decimalPlacesInInterval = sourceInterval > 0 ? -Math.floor(Math.log10(sourceInterval)) : 0;
@@ -1160,12 +1578,14 @@ export function drawAxes(ctx, htmlOverlay, state, dataToScreen, screenToData, la
             }
             
             if (isPolar) {
-                // Polar r-axis ticks - draw on all 4 directions
                 const labelText = formatNumber(x_data, sigFigsForLabel);
                 const stableIdPart = x_data.toExponential(15);
                 
+                const isYAxisOnScreen = origin.y > -AXIS_LABEL_PADDING && origin.y < canvasHeight + AXIS_LABEL_PADDING;
+                const isXAxisOnScreen = origin.x > -AXIS_LABEL_PADDING && origin.x < canvasWidth + AXIS_LABEL_PADDING;
+
                 const pX = dataToScreen({ x: x_data, y: 0 });
-                if (pX.x > -AXIS_LABEL_PADDING && pX.x < canvasWidth + AXIS_LABEL_PADDING) {
+                if (isYAxisOnScreen && pX.x > -AXIS_LABEL_PADDING && pX.x < canvasWidth + AXIS_LABEL_PADDING) {
                     ctx.beginPath(); 
                     ctx.moveTo(pX.x, origin.y - AXIS_TICK_SIZE / 2); 
                     ctx.lineTo(pX.x, origin.y + AXIS_TICK_SIZE / 2); 
@@ -1182,7 +1602,7 @@ export function drawAxes(ctx, htmlOverlay, state, dataToScreen, screenToData, la
                 }
                 
                 const pNegX = dataToScreen({ x: -x_data, y: 0 });
-                if (pNegX.x > -AXIS_LABEL_PADDING && pNegX.x < canvasWidth + AXIS_LABEL_PADDING) {
+                if (isYAxisOnScreen && pNegX.x > -AXIS_LABEL_PADDING && pNegX.x < canvasWidth + AXIS_LABEL_PADDING) {
                     ctx.beginPath(); 
                     ctx.moveTo(pNegX.x, origin.y - AXIS_TICK_SIZE / 2); 
                     ctx.lineTo(pNegX.x, origin.y + AXIS_TICK_SIZE / 2); 
@@ -1199,7 +1619,7 @@ export function drawAxes(ctx, htmlOverlay, state, dataToScreen, screenToData, la
                 }
                 
                 const pPosY = dataToScreen({ x: 0, y: x_data });
-                if (pPosY.y > -AXIS_LABEL_PADDING && pPosY.y < canvasHeight + AXIS_LABEL_PADDING) {
+                if (isXAxisOnScreen && pPosY.y > -AXIS_LABEL_PADDING && pPosY.y < canvasHeight + AXIS_LABEL_PADDING) {
                     ctx.beginPath(); 
                     ctx.moveTo(origin.x - AXIS_TICK_SIZE / 2, pPosY.y); 
                     ctx.lineTo(origin.x + AXIS_TICK_SIZE / 2, pPosY.y); 
@@ -1216,7 +1636,7 @@ export function drawAxes(ctx, htmlOverlay, state, dataToScreen, screenToData, la
                 }
                 
                 const pNegY = dataToScreen({ x: 0, y: -x_data });
-                if (pNegY.y > -AXIS_LABEL_PADDING && pNegY.y < canvasHeight + AXIS_LABEL_PADDING) {
+                if (isXAxisOnScreen && pNegY.y > -AXIS_LABEL_PADDING && pNegY.y < canvasHeight + AXIS_LABEL_PADDING) {
                     ctx.beginPath(); 
                     ctx.moveTo(origin.x - AXIS_TICK_SIZE / 2, pNegY.y); 
                     ctx.lineTo(origin.x + AXIS_TICK_SIZE / 2, pNegY.y); 
@@ -1232,7 +1652,6 @@ export function drawAxes(ctx, htmlOverlay, state, dataToScreen, screenToData, la
                     });
                 }
             } else {
-                // Rectilinear x-axis ticks
                 const screenX = dataToScreen({ x: x_data, y: 0 }).x;
                 ctx.beginPath(); 
                 ctx.moveTo(screenX, origin.y); 
@@ -1252,11 +1671,10 @@ export function drawAxes(ctx, htmlOverlay, state, dataToScreen, screenToData, la
             }
         });
         
-        // Draw Y-axis ticks (only for rectilinear mode)
         if (!isPolar) {
             drawnYPositions.forEach((tickInfo, y_data) => {
                 const effectiveAlpha = tickInfo.isCoarser ? 1.0 : tickInfo.alpha;
-                const tickLabelColor = `rgba(${AXIS_TICK_LABEL_COLOR.join(',')}, ${AXIS_TICK_LABEL_ALPHA * effectiveAlpha})`;
+                const tickLabelColor = `rgba(${colors.axisTickLabel.join(',')}, ${AXIS_TICK_LABEL_ALPHA * effectiveAlpha})`;
                 ctx.strokeStyle = tickLabelColor;
                 ctx.lineWidth = GRID_LINEWIDTH;
                 
@@ -1266,9 +1684,9 @@ export function drawAxes(ctx, htmlOverlay, state, dataToScreen, screenToData, la
                 }
                 const screenSpacing = sourceInterval * viewTransform.scale;
                 let sigFigsForLabel = 0;
-                if (screenSpacing > 80) sigFigsForLabel = 3; 
-                else if (screenSpacing > 40) sigFigsForLabel = 2; 
-                else if (screenSpacing > 20) sigFigsForLabel = 1; 
+                if (screenSpacing > TICK_LABEL_SIGFIG_THRESH_1) sigFigsForLabel = 3; 
+                else if (screenSpacing > TICK_LABEL_SIGFIG_THRESH_2) sigFigsForLabel = 2; 
+                else if (screenSpacing > TICK_LABEL_SIGFIG_THRESH_3) sigFigsForLabel = 1; 
                 else sigFigsForLabel = 0;
                 
                 const decimalPlacesInInterval = sourceInterval > 0 ? -Math.floor(Math.log10(sourceInterval)) : 0;
@@ -1278,10 +1696,10 @@ export function drawAxes(ctx, htmlOverlay, state, dataToScreen, screenToData, la
                 
                 const screenY = dataToScreen({ x: 0, y: y_data }).y;
                 let yLabelContent = formatNumber(y_data, sigFigsForLabel);
-                if (coordsDisplayMode === 'complex' && yLabelContent !== "0") {
-                    if (yLabelContent === '1') yLabelContent = 'i';
-                    else if (yLabelContent === '-1') yLabelContent = '-i';
-                    else yLabelContent += 'i';
+                if (coordsDisplayMode === COORDS_DISPLAY_MODE_COMPLEX && yLabelContent !== "0") {
+                    if (yLabelContent === '1') yLabelContent = IMAGINARY_UNIT_SYMBOL;
+                    else if (yLabelContent === '-1') yLabelContent = `-${IMAGINARY_UNIT_SYMBOL}`;
+                    else yLabelContent += IMAGINARY_UNIT_SYMBOL;
                 }
                 
                 ctx.beginPath(); 
@@ -1304,10 +1722,10 @@ export function drawAxes(ctx, htmlOverlay, state, dataToScreen, screenToData, la
     };
 
     ctx.lineWidth = AXIS_LINE_WIDTH;
-    ctx.strokeStyle = AXIS_COLOR;
-    ctx.fillStyle = AXIS_COLOR;
+    ctx.strokeStyle = colors.axis;
+    ctx.fillStyle = colors.axis;
 
-    if (coordsDisplayMode === 'polar') {
+    if (coordsDisplayMode === COORDS_DISPLAY_MODE_POLAR) {
         const { interval1, interval2, alpha1, alpha2 } = lastGridState;
         ctx.lineWidth = GRID_LINEWIDTH;
         
@@ -1320,10 +1738,10 @@ export function drawAxes(ctx, htmlOverlay, state, dataToScreen, screenToData, la
             drawAxisWithArrows(origin.x, origin.y, canvasWidth, origin.y);
             updateHtmlLabel({ 
                 id: 'axis-label-r-posx', 
-                content: 'r', 
+                content: POLAR_RADIUS_SYMBOL, 
                 x: canvasWidth - AXIS_ARROW_SIZE - X_AXIS_LABEL_ARROW_DIST, 
                 y: origin.y - X_AXIS_LABEL_DISTANCE, 
-                color: AXIS_COLOR, 
+                color: colors.axis, 
                 fontSize: AXIS_NAME_FONT_SIZE, 
                 options: { textAlign: 'center', textBaseline: 'bottom' } 
             });
@@ -1333,10 +1751,10 @@ export function drawAxes(ctx, htmlOverlay, state, dataToScreen, screenToData, la
             drawAxisWithArrows(origin.x, origin.y, 0, origin.y);
             updateHtmlLabel({ 
                 id: 'axis-label-r-negx', 
-                content: 'r', 
+                content: POLAR_RADIUS_SYMBOL, 
                 x: AXIS_ARROW_SIZE + X_AXIS_LABEL_ARROW_DIST, 
                 y: origin.y - X_AXIS_LABEL_DISTANCE, 
-                color: AXIS_COLOR, 
+                color: colors.axis, 
                 fontSize: AXIS_NAME_FONT_SIZE, 
                 options: { textAlign: 'center', textBaseline: 'bottom' } 
             });
@@ -1346,10 +1764,10 @@ export function drawAxes(ctx, htmlOverlay, state, dataToScreen, screenToData, la
             drawAxisWithArrows(origin.x, origin.y, origin.x, 0);
             updateHtmlLabel({ 
                 id: 'axis-label-r-posy', 
-                content: 'r', 
+                content: POLAR_RADIUS_SYMBOL, 
                 x: origin.x + Y_AXIS_LABEL_DISTANCE, 
                 y: AXIS_ARROW_SIZE + Y_AXIS_LABEL_ARROW_DIST, 
-                color: AXIS_COLOR, 
+                color: colors.axis, 
                 fontSize: AXIS_NAME_FONT_SIZE, 
                 options: { textAlign: 'left', textBaseline: 'middle' } 
             });
@@ -1359,26 +1777,26 @@ export function drawAxes(ctx, htmlOverlay, state, dataToScreen, screenToData, la
             drawAxisWithArrows(origin.x, origin.y, origin.x, canvasHeight);
             updateHtmlLabel({ 
                 id: 'axis-label-r-negy', 
-                content: 'r', 
+                content: POLAR_RADIUS_SYMBOL, 
                 x: origin.x + Y_AXIS_LABEL_DISTANCE, 
                 y: canvasHeight - AXIS_ARROW_SIZE - Y_AXIS_LABEL_ARROW_DIST, 
-                color: AXIS_COLOR, 
+                color: colors.axis, 
                 fontSize: AXIS_NAME_FONT_SIZE, 
                 options: { textAlign: 'left', textBaseline: 'middle' } 
             });
         }
         
-        drawTicksAndLabels(interval1, alpha1, interval2, alpha2, true); // true = polar mode
-        drawPolarReferenceCircle(ctx, htmlOverlay, updateHtmlLabel, 0, 0, state, dataToScreen, lastAngularGridState);
+        drawTicksAndLabels(interval1, alpha1, interval2, alpha2, true);
+        drawPolarReferenceCircle(ctx, htmlOverlay, updateHtmlLabel, 0, 0, { canvas, dpr, coordsDisplayMode, viewTransform, angleDisplayMode, colors }, dataToScreen, lastAngularGridState);
     } else {
         if (origin.y > 0 && origin.y < canvasHeight) drawAxisWithArrows(0, origin.y, canvasWidth, origin.y);
         if (origin.x > 0 && origin.x < canvasWidth) drawAxisWithArrows(origin.x, canvasHeight, origin.x, 0);
         
         let xLabel = 'x';
         let yLabel = 'y';
-        if (coordsDisplayMode === 'complex') {
-            xLabel = '\\mathrm{Re}';
-            yLabel = '\\mathrm{Im}';
+        if (coordsDisplayMode === COORDS_DISPLAY_MODE_COMPLEX) {
+            xLabel = COMPLEX_REAL_LABEL;
+            yLabel = COMPLEX_IMAGINARY_LABEL;
         }
         
         updateHtmlLabel({ 
@@ -1386,7 +1804,7 @@ export function drawAxes(ctx, htmlOverlay, state, dataToScreen, screenToData, la
             content: xLabel, 
             x: canvasWidth - AXIS_ARROW_SIZE - X_AXIS_LABEL_ARROW_DIST, 
             y: origin.y - X_AXIS_LABEL_DISTANCE, 
-            color: AXIS_COLOR, 
+            color: colors.axis, 
             fontSize: AXIS_NAME_FONT_SIZE, 
             options: { textAlign: 'center', textBaseline: 'bottom' } 
         });
@@ -1396,22 +1814,22 @@ export function drawAxes(ctx, htmlOverlay, state, dataToScreen, screenToData, la
             content: yLabel, 
             x: origin.x + Y_AXIS_LABEL_DISTANCE, 
             y: AXIS_ARROW_SIZE + Y_AXIS_LABEL_ARROW_DIST, 
-            color: AXIS_COLOR, 
+            color: colors.axis, 
             fontSize: AXIS_NAME_FONT_SIZE, 
             options: { textAlign: 'left', textBaseline: 'middle' } 
         });
         
-        drawTicksAndLabels(lastGridState.interval1, lastGridState.alpha1, lastGridState.interval2, lastGridState.alpha2, false); // false = rectilinear mode
+        drawTicksAndLabels(lastGridState.interval1, lastGridState.alpha1, lastGridState.interval2, lastGridState.alpha2, false);
     }
 
-    drawZeroTickAndTickLabel(ctx, origin, canvasWidth, canvasHeight, coordsDisplayMode, updateHtmlLabel);
+    drawZeroTickAndTickLabel(ctx, origin, canvasWidth, canvasHeight, coordsDisplayMode, updateHtmlLabel, colors);
 
     ctx.restore();
 }
 
-export function drawGrid(ctx, state, dataToScreen, screenToData, lastGridState, lastAngularGridState) {
-    const { gridDisplayMode, canvas, dpr, viewTransform, gridAlpha } = state;
-    if (gridDisplayMode === 'none') return;
+export function drawGrid(ctx, { gridDisplayMode, canvas, dpr, viewTransform, gridAlpha, colors }, dataToScreen, screenToData, lastGridState, lastAngularGridState) {
+    
+    if (gridDisplayMode === GRID_DISPLAY_MODE_NONE) return;
 
     ctx.save();
 
@@ -1419,19 +1837,19 @@ export function drawGrid(ctx, state, dataToScreen, screenToData, lastGridState, 
     const canvasWidth = canvas.width / dpr;
     const canvasHeight = canvas.height / dpr;
 
-    if (gridDisplayMode === 'polar') {
+    if (gridDisplayMode === GRID_DISPLAY_MODE_POLAR) {
         const topLeftData = screenToData({ x: 0, y: 0 });
         const bottomRightData = screenToData({ x: canvasWidth, y: canvasHeight });
         const maxDataRadius = Math.hypot(Math.max(Math.abs(topLeftData.x), Math.abs(bottomRightData.x)), Math.max(Math.abs(topLeftData.y), Math.abs(bottomRightData.y)));
-        const transitionRadius = Math.min(canvasWidth, canvasHeight) * 400;
+        const transitionRadius = Math.min(canvasWidth, canvasHeight) * POLAR_TO_LINE_TRANSITION_RADIUS_FACTOR;
 
         const drawPolarCircles = (interval, alpha) => {
-            if (!interval || alpha < 0.01) return;
+            if (!interval || alpha < MIN_ALPHA_FOR_DRAWING) return;
             
             const screenSpacing = interval * viewTransform.scale / dpr;
             if (screenSpacing < GRID_POLAR_CIRCLE_MIN_SPACING) return;
 
-            ctx.strokeStyle = `rgba(${GRID_COLOR.join(',')}, ${alpha * gridAlpha})`;
+            ctx.strokeStyle = `rgba(${colors.grid.join(',')}, ${alpha * gridAlpha})`;
             ctx.lineWidth = GRID_LINEWIDTH;
             for (let r = interval; r <= maxDataRadius; r += interval) {
                 const screenRadius = r * viewTransform.scale / dpr;
@@ -1459,7 +1877,7 @@ export function drawGrid(ctx, state, dataToScreen, screenToData, lastGridState, 
                 } else {
                     if (isCircleInView(origin.x, origin.y, screenRadius, canvasWidth, canvasHeight)) {
                         ctx.beginPath();
-                        ctx.arc(origin.x, origin.y, screenRadius, 0, 2 * Math.PI);
+                        ctx.arc(origin.x, origin.y, screenRadius, 0, RADIANS_IN_CIRCLE);
                         ctx.stroke();
                     }
                 }
@@ -1472,29 +1890,38 @@ export function drawGrid(ctx, state, dataToScreen, screenToData, lastGridState, 
         const screenRadiusForSpokes = maxDataRadius * viewTransform.scale / dpr;
         const drawnAngles = new Set();
         
-        const visibleAngleRange = calculateVisibleAngleRange(origin, screenRadiusForSpokes, canvasWidth, canvasHeight);
-        if (!visibleAngleRange) {
+        let visibleAngleInfo = null;
+        if (screenRadiusForSpokes < canvasWidth * 10) {
+            visibleAngleInfo = { ranges: [[0, 360]], isFullCircle: true };
+        } else {
+            visibleAngleInfo = calculateVisibleAngleRange(origin, screenRadiusForSpokes, canvasWidth, canvasHeight);
+        }
+
+        if (!visibleAngleInfo) {
             ctx.restore();
             return;
         }
 
         lastAngularGridState.forEach(level => {
-            if (level.alpha < 0.01) return;
+            if (level.alpha < MIN_ALPHA_FOR_DRAWING) return;
 
             const screenSeparation = screenRadiusForSpokes * (level.angle * Math.PI / 180);
             if (screenSeparation < GRID_POLAR_SPOKE_MIN_SPACING && screenRadiusForSpokes > GRID_POLAR_SPOKE_MIN_RADIUS) return;
 
-            ctx.strokeStyle = `rgba(${GRID_COLOR.join(',')}, ${level.alpha * gridAlpha})`;
+            ctx.strokeStyle = `rgba(${colors.grid.join(',')}, ${level.alpha * gridAlpha})`;
             ctx.lineWidth = GRID_LINEWIDTH;
 
-            let anglesToProcess;
-            if (visibleAngleRange.isFullCircle) {
-                anglesToProcess = [];
-                for (let deg = 0; deg < 360; deg += level.angle) {
+            let anglesToProcess = [];
+            if (visibleAngleInfo.isFullCircle) {
+                for (let deg = 0; deg < DEGREES_IN_CIRCLE; deg += level.angle) {
                     anglesToProcess.push(deg);
                 }
             } else {
-                anglesToProcess = generateOptimizedAngleSequence(level.angle, visibleAngleRange.minAngle, visibleAngleRange.maxAngle);
+                visibleAngleInfo.ranges.forEach(range => {
+                    const [min, max] = range;
+                    anglesToProcess.push(...generateOptimizedAngleSequence(level.angle, min, max));
+                });
+                anglesToProcess = [...new Set(anglesToProcess)];
             }
 
             anglesToProcess.forEach(angle => {
@@ -1513,8 +1940,8 @@ export function drawGrid(ctx, state, dataToScreen, screenToData, lastGridState, 
 
     } else {
         const drawGridElements = (interval, alpha) => {
-            if (!interval || alpha < 0.01) return;
-            const gridElementColor = `rgba(${GRID_COLOR.join(',')}, ${alpha * gridAlpha})`;
+            if (!interval || alpha < MIN_ALPHA_FOR_DRAWING) return;
+            const gridElementColor = `rgba(${colors.grid.join(',')}, ${alpha * gridAlpha})`;
 
             const start = screenToData({ x: 0, y: canvasHeight });
             const end = screenToData({ x: canvasWidth, y: 0 });
@@ -1523,7 +1950,7 @@ export function drawGrid(ctx, state, dataToScreen, screenToData, lastGridState, 
             const startTickY = Math.floor(start.y / interval) * interval;
             const endTickY = Math.ceil(end.y / interval) * interval;
 
-            if (gridDisplayMode === 'lines') {
+            if (gridDisplayMode === GRID_DISPLAY_MODE_LINES) {
                 ctx.strokeStyle = gridElementColor;
                 ctx.lineWidth = GRID_LINEWIDTH;
                 for (let x = startTickX; x <= endTickX; x += interval) {
@@ -1540,21 +1967,21 @@ export function drawGrid(ctx, state, dataToScreen, screenToData, lastGridState, 
                     ctx.lineTo(canvasWidth, screenY);
                     ctx.stroke();
                 }
-            } else if (gridDisplayMode === 'points') {
+            } else if (gridDisplayMode === GRID_DISPLAY_MODE_POINTS) {
                 ctx.fillStyle = gridElementColor;
                 const pointRadius = GRID_POINT_RADIUS * dpr;
                 for (let x = startTickX; x <= endTickX; x += interval) {
                     for (let y = startTickY; y <= endTickY; y += interval) {
                         const screenPos = dataToScreen({ x: x, y: y });
                         ctx.beginPath();
-                        ctx.arc(screenPos.x, screenPos.y, pointRadius, 0, 2 * Math.PI);
+                        ctx.arc(screenPos.x, screenPos.y, pointRadius, 0, RADIANS_IN_CIRCLE);
                         ctx.fill();
                     }
                 }
-            } else if (gridDisplayMode === 'triangular') {
+            } else if (gridDisplayMode === GRID_DISPLAY_MODE_TRIANGULAR) {
                 ctx.fillStyle = gridElementColor;
                 const pointRadius = GRID_POINT_RADIUS * dpr;
-                const y_step = interval * Math.sqrt(3) / 2;
+                const y_step = interval * TRIANGULAR_GRID_Y_STEP_FACTOR;
                 
                 const startTickY_tri = Math.floor(start.y / y_step) * y_step;
                 const endTickY_tri = Math.ceil(end.y / y_step) * y_step;
@@ -1566,7 +1993,7 @@ export function drawGrid(ctx, state, dataToScreen, screenToData, lastGridState, 
                         const finalX = x + x_offset;
                         const screenPos = dataToScreen({ x: finalX, y: y });
                         ctx.beginPath();
-                        ctx.arc(screenPos.x, screenPos.y, pointRadius, 0, 2 * Math.PI);
+                        ctx.arc(screenPos.x, screenPos.y, pointRadius, 0, RADIANS_IN_CIRCLE);
                         ctx.fill();
                     }
                 }
@@ -1592,9 +2019,9 @@ export function drawAngleArc(ctx, centerScreen, dataStartAngleRad, dataEndAngleR
     ctx.restore();
 }
 
-function drawCenterSymbol(ctx, point, dataToScreen) {
+function drawCenterSymbol(ctx, point, dataToScreen, colors) {
     const screenPos = dataToScreen(point); const radius = CENTER_POINT_VISUAL_RADIUS;
-    ctx.strokeStyle = 'white';
+    ctx.strokeStyle = colors.defaultStroke;
     ctx.setLineDash([]); ctx.lineWidth = LINE_WIDTH;
     if (point.type === 'center_rotate_scale') {
         ctx.beginPath(); ctx.arc(screenPos.x, screenPos.y, radius, 0, 2 * Math.PI); ctx.stroke();
@@ -1608,10 +2035,9 @@ function drawCenterSymbol(ctx, point, dataToScreen) {
     }
 }
 
-export function drawPoint(ctx, point, state, dataToScreen) {
-    const { selectedPointIds, selectedCenterIds, activeCenterId, currentColor } = state;
-    let isSelected;
-    if (point.type === 'regular') {
+export function drawPoint(ctx, point, { selectedPointIds, selectedCenterIds, activeCenterId, currentColor, colors }, dataToScreen) {
+        let isSelected;
+    if (point.type === POINT_TYPE_REGULAR) {
         isSelected = selectedPointIds.includes(point.id);
     } else {
         isSelected = selectedCenterIds.includes(point.id);
@@ -1620,39 +2046,38 @@ export function drawPoint(ctx, point, state, dataToScreen) {
     const pointColor = point.color || currentColor;
     const screenPos = dataToScreen(point);
 
-    if (point.type !== 'regular') {
-        drawCenterSymbol(ctx, point, dataToScreen);
+    if (point.type !== POINT_TYPE_REGULAR) {
+        drawCenterSymbol(ctx, point, dataToScreen, colors);
     } else {
         ctx.beginPath();
-        ctx.arc(screenPos.x, screenPos.y, POINT_RADIUS, 0, 2 * Math.PI);
+        ctx.arc(screenPos.x, screenPos.y, POINT_RADIUS, 0, RADIANS_IN_CIRCLE);
         ctx.fillStyle = pointColor;
         ctx.fill();
     }
 
     if (isSelected) {
         ctx.save();
-        ctx.shadowColor = point.id === activeCenterId ? '#00ffff' : '#4da6ff';
-        ctx.shadowBlur = 15;
-        ctx.globalAlpha = 0.8;
+        ctx.shadowColor = point.id === activeCenterId ? colors.activeCenterGlow : colors.selectionGlow;
+        ctx.shadowBlur = SELECTION_GLOW_BLUR_RADIUS;
+        ctx.globalAlpha = SELECTION_GLOW_ALPHA;
 
         ctx.beginPath();
-        const glowRadius = point.type !== 'regular' ? CENTER_POINT_VISUAL_RADIUS + 3 : POINT_RADIUS + 3;
-        ctx.arc(screenPos.x, screenPos.y, glowRadius, 0, 2 * Math.PI);
-        ctx.strokeStyle = point.id === activeCenterId ? '#00ffff' : '#4da6ff';
-        ctx.lineWidth = 2;
+        const glowRadius = point.type !== POINT_TYPE_REGULAR ? CENTER_POINT_VISUAL_RADIUS + SELECTION_GLOW_RADIUS_OFFSET : POINT_RADIUS + SELECTION_GLOW_RADIUS_OFFSET;
+        ctx.arc(screenPos.x, screenPos.y, glowRadius, 0, RADIANS_IN_CIRCLE);
+        ctx.strokeStyle = point.id === activeCenterId ? colors.activeCenterGlow : colors.selectionGlow;
+        ctx.lineWidth = SELECTION_GLOW_LINE_WIDTH;
         ctx.stroke();
 
         ctx.restore();
     }
 }
 
-export function drawAllEdges(ctx, state, dataToScreen, findPointById, getEdgeId) {
-    const { allEdges, selectedEdgeIds, isDragConfirmed, dragPreviewPoints, currentColor } = state;
+export function drawAllEdges(ctx, { allEdges, selectedEdgeIds, isDragConfirmed, dragPreviewPoints, currentColor, colors }, dataToScreen, findPointById, getEdgeId) {
     ctx.lineWidth = LINE_WIDTH;
     allEdges.forEach(edge => {
         const p1_orig = findPointById(edge.id1);
         const p2_orig = findPointById(edge.id2);
-        if (!p1_orig || !p2_orig || p1_orig.type !== 'regular' || p2_orig.type !== 'regular') return;
+        if (!p1_orig || !p2_orig || p1_orig.type !== POINT_TYPE_REGULAR || p2_orig.type !== POINT_TYPE_REGULAR) return;
 
         let p1_render = { ...p1_orig };
         let p2_render = { ...p2_orig };
@@ -1695,23 +2120,19 @@ export function drawAllEdges(ctx, state, dataToScreen, findPointById, getEdgeId)
             ctx.beginPath();
             ctx.moveTo(p1Screen.x, p1Screen.y);
             ctx.lineTo(p2Screen.x, p2Screen.y);
-            ctx.strokeStyle = '#4da6ff';
-            ctx.globalAlpha = 0.8;
-            ctx.lineWidth = LINE_WIDTH + 4;
+            ctx.strokeStyle = colors.selectionGlow;
+            ctx.globalAlpha = SELECTION_GLOW_ALPHA;
+            ctx.lineWidth = LINE_WIDTH + EDGE_SELECTION_GLOW_WIDTH_OFFSET;
             ctx.stroke();
             ctx.globalAlpha = 1.0;
         }
     });
     ctx.setLineDash([]);
-    ctx.strokeStyle = 'white';
+    ctx.strokeStyle = colors.defaultStroke;
 }
 
-export function drawDragFeedback(ctx, htmlOverlay, targetPointId, currentPointStates, state, dataToScreen, findNeighbors, getEdgeId, isSnapping = false, excludedEdgeId = null, updateHtmlLabel = null) {
-    const { lastGridState, showDistances, showAngles, distanceSigFigs, angleDisplayMode, angleSigFigs, currentShiftPressed } = state;
-    const feedbackColor = isSnapping ? FEEDBACK_COLOR_SNAPPED : `rgba(${FEEDBACK_COLOR_DEFAULT.join(',')}, 1.0)`;
-    const katexFontSize = FEEDBACK_LABEL_FONT_SIZE;
-    const ARC_RADIUS_SCREEN = FEEDBACK_ARC_RADIUS_SCREEN;
-    const LABEL_OFFSET_DIST_SCREEN = FEEDBACK_DISTANCE_LABEL_OFFSET_SCREEN;
+export function drawDragFeedback(ctx, htmlOverlay, targetPointId, currentPointStates, { lastGridState, showDistances, showAngles, distanceSigFigs, angleDisplayMode, angleSigFigs, currentShiftPressed, viewTransform, colors }, dataToScreen, findNeighbors, getEdgeId, isSnapping = false, excludedEdgeId = null, updateHtmlLabel = null) {
+        const feedbackColor = isSnapping ? colors.feedbackSnapped : `rgba(${colors.feedbackDefault.join(',')}, 1.0)`;
 
     const livePoints = new Map(currentPointStates.map(p => [p.id, { ...p }]));
     const getLivePoint = (id) => livePoints.get(id);
@@ -1768,31 +2189,27 @@ export function drawDragFeedback(ctx, htmlOverlay, targetPointId, currentPointSt
                 const midX = (vertexScreen.x + neighborScreen.x) / 2;
                 const midY = (vertexScreen.y + neighborScreen.y) / 2;
 
-                let textOffset = LABEL_OFFSET_DIST_SCREEN;
-
                 const labelId = `drag-dist-${vertex.id}-${neighbor.id}`;
 
                 if (Math.abs(Math.cos(edgeAngleScreen)) < VERTICAL_LINE_COS_THRESHOLD) {
-                    const distanceTextX = midX + textOffset;
+                    const distanceTextX = midX + FEEDBACK_DISTANCE_LABEL_OFFSET_SCREEN;
                     const distanceTextY = midY;
-                    updateHtmlLabel({ id: labelId, content: distText, x: distanceTextX, y: distanceTextY, color: feedbackColor, fontSize: katexFontSize, options: { textAlign: 'center', textBaseline: 'middle', rotation: 90 } }, htmlOverlay);
+                    updateHtmlLabel({ id: labelId, content: distText, x: distanceTextX, y: distanceTextY, color: feedbackColor, fontSize: FEEDBACK_LABEL_FONT_SIZE, options: { textAlign: 'center', textBaseline: 'middle', rotation: 90 } }, htmlOverlay);
                 } else {
                     let textPerpAngle = edgeAngleScreen - Math.PI / 2;
                     if (Math.sin(textPerpAngle) > 0) {
                         textPerpAngle += Math.PI;
                     }
-                    const distanceTextX = midX + Math.cos(textPerpAngle) * textOffset;
-                    const distanceTextY = midY + Math.sin(textPerpAngle) * textOffset;
+                    const distanceTextX = midX + Math.cos(textPerpAngle) * FEEDBACK_DISTANCE_LABEL_OFFSET_SCREEN;
+                    const distanceTextY = midY + Math.sin(textPerpAngle) * FEEDBACK_DISTANCE_LABEL_OFFSET_SCREEN;
 
                     let rotationDeg = edgeAngleScreen * (180 / Math.PI);
                     if (rotationDeg > 90 || rotationDeg < -90) {
                         rotationDeg += 180;
                     }
 
-                    updateHtmlLabel({ id: labelId, content: distText, x: distanceTextX, y: distanceTextY, color: feedbackColor, fontSize: katexFontSize, options: { textAlign: 'center', textBaseline: 'middle', rotation: rotationDeg } }, htmlOverlay);
+                    updateHtmlLabel({ id: labelId, content: distText, x: distanceTextX, y: distanceTextY, color: feedbackColor, fontSize: FEEDBACK_LABEL_FONT_SIZE, options: { textAlign: 'center', textBaseline: 'middle', rotation: rotationDeg } }, htmlOverlay);
                 }
-            } else {
-                
             }
         }
     });
@@ -1813,28 +2230,28 @@ export function drawDragFeedback(ctx, htmlOverlay, targetPointId, currentPointSt
             const angle2_data = Math.atan2(v2.y, v2.x);
             let angleToDisplayRad = angle2_data - angle1_data;
             if (angleToDisplayRad < 0) {
-                angleToDisplayRad += 2 * Math.PI;
+                angleToDisplayRad += RADIANS_IN_CIRCLE;
             }
             if (angleToDisplayRad < GEOMETRY_CALCULATION_EPSILON) continue;
-            const LABEL_RADIUS_SCREEN = ANGLE_LABEL_RADIUS_SCREEN;
+            
             const bisectorAngle = angle1_data + (angleToDisplayRad / 2);
             ctx.save();
             ctx.strokeStyle = feedbackColor;
             ctx.lineWidth = FEEDBACK_LINE_VISUAL_WIDTH;
             ctx.beginPath();
-            ctx.arc(vertexScreen.x, vertexScreen.y, ARC_RADIUS_SCREEN, -angle1_data, -angle2_data, false);
+            ctx.arc(vertexScreen.x, vertexScreen.y, FEEDBACK_ARC_RADIUS_SCREEN, -angle1_data, -angle2_data, false);
             ctx.stroke();
             ctx.restore();
 
             let angleText;
-            if (angleDisplayMode === 'degrees') {
-                angleText = `${formatNumber(angleToDisplayRad * (180 / Math.PI), angleSigFigs)}^{\\circ}`;
-            } else if (angleDisplayMode === 'radians') {
+            if (angleDisplayMode === ANGLE_DISPLAY_MODE_DEGREES) {
+                angleText = `${formatNumber(angleToDisplayRad * (DEGREES_IN_HALF_CIRCLE / Math.PI), angleSigFigs)}^{\\circ}`;
+            } else if (angleDisplayMode === ANGLE_DISPLAY_MODE_RADIANS) {
                 if (currentShiftPressed) {
-                    angleText = formatFraction(angleToDisplayRad / Math.PI, 0.001, 6) + '\\pi';
-                    if (angleText.startsWith("1\\pi")) angleText = "\\pi";
-                    if (angleText.startsWith("-1\\pi")) angleText = "-\\pi";
-                    if (angleText === "0\\pi") angleText = "0";
+                    angleText = formatFraction(angleToDisplayRad / Math.PI, FRACTION_FORMAT_TOLERANCE, FRACTION_FORMAT_MAX_DENOMINATOR) + PI_SYMBOL_KATEX;
+                    if (angleText.startsWith(`1${PI_SYMBOL_KATEX}`)) angleText = PI_SYMBOL_KATEX;
+                    if (angleText.startsWith(`-1${PI_SYMBOL_KATEX}`)) angleText = `-${PI_SYMBOL_KATEX}`;
+                    if (angleText === `0${PI_SYMBOL_KATEX}`) angleText = "0";
                 } else {
                     angleText = formatNumber(angleToDisplayRad, angleSigFigs);
                 }
@@ -1842,30 +2259,19 @@ export function drawDragFeedback(ctx, htmlOverlay, targetPointId, currentPointSt
 
             if (angleText) {
                 const angleLabelDataPos = {
-                    x: vertex.x + (LABEL_RADIUS_SCREEN / state.viewTransform.scale) * Math.cos(bisectorAngle),
-                    y: vertex.y + (LABEL_RADIUS_SCREEN / state.viewTransform.scale) * Math.sin(bisectorAngle)
+                    x: vertex.x + (ANGLE_LABEL_RADIUS_SCREEN / viewTransform.scale) * Math.cos(bisectorAngle),
+                    y: vertex.y + (ANGLE_LABEL_RADIUS_SCREEN / viewTransform.scale) * Math.sin(bisectorAngle)
                 };
                 const angleLabelScreenPos = dataToScreen(angleLabelDataPos);
                 const labelId = `drag-angle-${vertex.id}-${p1.id}-${p2.id}`;
-                updateHtmlLabel({ id: labelId, content: angleText, x: angleLabelScreenPos.x, y: angleLabelScreenPos.y, color: feedbackColor, fontSize: katexFontSize, options: { textAlign: 'center', textBaseline: 'middle' } }, htmlOverlay);
-            } else {
-                
+                updateHtmlLabel({ id: labelId, content: angleText, x: angleLabelScreenPos.x, y: angleLabelScreenPos.y, color: feedbackColor, fontSize: FEEDBACK_LABEL_FONT_SIZE, options: { textAlign: 'center', textBaseline: 'middle' } }, htmlOverlay);
             }
         }
-    } else {
-        neighbors.forEach(neighbor1 => {
-            neighbors.forEach(neighbor2 => {
-                if (neighbor1.id !== neighbor2.id) {
-                    
-                }
-            });
-        });
     }
 }
 
-export function drawTransformIndicators(ctx, htmlOverlay, state, dataToScreen, updateHtmlLabel) {
-    const { transformIndicatorData, angleSigFigs, distanceSigFigs } = state;
-    if (!transformIndicatorData) return;
+export function drawTransformIndicators(ctx, htmlOverlay, { transformIndicatorData, angleSigFigs, distanceSigFigs, colors }, dataToScreen, updateHtmlLabel) {
+        if (!transformIndicatorData) return;
 
     const { center, startPos, currentPos, rotation, scale, isSnapping, snappedScaleValue, transformType } = transformIndicatorData;
 
@@ -1873,8 +2279,7 @@ export function drawTransformIndicators(ctx, htmlOverlay, state, dataToScreen, u
     const startScreen = dataToScreen(startPos);
     const currentScreen = dataToScreen(currentPos);
 
-    const color = isSnapping ? 'rgba(240, 240, 130, 0.95)' : 'rgba(230, 230, 230, 0.95)';
-    const katexFontSize = 12;
+    const color = isSnapping ? colors.feedbackSnapped : colors.feedbackDefault_STATIC;
 
     const startVecScreen = { x: startScreen.x - centerScreen.x, y: startScreen.y - centerScreen.y };
     const currentVecScreen = { x: currentScreen.x - centerScreen.x, y: currentScreen.y - centerScreen.y };
@@ -1886,7 +2291,7 @@ export function drawTransformIndicators(ctx, htmlOverlay, state, dataToScreen, u
     ctx.save();
     ctx.setLineDash(DASH_PATTERN);
     ctx.strokeStyle = color;
-    ctx.lineWidth = 1;
+    ctx.lineWidth = FEEDBACK_LINE_VISUAL_WIDTH;
 
     ctx.beginPath();
     ctx.moveTo(centerScreen.x, centerScreen.y);
@@ -1900,7 +2305,7 @@ export function drawTransformIndicators(ctx, htmlOverlay, state, dataToScreen, u
 
     ctx.setLineDash([]);
 
-    if (transformType !== 'center_scale_only' && Math.abs(rotation) > 0.001) {
+    if (transformType !== TRANSFORM_TYPE_SCALE_ONLY && Math.abs(rotation) > MIN_TRANSFORM_ACTION_THRESHOLD) {
         const screenRotation = -rotation;
         const anticlockwise = screenRotation < 0;
         ctx.beginPath();
@@ -1909,22 +2314,22 @@ export function drawTransformIndicators(ctx, htmlOverlay, state, dataToScreen, u
     }
     ctx.restore();
 
-    if (transformType !== 'center_scale_only' && Math.abs(rotation) > 0.001) {
-        const angleDeg = rotation * (180 / Math.PI);
+    if (transformType !== TRANSFORM_TYPE_SCALE_ONLY && Math.abs(rotation) > MIN_TRANSFORM_ACTION_THRESHOLD) {
+        const angleDeg = rotation * (DEGREES_IN_HALF_CIRCLE / Math.PI);
         const angleText = `${formatNumber(angleDeg, angleSigFigs)}^{\\circ}`;
         const angleDiff = normalizeAngleToPi(currentAngleScreen - startAngleScreen);
         const bisectorAngle = startAngleScreen + angleDiff / 2;
-        const labelRadius = arcRadius + 20;
+        const labelRadius = arcRadius + TRANSFORM_ANGLE_LABEL_OFFSET;
         const angleTextX = centerScreen.x + labelRadius * Math.cos(bisectorAngle);
         const angleTextY = centerScreen.y + labelRadius * Math.sin(bisectorAngle);
 
-        updateHtmlLabel({ id: 'transform-angle-indicator', content: angleText, x: angleTextX, y: angleTextY, color: color, fontSize: katexFontSize, options: { textAlign: 'center', textBaseline: 'middle' } }, htmlOverlay);
+        updateHtmlLabel({ id: 'transform-angle-indicator', content: angleText, x: angleTextX, y: angleTextY, color: color, fontSize: FEEDBACK_LABEL_FONT_SIZE, options: { textAlign: 'center', textBaseline: 'middle' } }, htmlOverlay);
     }
 
-    if (transformType !== 'center_rotate_only' && Math.abs(scale - 1) > 0.001) {
+    if (transformType !== TRANSFORM_TYPE_ROTATE_ONLY && Math.abs(scale - 1) > MIN_TRANSFORM_ACTION_THRESHOLD) {
         let scaleText;
         if (isSnapping && snappedScaleValue !== null) {
-            scaleText = `\\times ${formatFraction(snappedScaleValue, 0.001, 10)}`;
+            scaleText = `\\times ${formatFraction(snappedScaleValue, FRACTION_FORMAT_TOLERANCE, FRACTION_FORMAT_MAX_DENOMINATOR_TRANSFORM)}`;
         } else {
             scaleText = `\\times ${formatNumber(scale, distanceSigFigs)}`;
         }
@@ -1932,31 +2337,28 @@ export function drawTransformIndicators(ctx, htmlOverlay, state, dataToScreen, u
         const midX = (centerScreen.x + currentScreen.x) / 2;
         const midY = (centerScreen.y + currentScreen.y) / 2;
         let textPerpAngle = currentAngleScreen - Math.PI / 2;
-        const textOffset = 18;
-        const scaleTextX = midX + Math.cos(textPerpAngle) * textOffset;
-        const scaleTextY = midY + Math.sin(textPerpAngle) * textOffset;
+        const scaleTextX = midX + Math.cos(textPerpAngle) * TRANSFORM_SCALE_LABEL_OFFSET;
+        const scaleTextY = midY + Math.sin(textPerpAngle) * TRANSFORM_SCALE_LABEL_OFFSET;
 
-        let rotationDeg = currentAngleScreen * (180 / Math.PI);
-        if (rotationDeg > 90 || rotationDeg < -90) {
-            rotationDeg += 180;
+        let rotationDeg = currentAngleScreen * (DEGREES_IN_HALF_CIRCLE / Math.PI);
+        if (rotationDeg > DEGREES_IN_QUADRANT || rotationDeg < -DEGREES_IN_QUADRANT) {
+            rotationDeg += DEGREES_IN_HALF_CIRCLE;
         }
 
-        updateHtmlLabel({ id: 'transform-scale-indicator', content: scaleText, x: scaleTextX, y: scaleTextY, color: color, fontSize: katexFontSize, options: { textAlign: 'center', textBaseline: 'bottom', rotation: rotationDeg } }, htmlOverlay);
+        updateHtmlLabel({ id: 'transform-scale-indicator', content: scaleText, x: scaleTextX, y: scaleTextY, color: color, fontSize: FEEDBACK_LABEL_FONT_SIZE, options: { textAlign: 'center', textBaseline: 'bottom', rotation: rotationDeg } }, htmlOverlay);
     }
 }
 
-export function drawReferenceElementsGeometry(ctx, context, dataToScreen, screenToData, state) {
-    if ((!state.showAngles && !state.showDistances) || !context.frozen_Origin_Data_to_display) return;
-    const { viewTransform } = state;
-
+export function drawReferenceElementsGeometry(ctx, context, dataToScreen, screenToData, { showAngles, showDistances, viewTransform, mousePos, colors }) {
+    if ((!showAngles && !showDistances) || !context.frozen_Origin_Data_to_display) return;
+    
     const startPointData = context.frozen_Origin_Data_to_display;
-    const mouseDataPos = screenToData(state.mousePos);
+    const mouseDataPos = screenToData(mousePos);
     const previewDistance = distance(startPointData, mouseDataPos);
-    const epsilon = 1e-6;
-    if (previewDistance < epsilon) return;
+    
+    if (previewDistance < GEOMETRY_CALCULATION_EPSILON) return;
 
-    const refElementColor = FROZEN_REFERENCE_COLOR;
-    const ARC_RADIUS_SCREEN_REF = 35;
+    const refElementColor = colors.frozenReference;
 
     const turnAngleData = context.displayAngleA_valueRad_for_A_equals_label;
     const baseAngleData = context.frozen_A_baseRad_to_display !== null ? context.frozen_A_baseRad_to_display : 0;
@@ -1968,11 +2370,11 @@ export function drawReferenceElementsGeometry(ctx, context, dataToScreen, screen
     const absoluteAngleForRefLine = baseAngleData + turnAngleData;
 
     ctx.save();
-    ctx.lineWidth = 1;
+    ctx.lineWidth = FEEDBACK_LINE_VISUAL_WIDTH;
     ctx.strokeStyle = refElementColor;
 
-    if (state.showAngles && context.displayAngleA_valueRad_for_A_equals_label !== null && Math.abs(context.displayAngleA_valueRad_for_A_equals_label) > epsilon) {
-        const effectiveRadiusForLine = ARC_RADIUS_SCREEN_REF + ctx.lineWidth / 2;
+    if (showAngles && context.displayAngleA_valueRad_for_A_equals_label !== null && Math.abs(context.displayAngleA_valueRad_for_A_equals_label) > GEOMETRY_CALCULATION_EPSILON) {
+        const effectiveRadiusForLine = REF_ARC_RADIUS_SCREEN + ctx.lineWidth / 2;
 
         const dottedLineEndPointData = {
             x: startPointData.x + Math.cos(baseAngleData) * (effectiveRadiusForLine / viewTransform.scale),
@@ -1983,44 +2385,40 @@ export function drawReferenceElementsGeometry(ctx, context, dataToScreen, screen
         ctx.beginPath();
         ctx.moveTo(frozenOriginScreen.x, frozenOriginScreen.y);
         ctx.lineTo(dottedLineEndPointScreen.x, dottedLineEndPointScreen.y);
-        ctx.setLineDash([1, 3]);
+        ctx.setLineDash(REF_LINE_DASH_PATTERN);
         ctx.stroke();
 
-        drawAngleArc(ctx, frozenOriginScreen, baseAngleData, absoluteAngleForRefLine, ARC_RADIUS_SCREEN_REF, refElementColor, false);
+        drawAngleArc(ctx, frozenOriginScreen, baseAngleData, absoluteAngleForRefLine, REF_ARC_RADIUS_SCREEN, refElementColor, false);
     }
     ctx.restore();
 }
 
-export function prepareSnapInfoTexts(ctx, htmlOverlay, startPointData, targetDataPos, snappedOutput, state, dataToScreen, drawingContext, updateHtmlLabel) {
-    const { showDistances, showAngles, currentShiftPressed, distanceSigFigs, angleSigFigs, angleDisplayMode, viewTransform } = state;
-    const epsilon = GEOMETRY_CALCULATION_EPSILON;
-    if ((!showAngles && !showDistances) || snappedOutput.distance < epsilon) {
+export function prepareSnapInfoTexts(ctx, htmlOverlay, startPointData, targetDataPos, snappedOutput, { showDistances, showAngles, currentShiftPressed, distanceSigFigs, angleSigFigs, angleDisplayMode, viewTransform, frozenReference_D_du, gridDisplayMode, frozenReference_A_rad, colors }, dataToScreen, drawingContext, updateHtmlLabel) {
+    if ((!showAngles && !showDistances) || snappedOutput.distance < GEOMETRY_CALCULATION_EPSILON) {
         return;
     }
 
     const startScreen = dataToScreen(startPointData);
     const { angle: snappedAbsoluteAngleDeg, distance: snappedDistanceData, lengthSnapFactor, angleSnapFactor, angleTurn, gridToGridSquaredSum, gridInterval } = snappedOutput;
-    const { offsetAngleRad, isFirstSegmentBeingDrawn, currentSegmentReferenceA_for_display, currentSegmentReferenceD } = drawingContext;
-    const currentElementColor = currentShiftPressed ? GEOMETRY_INFO_TEXT_COLOR_SNAPPED : GEOMETRY_INFO_TEXT_COLOR;
-    const katexFontSize = 12;
-    const ARC_RADIUS_SCREEN_SNAP = 30;
+    const { offsetAngleRad, isFirstSegmentBeingDrawn } = drawingContext;
+    const currentElementColor = currentShiftPressed ? colors.geometryInfoTextSnapped : colors.geometryInfoText;
     const currentLineAbsoluteAngle = Math.atan2(targetDataPos.y - startPointData.y, targetDataPos.x - startPointData.x);
 
     if (showDistances) {
         let distanceText = '';
 
-        if (currentShiftPressed && !isFirstSegmentBeingDrawn && state.frozenReference_D_du !== null) {
+        if (currentShiftPressed && !isFirstSegmentBeingDrawn && frozenReference_D_du !== null) {
             const currentExactDistance = snappedDistanceData;
 
             if (gridToGridSquaredSum !== null && gridInterval) {
                 const actualGridDistance = gridInterval * Math.sqrt(gridToGridSquaredSum);
-                if (Math.abs(actualGridDistance - state.frozenReference_D_du) < epsilon) {
-                    distanceText = '\\delta';
+                if (Math.abs(actualGridDistance - frozenReference_D_du) < GEOMETRY_CALCULATION_EPSILON) {
+                    distanceText = DELTA_SYMBOL_KATEX;
                 } else {
-                    const ratio = actualGridDistance / state.frozenReference_D_du;
+                    const ratio = actualGridDistance / frozenReference_D_du;
                     let foundFraction = false;
                     for (const factor of SNAP_FACTORS) {
-                        if (Math.abs(ratio - factor) < epsilon) {
+                        if (Math.abs(ratio - factor) < GEOMETRY_CALCULATION_EPSILON) {
                             distanceText = formatSnapFactor(factor, 'D');
                             foundFraction = true;
                             break;
@@ -2033,11 +2431,11 @@ export function prepareSnapInfoTexts(ctx, htmlOverlay, startPointData, targetDat
                         distanceText = formatSimplifiedRoot(roundedFinalCoeff, radicand);
                     }
                 }
-            } else if (state.frozenReference_D_du > epsilon) {
-                const ratio = currentExactDistance / state.frozenReference_D_du;
+            } else if (frozenReference_D_du > GEOMETRY_CALCULATION_EPSILON) {
+                const ratio = currentExactDistance / frozenReference_D_du;
                 let foundFraction = false;
                 for (const factor of SNAP_FACTORS) {
-                    if (Math.abs(ratio - factor) < epsilon) {
+                    if (Math.abs(ratio - factor) < GEOMETRY_CALCULATION_EPSILON) {
                         distanceText = formatSnapFactor(factor, 'D');
                         foundFraction = true;
                         break;
@@ -2049,7 +2447,7 @@ export function prepareSnapInfoTexts(ctx, htmlOverlay, startPointData, targetDat
             } else {
                 distanceText = formatNumber(snappedDistanceData, distanceSigFigs);
             }
-        } else if (currentShiftPressed && isFirstSegmentBeingDrawn && state.gridDisplayMode !== 'none' && gridInterval) {
+        } else if (currentShiftPressed && isFirstSegmentBeingDrawn && gridDisplayMode !== GRID_DISPLAY_MODE_NONE && gridInterval) {
             if (gridToGridSquaredSum !== null && gridInterval) {
                 if (gridToGridSquaredSum >= 0) {
                     const [coeff, radicand] = simplifySquareRoot(gridToGridSquaredSum);
@@ -2070,17 +2468,16 @@ export function prepareSnapInfoTexts(ctx, htmlOverlay, startPointData, targetDat
             const edgeAngleScreen = Math.atan2(endScreenPos.y - startScreenPos.y, endScreenPos.x - startScreenPos.x);
             const midX = (startScreenPos.x + endScreenPos.x) / 2;
             const midY = (startScreenPos.y + endScreenPos.y) / 2;
-            let textOffset = 18;
 
             if (Math.abs(Math.cos(edgeAngleScreen)) < VERTICAL_LINE_COS_THRESHOLD) {
-                const distanceTextX = midX + textOffset;
+                const distanceTextX = midX + FEEDBACK_DISTANCE_LABEL_OFFSET_SCREEN;
                 const distanceTextY = midY;
-                updateHtmlLabel({ id: 'snap-dist', content: distanceText, x: distanceTextX, y: distanceTextY, color: currentElementColor, fontSize: katexFontSize, options: { textAlign: 'center', textBaseline: 'middle', rotation: 90 } }, htmlOverlay);
+                updateHtmlLabel({ id: 'snap-dist', content: distanceText, x: distanceTextX, y: distanceTextY, color: currentElementColor, fontSize: FEEDBACK_LABEL_FONT_SIZE, options: { textAlign: 'center', textBaseline: 'middle', rotation: 90 } }, htmlOverlay);
             } else {
                 let textPerpAngle;
                 const baseAngleForArc = isFirstSegmentBeingDrawn ? 0 : offsetAngleRad;
 
-                if (showAngles && snappedDistanceData > epsilon && Math.abs(angleTurn) > epsilon) {
+                if (showAngles && snappedDistanceData > GEOMETRY_CALCULATION_EPSILON && Math.abs(angleTurn) > GEOMETRY_CALCULATION_EPSILON) {
                     const canvasStartAngle = -baseAngleForArc;
                     const canvasEndAngle = -currentLineAbsoluteAngle;
                     const sumCos = Math.cos(canvasStartAngle) + Math.cos(canvasEndAngle);
@@ -2097,25 +2494,25 @@ export function prepareSnapInfoTexts(ctx, htmlOverlay, startPointData, targetDat
                         textPerpAngle += Math.PI;
                     }
                 }
-                const distanceTextX = midX + Math.cos(textPerpAngle) * textOffset;
-                const distanceTextY = midY + Math.sin(textPerpAngle) * textOffset;
-                let rotationDeg = edgeAngleScreen * (180 / Math.PI);
-                if (rotationDeg > 90 || rotationDeg < -90) {
-                    rotationDeg += 180;
+                const distanceTextX = midX + Math.cos(textPerpAngle) * FEEDBACK_DISTANCE_LABEL_OFFSET_SCREEN;
+                const distanceTextY = midY + Math.sin(textPerpAngle) * FEEDBACK_DISTANCE_LABEL_OFFSET_SCREEN;
+                let rotationDeg = edgeAngleScreen * (DEGREES_IN_HALF_CIRCLE / Math.PI);
+                if (rotationDeg > DEGREES_IN_QUADRANT || rotationDeg < -DEGREES_IN_QUADRANT) {
+                    rotationDeg += DEGREES_IN_HALF_CIRCLE;
                 }
-                updateHtmlLabel({ id: 'snap-dist', content: distanceText, x: distanceTextX, y: distanceTextY, color: currentElementColor, fontSize: katexFontSize, options: { textAlign: 'center', textBaseline: 'middle', rotation: rotationDeg } }, htmlOverlay);
+                updateHtmlLabel({ id: 'snap-dist', content: distanceText, x: distanceTextX, y: distanceTextY, color: currentElementColor, fontSize: FEEDBACK_LABEL_FONT_SIZE, options: { textAlign: 'center', textBaseline: 'middle', rotation: rotationDeg } }, htmlOverlay);
             }
         }
     }
 
-    if (showAngles && snappedDistanceData > epsilon && Math.abs(angleTurn) > epsilon) {
+    if (showAngles && snappedDistanceData > GEOMETRY_CALCULATION_EPSILON && Math.abs(angleTurn) > GEOMETRY_CALCULATION_EPSILON) {
         const baseAngleForArc = isFirstSegmentBeingDrawn ? 0 : offsetAngleRad;
 
-        drawAngleArc(ctx, startScreen, baseAngleForArc, currentLineAbsoluteAngle, ARC_RADIUS_SCREEN_SNAP, currentElementColor);
+        drawAngleArc(ctx, startScreen, baseAngleForArc, currentLineAbsoluteAngle, FEEDBACK_ARC_RADIUS_SCREEN, currentElementColor);
 
         ctx.save();
         ctx.beginPath();
-        const effectiveRadiusForLine = ARC_RADIUS_SCREEN_SNAP + ctx.lineWidth / 2;
+        const effectiveRadiusForLine = FEEDBACK_ARC_RADIUS_SCREEN + ctx.lineWidth / 2;
         const baseLineEndData = {
             x: startPointData.x + (effectiveRadiusForLine / viewTransform.scale) * Math.cos(baseAngleForArc),
             y: startPointData.y + (effectiveRadiusForLine / viewTransform.scale) * Math.sin(baseAngleForArc)
@@ -2123,100 +2520,94 @@ export function prepareSnapInfoTexts(ctx, htmlOverlay, startPointData, targetDat
         const baseLineEndScreen = dataToScreen(baseLineEndData);
         ctx.moveTo(startScreen.x, startScreen.y);
         ctx.lineTo(baseLineEndScreen.x, baseLineEndScreen.y);
-        ctx.strokeStyle = 'rgba(180, 180, 180, 0.6)';
-        ctx.setLineDash([2, 3]);
-        ctx.lineWidth = 1;
+        ctx.strokeStyle = colors.helperLine;
+        ctx.setLineDash(HELPER_LINE_DASH_PATTERN);
+        ctx.lineWidth = FEEDBACK_LINE_VISUAL_WIDTH;
         ctx.stroke();
         ctx.restore();
 
         let angleText = '';
-        const canReferToTheta = !isFirstSegmentBeingDrawn && state.frozenReference_A_rad !== null && Math.abs(state.frozenReference_A_rad) > epsilon;
+        const canReferToTheta = !isFirstSegmentBeingDrawn && frozenReference_A_rad !== null && Math.abs(frozenReference_A_rad) > GEOMETRY_CALCULATION_EPSILON;
 
-        if (angleDisplayMode === 'degrees') {
+        if (angleDisplayMode === ANGLE_DISPLAY_MODE_DEGREES) {
             if (currentShiftPressed && canReferToTheta) {
-                const referenceAngleRad = Math.abs(currentSegmentReferenceA_for_display);
+                const referenceAngleRad = Math.abs(drawingContext.currentSegmentReferenceA_for_display);
                 let potentialFactor = null;
 
                 if (typeof angleSnapFactor === 'number') {
                     potentialFactor = angleSnapFactor;
                 } else if (angleTurn !== null) {
-                    if (Math.abs(referenceAngleRad) > epsilon) {
+                    if (Math.abs(referenceAngleRad) > GEOMETRY_CALCULATION_EPSILON) {
                         const calculatedFactor = angleTurn / referenceAngleRad;
                         for (const frac of NINETY_DEG_ANGLE_SNAP_FRACTIONS) {
-                            if (Math.abs(Math.abs(calculatedFactor) - frac) < epsilon) {
+                            if (Math.abs(Math.abs(calculatedFactor) - frac) < GEOMETRY_CALCULATION_EPSILON) {
                                 potentialFactor = calculatedFactor < 0 ? -frac : frac;
                                 break;
                             }
                         }
                     }
                 }
-                if (potentialFactor !== null && Math.abs(potentialFactor) > epsilon) {
+                if (potentialFactor !== null && Math.abs(potentialFactor) > GEOMETRY_CALCULATION_EPSILON) {
                     angleText = formatSnapFactor(potentialFactor, 'A');
                 } else {
-                    // Keep the original sign of angleTurn for consistent display
-                    let degrees = angleTurn * (180 / Math.PI);
-                    if (Math.abs(degrees) > epsilon) {
+                    let degrees = angleTurn * (DEGREES_IN_HALF_CIRCLE / Math.PI);
+                    if (Math.abs(degrees) > GEOMETRY_CALCULATION_EPSILON) {
                         angleText = `${formatNumber(degrees, angleSigFigs)}^{\\circ}`;
                     }
                 }
             } else {
                 let angleToFormatRad = isFirstSegmentBeingDrawn ? currentLineAbsoluteAngle : angleTurn;
-                // For drawing mode with shift, preserve the natural sign of the angle
                 if (currentShiftPressed && !isFirstSegmentBeingDrawn) {
-                    // Keep angleTurn as is, don't normalize to [-π, π]
-                    let angleToFormatDeg = angleToFormatRad * (180 / Math.PI);
-                    if (Math.abs(angleToFormatDeg) > epsilon) {
+                    let angleToFormatDeg = angleToFormatRad * (DEGREES_IN_HALF_CIRCLE / Math.PI);
+                    if (Math.abs(angleToFormatDeg) > GEOMETRY_CALCULATION_EPSILON) {
                         angleText = `${formatNumber(angleToFormatDeg, angleSigFigs)}^{\\circ}`;
                     }
                 } else {
-                    let angleToFormatDeg = normalizeAngleToPi(angleToFormatRad) * (180 / Math.PI);
-                    if (Math.abs(angleToFormatDeg) > epsilon) {
+                    let angleToFormatDeg = normalizeAngleToPi(angleToFormatRad) * (DEGREES_IN_HALF_CIRCLE / Math.PI);
+                    if (Math.abs(angleToFormatDeg) > GEOMETRY_CALCULATION_EPSILON) {
                         angleText = `${formatNumber(angleToFormatDeg, angleSigFigs)}^{\\circ}`;
                     }
                 }
             }
-        } else if (angleDisplayMode === 'radians') {
+        } else if (angleDisplayMode === ANGLE_DISPLAY_MODE_RADIANS) {
             if (currentShiftPressed && canReferToTheta) {
-                const referenceAngleRad = Math.abs(currentSegmentReferenceA_for_display);
+                const referenceAngleRad = Math.abs(drawingContext.currentSegmentReferenceA_for_display);
                 let potentialFactor = null;
 
                 if (typeof angleSnapFactor === 'number') {
                     potentialFactor = angleSnapFactor;
                 } else if (angleTurn !== null) {
-                    if (Math.abs(referenceAngleRad) > epsilon) {
+                    if (Math.abs(referenceAngleRad) > GEOMETRY_CALCULATION_EPSILON) {
                         const calculatedFactor = angleTurn / referenceAngleRad;
                         for (const frac of NINETY_DEG_ANGLE_SNAP_FRACTIONS) {
-                            if (Math.abs(Math.abs(calculatedFactor) - frac) < epsilon) {
+                            if (Math.abs(Math.abs(calculatedFactor) - frac) < GEOMETRY_CALCULATION_EPSILON) {
                                 potentialFactor = calculatedFactor < 0 ? -frac : frac;
                                 break;
                             }
                         }
                     }
                 }
-                if (potentialFactor !== null && Math.abs(potentialFactor) > epsilon) {
+                if (potentialFactor !== null && Math.abs(potentialFactor) > GEOMETRY_CALCULATION_EPSILON) {
                     const fracStr = formatSnapFactor(potentialFactor, null);
-                    angleText = `${fracStr === '0' ? '0' : fracStr + '\\pi'}`;
-                    if (angleText.startsWith("1\\pi")) angleText = "\\pi";
-                    if (angleText.startsWith("-1\\pi")) angleText = "-\\pi";
+                    angleText = `${fracStr === '0' ? '0' : fracStr + PI_SYMBOL_KATEX}`;
+                    if (angleText.startsWith(`1${PI_SYMBOL_KATEX}`)) angleText = PI_SYMBOL_KATEX;
+                    if (angleText.startsWith(`-1${PI_SYMBOL_KATEX}`)) angleText = `-${PI_SYMBOL_KATEX}`;
                 } else {
-                    // Keep the original sign of angleTurn for consistent display
                     let radians = angleTurn;
-                    if (Math.abs(radians) > epsilon) {
+                    if (Math.abs(radians) > GEOMETRY_CALCULATION_EPSILON) {
                         angleText = formatNumber(radians, angleSigFigs);
                     }
                 }
             } else {
                 let angleToFormatRad = isFirstSegmentBeingDrawn ? currentLineAbsoluteAngle : angleTurn;
-                // For drawing mode with shift, preserve the natural sign of the angle
                 if (currentShiftPressed && !isFirstSegmentBeingDrawn) {
-                    // Keep angleTurn as is, don't normalize to [-π, π]
                     let radians = angleToFormatRad;
-                    if (Math.abs(radians) > epsilon) {
+                    if (Math.abs(radians) > GEOMETRY_CALCULATION_EPSILON) {
                         angleText = formatNumber(radians, angleSigFigs);
                     }
                 } else {
                     let radians = normalizeAngleToPi(angleToFormatRad);
-                    if (Math.abs(radians) > epsilon) {
+                    if (Math.abs(radians) > GEOMETRY_CALCULATION_EPSILON) {
                         angleText = formatNumber(radians, angleSigFigs);
                     }
                 }
@@ -2229,19 +2620,15 @@ export function prepareSnapInfoTexts(ctx, htmlOverlay, startPointData, targetDat
             const sumCos = Math.cos(canvasStartAngle) + Math.cos(canvasEndAngle);
             const sumSin = Math.sin(canvasStartAngle) + Math.sin(canvasEndAngle);
             let bisectorCanvasAngle = Math.atan2(sumSin, sumCos);
-            const labelDistance = 60;
-            const angleTextX = startScreen.x + Math.cos(bisectorCanvasAngle) * labelDistance;
-            const angleTextY = startScreen.y + Math.sin(bisectorCanvasAngle) * labelDistance;
-            updateHtmlLabel({ id: 'snap-angle', content: angleText, x: angleTextX, y: angleTextY, color: currentElementColor, fontSize: katexFontSize, options: { textAlign: 'center', textBaseline: 'middle' } }, htmlOverlay);
+            const angleTextX = startScreen.x + Math.cos(bisectorCanvasAngle) * SNAP_ANGLE_LABEL_OFFSET;
+            const angleTextY = startScreen.y + Math.sin(bisectorCanvasAngle) * SNAP_ANGLE_LABEL_OFFSET;
+            updateHtmlLabel({ id: 'snap-angle', content: angleText, x: angleTextX, y: angleTextY, color: currentElementColor, fontSize: FEEDBACK_LABEL_FONT_SIZE, options: { textAlign: 'center', textBaseline: 'middle' } }, htmlOverlay);
         }
     }
 }
 
-export function prepareReferenceElementsTexts(htmlOverlay, context, state, screenToData, dataToScreen, updateHtmlLabel) {
-    const { showAngles, showDistances, viewTransform, mousePos, frozenReference_D_du, distanceSigFigs, angleDisplayMode } = state;
-    const screenPixelThreshold = REF_TEXT_SCREEN_PIXEL_THRESHOLD;
-    const dataThreshold = screenPixelThreshold / viewTransform.scale;
-    const angleThreshold = GEOMETRY_CALCULATION_EPSILON;
+export function prepareReferenceElementsTexts(htmlOverlay, context, { showAngles, showDistances, viewTransform, mousePos, frozenReference_D_du, distanceSigFigs, angleSigFigs, angleDisplayMode, colors }, screenToData, dataToScreen, updateHtmlLabel) {
+    const dataThreshold = REF_TEXT_SCREEN_PIXEL_THRESHOLD / viewTransform.scale;
 
     let previewDistance = -1;
     if (context.frozen_Origin_Data_to_display) {
@@ -2254,8 +2641,7 @@ export function prepareReferenceElementsTexts(htmlOverlay, context, state, scree
         return;
     }
 
-    const refElementColor = FROZEN_REFERENCE_COLOR;
-    const katexFontSize = REF_TEXT_KATEX_FONT_SIZE;
+    const refElementColor = colors.frozenReference;
 
     const startPointData = context.frozen_Origin_Data_to_display;
     const turnAngleData = context.displayAngleA_valueRad_for_A_equals_label;
@@ -2284,24 +2670,23 @@ export function prepareReferenceElementsTexts(htmlOverlay, context, state, scree
             const [coeff, radicand] = simplifySquareRoot(frozenG2GSquaredSum);
             const finalCoeff = frozenG2GInterval * coeff;
             const roundedFinalCoeff = parseFloat(finalCoeff.toFixed(10));
-            distanceText = `\\delta = ${formatSimplifiedRoot(roundedFinalCoeff, radicand)}`;
+            distanceText = `${DELTA_EQUALS_KATEX}${formatSimplifiedRoot(roundedFinalCoeff, radicand)}`;
         } else {
             const platonicValue = distanceData / DEFAULT_REFERENCE_DISTANCE;
-            distanceText = `\\delta = ${formatNumber(platonicValue, distanceSigFigs)}`;
+            distanceText = `${DELTA_EQUALS_KATEX}${formatNumber(platonicValue, distanceSigFigs)}`;
         }
 
         const edgeAngleScreen = Math.atan2(endPointScreen.y - startPointScreen.y, endPointScreen.x - startPointScreen.x);
         const midX_screen = (startPointScreen.x + endPointScreen.x) / 2;
         const midY_screen = (startPointScreen.y + endPointScreen.y) / 2;
-        const textOffset = REF_TEXT_DISTANCE_LABEL_OFFSET_SCREEN;
-
-        let rotationDeg = edgeAngleScreen * (180 / Math.PI);
-        if (rotationDeg > 90 || rotationDeg < -90) {
-            rotationDeg += 180;
+        
+        let rotationDeg = edgeAngleScreen * (DEGREES_IN_HALF_CIRCLE / Math.PI);
+        if (rotationDeg > DEGREES_IN_QUADRANT || rotationDeg < -DEGREES_IN_QUADRANT) {
+            rotationDeg += DEGREES_IN_HALF_CIRCLE;
         }
         let textPerpAngle;
 
-        if (showAngles && turnAngleData !== null && Math.abs(turnAngleData) > angleThreshold) {
+        if (showAngles && turnAngleData !== null && Math.abs(turnAngleData) > GEOMETRY_CALCULATION_EPSILON) {
             const canvasStartAngle = -baseAngleData;
             const canvasEndAngle = -(baseAngleData + turnAngleData);
             const sumCos = Math.cos(canvasStartAngle) + Math.cos(canvasEndAngle);
@@ -2318,13 +2703,13 @@ export function prepareReferenceElementsTexts(htmlOverlay, context, state, scree
                 textPerpAngle += Math.PI;
             }
         }
-        const textDistLabelX_D = midX_screen + Math.cos(textPerpAngle) * textOffset;
-        const textDistLabelY_D = midY_screen + Math.sin(textPerpAngle) * textOffset;
+        const textDistLabelX_D = midX_screen + Math.cos(textPerpAngle) * REF_TEXT_DISTANCE_LABEL_OFFSET_SCREEN;
+        const textDistLabelY_D = midY_screen + Math.sin(textPerpAngle) * REF_TEXT_DISTANCE_LABEL_OFFSET_SCREEN;
 
-        updateHtmlLabel({ id: 'ref-dist', content: distanceText, x: textDistLabelX_D, y: textDistLabelY_D, color: refElementColor, fontSize: katexFontSize, options: { textAlign: 'center', textBaseline: 'middle', rotation: rotationDeg } }, htmlOverlay);
+        updateHtmlLabel({ id: 'ref-dist', content: distanceText, x: textDistLabelX_D, y: textDistLabelY_D, color: refElementColor, fontSize: REF_TEXT_KATEX_FONT_SIZE, options: { textAlign: 'center', textBaseline: 'middle', rotation: rotationDeg } }, htmlOverlay);
     }
 
-    if (showAngles && turnAngleData !== null && Math.abs(turnAngleData) > angleThreshold) {
+    if (showAngles && turnAngleData !== null && Math.abs(turnAngleData) > GEOMETRY_CALCULATION_EPSILON) {
         const startAngleCanvas = -baseAngleData;
         const endAngleCanvas = -(baseAngleData + turnAngleData);
 
@@ -2337,35 +2722,26 @@ export function prepareReferenceElementsTexts(htmlOverlay, context, state, scree
         const textAngleLabelY_A = startPointScreen.y + Math.sin(bisectorCanvasAngle) * angleLabelOffsetDistance;
 
         let aKatexText = '';
-        if (angleDisplayMode === 'degrees') {
-            // For drawing mode with shift, preserve the natural sign of the angle without normalization
-            let aValueDeg = turnAngleData * (180 / Math.PI);
-            aKatexText = `\\theta = ${formatNumber(aValueDeg, state.angleSigFigs)}^{\\circ}`;
-        } else if (angleDisplayMode === 'radians') {
-            // For drawing mode with shift, preserve the natural sign of the angle without normalization
+        if (angleDisplayMode === ANGLE_DISPLAY_MODE_DEGREES) {
+            let aValueDeg = turnAngleData * (DEGREES_IN_HALF_CIRCLE / Math.PI);
+            aKatexText = `${THETA_EQUALS_KATEX}${formatNumber(aValueDeg, angleSigFigs)}^{\\circ}`;
+        } else if (angleDisplayMode === ANGLE_DISPLAY_MODE_RADIANS) {
             let aValueRad = turnAngleData;
-            aKatexText = `\\theta = ${formatFraction(aValueRad / Math.PI, 0.001, 6)}\\pi`;
-            if (aKatexText === "\\theta = 1\\pi") aKatexText = "\\pi";
-            if (aKatexText === "\\theta = -1\\pi") aKatexText = "-\\pi";
-            if (aKatexText === "\\theta = 0\\pi") aKatexText = "0";
+            aKatexText = `${THETA_EQUALS_KATEX}${formatFraction(aValueRad / Math.PI, FRACTION_FORMAT_TOLERANCE, FRACTION_FORMAT_MAX_DENOMINATOR)}${PI_SYMBOL_KATEX}`;
+            if (aKatexText === `${THETA_EQUALS_KATEX}1${PI_SYMBOL_KATEX}`) aKatexText = PI_SYMBOL_KATEX;
+            if (aKatexText === `${THETA_EQUALS_KATEX}-1${PI_SYMBOL_KATEX}`) aKatexText = `-${PI_SYMBOL_KATEX}`;
+            if (aKatexText === `${THETA_EQUALS_KATEX}0${PI_SYMBOL_KATEX}`) aKatexText = "0";
         }
 
-        updateHtmlLabel({ id: 'ref-angle', content: aKatexText, x: textAngleLabelX_A, y: textAngleLabelY_A, color: refElementColor, fontSize: katexFontSize, options: { textAlign: 'center', textBaseline: 'middle' } }, htmlOverlay);
+        updateHtmlLabel({ id: 'ref-angle', content: aKatexText, x: textAngleLabelX_A, y: textAngleLabelY_A, color: refElementColor, fontSize: REF_TEXT_KATEX_FONT_SIZE, options: { textAlign: 'center', textBaseline: 'middle' } }, htmlOverlay);
     }
 }
 
-export function updateMouseCoordinates(htmlOverlay, state, screenToData, updateHtmlLabel) {
-    const { coordsDisplayMode, isMouseOverCanvas, currentShiftPressed, ghostPointPosition, gridDisplayMode, lastGridState, angleDisplayMode, canvas, dpr, mousePos} = state;
-
-    // If the coordinates should NOT be displayed, simply return.
-    // The main cleanup function in script.js will handle removing the old label
-    // because it wasn't updated on this frame.
-    if (coordsDisplayMode === 'none' || !mousePos || !isMouseOverCanvas) {
+export function updateMouseCoordinates(htmlOverlay, { coordsDisplayMode, isMouseOverCanvas, currentShiftPressed, ghostPointPosition, gridDisplayMode, lastGridState, angleDisplayMode, canvas, dpr, mousePos, colors}, screenToData, updateHtmlLabel) {
+    
+    if (coordsDisplayMode === COORDS_DISPLAY_MODE_NONE || !mousePos || !isMouseOverCanvas) {
         return;
     }
-
-    // If we get here, it means we SHOULD display the coordinates.
-    // The rest of the function calculates and updates the label.
 
     let displayPos;
     if (currentShiftPressed && ghostPointPosition) {
@@ -2375,55 +2751,55 @@ export function updateMouseCoordinates(htmlOverlay, state, screenToData, updateH
     }
 
     let effectiveGridInterval = 1;
-    if (gridDisplayMode !== 'none' && lastGridState && lastGridState.interval1) {
+    if (gridDisplayMode !== GRID_DISPLAY_MODE_NONE && lastGridState && lastGridState.interval1) {
         effectiveGridInterval = (lastGridState.alpha2 > lastGridState.alpha1 && lastGridState.interval2) ? lastGridState.interval2 : lastGridState.interval1;
     }
 
     let decimalPlaces = 0;
     if (effectiveGridInterval > 0) {
-        decimalPlaces = Math.max(0, -Math.floor(Math.log10(effectiveGridInterval * 0.999)));
-        decimalPlaces = Math.min(decimalPlaces + 1, 6);
+        decimalPlaces = Math.max(0, -Math.floor(Math.log10(effectiveGridInterval * COORD_PRECISION_FACTOR)));
+        decimalPlaces = Math.min(decimalPlaces + 1, MAX_COORD_DECIMAL_PLACES);
     }
 
-    const angleDecimalPlaces = Math.min(decimalPlaces + 1, 4);
+    const angleDecimalPlaces = Math.min(decimalPlaces + 1, MAX_ANGLE_DECIMAL_PLACES);
     let textContent = '';
 
     switch (coordsDisplayMode) {
-        case 'regular': {
+        case COORDS_DISPLAY_MODE_REGULAR: {
             let xValue = displayPos.x;
             let yValue = displayPos.y;
             let xText = xValue.toFixed(decimalPlaces);
-            if (xValue >= 0) xText = `\\hphantom{-}${xText}`;
+            if (xValue >= 0) xText = `${KATEX_MINUS_PHANTOM}${xText}`;
             let yText = yValue.toFixed(decimalPlaces);
-            if (yValue >= 0) yText = `\\hphantom{-}${yText}`;
+            if (yValue >= 0) yText = `${KATEX_MINUS_PHANTOM}${yText}`;
             textContent = `\\begin{pmatrix*}[r] x \\\\ y \\end{pmatrix*} = \\begin{pmatrix*}[r] ${xText} \\\\ ${yText} \\end{pmatrix*}`;
             break;
         }
-        case 'complex': {
+        case COORDS_DISPLAY_MODE_COMPLEX: {
             let reValue = displayPos.x;
             let imValue = displayPos.y;
             let rePart = reValue.toFixed(decimalPlaces);
-            if (reValue >= 0) rePart = `\\hphantom{-}${rePart}`;
+            if (reValue >= 0) rePart = `${KATEX_MINUS_PHANTOM}${rePart}`;
             let imPartAbs = Math.abs(imValue).toFixed(decimalPlaces);
             const sign = imValue < 0 ? '-' : '+';
-            textContent = `z = ${rePart} ${sign} ${imPartAbs}i`;
+            textContent = `z = ${rePart} ${sign} ${imPartAbs}${IMAGINARY_UNIT_SYMBOL}`;
             break;
         }
-        case 'polar': {
+        case COORDS_DISPLAY_MODE_POLAR: {
             let rValue = Math.hypot(displayPos.x, displayPos.y);
             let thetaRaw = Math.atan2(displayPos.y, displayPos.x);
             let rText = rValue.toFixed(decimalPlaces);
-            if (rValue >= 0) rText = `\\hphantom{-}${rText}`;
+            if (rValue >= 0) rText = `${KATEX_MINUS_PHANTOM}${rText}`;
             let angleStr;
-            if (angleDisplayMode === 'degrees') {
+            if (angleDisplayMode === ANGLE_DISPLAY_MODE_DEGREES) {
                 let thetaDeg = normalizeAngleDegrees(thetaRaw * 180 / Math.PI);
                 angleStr = thetaDeg.toFixed(angleDecimalPlaces);
-                if (thetaDeg >= 0) angleStr = `\\hphantom{-}${angleStr}`;
+                if (thetaDeg >= 0) angleStr = `${KATEX_MINUS_PHANTOM}${angleStr}`;
                 angleStr += `^{\\circ}`;
             } else {
                 let thetaRad = normalizeAngleToPi(thetaRaw);
                 angleStr = thetaRad.toFixed(angleDecimalPlaces);
-                if (thetaRad >= 0) angleStr = `\\hphantom{-}${angleStr}`;
+                if (thetaRad >= 0) angleStr = `${KATEX_MINUS_PHANTOM}${angleStr}`;
             }
             textContent = `\\begin{pmatrix*}[r] r \\\\ \\theta \\end{pmatrix*} = \\begin{pmatrix*}[r] ${rText} \\\\ ${angleStr} \\end{pmatrix*}`;
             break;
@@ -2431,8 +2807,7 @@ export function updateMouseCoordinates(htmlOverlay, state, screenToData, updateH
     }
 
     const canvasWidth = canvas.width / dpr;
-    const padding = 10;
-    updateHtmlLabel({ id: 'mouse-coord-text', content: textContent, x: canvasWidth - padding, y: padding, color: 'rgba(255, 255, 255, 0.7)', fontSize: 14, options: { textAlign: 'right', textBaseline: 'top' } }, htmlOverlay);
+    updateHtmlLabel({ id: 'mouse-coord-text', content: textContent, x: canvasWidth - UI_PADDING, y: UI_PADDING, color: colors.mouseCoords, fontSize: MOUSE_COORD_FONT_SIZE, options: { textAlign: 'right', textBaseline: 'top' } }, htmlOverlay);
 }
 
 export function createColorWheelIcon(size, dpr) {
@@ -2474,15 +2849,54 @@ export function createColorWheelIcon(size, dpr) {
     return tempCanvas;
 }
 
-export function drawUITransformSymbol(ctx, icon) {
+function drawThemeIcon(ctx, rect, activeThemeName, colors) {
+    ctx.save();
+    const centerX = rect.x + rect.width / 2;
+    const centerY = rect.y + rect.height / 2;
+    const radius = rect.width / 2 * 0.6; // Make icon slightly smaller than button bounds
+
+    ctx.strokeStyle = colors.uiIcon;
+    ctx.fillStyle = colors.uiIcon;
+    ctx.lineWidth = 2;
+
+    if (activeThemeName === 'dark') {
+        // Draw a Sun Icon
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, radius * 0.7, 0, 2 * Math.PI);
+        ctx.fill();
+        for (let i = 0; i < 8; i++) {
+            const angle = (i / 8) * 2 * Math.PI;
+            const startX = centerX + Math.cos(angle) * (radius * 0.85);
+            const startY = centerY + Math.sin(angle) * (radius * 0.85);
+            const endX = centerX + Math.cos(angle) * (radius * 1.1);
+            const endY = centerY + Math.sin(angle) * (radius * 1.1);
+            ctx.beginPath();
+            ctx.moveTo(startX, startY);
+            ctx.lineTo(endX, endY);
+            ctx.stroke();
+        }
+    } else {
+        // Draw a Moon Icon
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, radius, 0, 2 * Math.PI);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(centerX - 5, centerY - 3, radius, 0, 2 * Math.PI);
+        ctx.fillStyle = colors.background; // Use background color to "cut out" the crescent
+        ctx.fill();
+    }
+    ctx.restore();
+}
+
+export function drawUITransformSymbol(ctx, icon, colors) {
     const screenPos = { x: icon.x + icon.width / 2, y: icon.y + icon.height / 2 };
     const radius = icon.width / 2;
-    ctx.strokeStyle = 'white';
+    ctx.strokeStyle = colors.uiIcon;
     ctx.setLineDash([]);
-    ctx.lineWidth = 2;
-    if (icon.type === 'center_rotate_scale') {
+    ctx.lineWidth = UI_ICON_LINE_WIDTH;
+    if (icon.type === TRANSFORM_TYPE_ROTATE_SCALE) {
         ctx.beginPath();
-        ctx.arc(screenPos.x, screenPos.y, radius, 0, 2 * Math.PI);
+        ctx.arc(screenPos.x, screenPos.y, radius, 0, RADIANS_IN_CIRCLE);
         ctx.stroke();
         ctx.beginPath();
         ctx.moveTo(screenPos.x - radius, screenPos.y);
@@ -2492,11 +2906,11 @@ export function drawUITransformSymbol(ctx, icon) {
         ctx.moveTo(screenPos.x, screenPos.y - radius);
         ctx.lineTo(screenPos.x, screenPos.y + radius);
         ctx.stroke();
-    } else if (icon.type === 'center_rotate_only') {
+    } else if (icon.type === TRANSFORM_TYPE_ROTATE_ONLY) {
         ctx.beginPath();
-        ctx.arc(screenPos.x, screenPos.y, radius, 0, 2 * Math.PI);
+        ctx.arc(screenPos.x, screenPos.y, radius, 0, RADIANS_IN_CIRCLE);
         ctx.stroke();
-    } else if (icon.type === 'center_scale_only') {
+    } else if (icon.type === TRANSFORM_TYPE_SCALE_ONLY) {
         ctx.beginPath();
         ctx.moveTo(screenPos.x - radius, screenPos.y);
         ctx.lineTo(screenPos.x + radius, screenPos.y);
@@ -2508,17 +2922,17 @@ export function drawUITransformSymbol(ctx, icon) {
     }
 }
 
-export function drawCoordsIcon(ctx, rect, mode, isSelected, htmlOverlay, updateHtmlLabel) {
-    const colorStrong = isSelected ? '#F9FAFB' : '#9CA3AF';
+export function drawCoordsIcon(ctx, rect, mode, isSelected, htmlOverlay, updateHtmlLabel, colors) {
+    const colorStrong = isSelected ? colors.uiIconSelected : colors.uiIconDefault;
     const center = { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
     ctx.save();
     ctx.translate(center.x, center.y);
-    const scale = rect.width / 32;
+    const scale = rect.width / UI_ICON_BASE_SIZE;
     ctx.scale(scale, scale);
     ctx.translate(-16, -16);
     const x_offset = 1;
     ctx.strokeStyle = colorStrong;
-    ctx.lineWidth = 1.5;
+    ctx.lineWidth = UI_ICON_LINE_WIDTH_SMALL;
     ctx.lineCap = 'round';
     ctx.beginPath();
     ctx.moveTo(2 + x_offset, 30); ctx.lineTo(30 + x_offset, 30);
@@ -2529,31 +2943,31 @@ export function drawCoordsIcon(ctx, rect, mode, isSelected, htmlOverlay, updateH
     let labelPos = { x: 17 + x_offset, y: 8 };
     let label = '';
     switch (mode) {
-        case 'regular':
-            ctx.setLineDash([2, 2]);
+        case COORDS_DISPLAY_MODE_REGULAR:
+            ctx.setLineDash(UI_ICON_DASH_PATTERN);
             ctx.beginPath();
             ctx.moveTo(point.x, point.y); ctx.lineTo(point.x, 30);
             ctx.moveTo(point.x, point.y); ctx.lineTo(2 + x_offset, point.y);
             ctx.stroke();
             ctx.setLineDash([]);
             ctx.beginPath();
-            ctx.arc(point.x, point.y, 1.5, 0, 2 * Math.PI);
+            ctx.arc(point.x, point.y, UI_ICON_POINT_RADIUS, 0, RADIANS_IN_CIRCLE);
             ctx.fill();
             label = '(x,y)';
             break;
-        case 'complex':
-            ctx.setLineDash([2, 2]);
+        case COORDS_DISPLAY_MODE_COMPLEX:
+            ctx.setLineDash(UI_ICON_DASH_PATTERN);
             ctx.beginPath();
             ctx.moveTo(2 + x_offset, 30); ctx.lineTo(point.x, point.y);
             ctx.stroke();
             ctx.setLineDash([]);
             ctx.beginPath();
-            ctx.arc(point.x, point.y, 1.5, 0, 2 * Math.PI);
+            ctx.arc(point.x, point.y, UI_ICON_POINT_RADIUS, 0, RADIANS_IN_CIRCLE);
             ctx.fill();
             label = 'x+iy';
             break;
-        case 'polar':
-            ctx.setLineDash([2, 2]);
+        case COORDS_DISPLAY_MODE_POLAR:
+            ctx.setLineDash(UI_ICON_DASH_PATTERN);
             ctx.beginPath();
             ctx.moveTo(2 + x_offset, 30); ctx.lineTo(point.x, point.y);
             ctx.stroke();
@@ -2562,31 +2976,31 @@ export function drawCoordsIcon(ctx, rect, mode, isSelected, htmlOverlay, updateH
             ctx.stroke();
             ctx.setLineDash([]);
             ctx.beginPath();
-            ctx.arc(point.x, point.y, 1.5, 0, 2 * Math.PI);
+            ctx.arc(point.x, point.y, UI_ICON_POINT_RADIUS, 0, RADIANS_IN_CIRCLE);
             ctx.fill();
             label = '(r,\\theta)';
             break;
-        case 'none':
+        case COORDS_DISPLAY_MODE_NONE:
             break;
     }
     ctx.restore();
     if (label) {
         const labelId = 'icon-label-coords';
-        updateHtmlLabel({ id: labelId, content: label, x: center.x + (labelPos.x - 16) * scale, y: center.y + (labelPos.y - 16) * scale, color: isSelected ? '#E0F2FE' : '#D1D5DB', fontSize: 10, options: { textAlign: 'center', textBaseline: 'middle' } }, htmlOverlay);
-        
+        const labelColor = isSelected ? colors.uiTextSelected : colors.uiTextDefault;
+        updateHtmlLabel({ id: labelId, content: label, x: center.x + (labelPos.x - 16) * scale, y: center.y + (labelPos.y - 16) * scale, color: labelColor, fontSize: UI_ICON_LABEL_FONT_SIZE, options: { textAlign: 'center', textBaseline: 'middle' } }, htmlOverlay);
     }
 }
 
-export function drawAngleIcon(ctx, rect, mode, isSelected, htmlOverlay, updateHtmlLabel) {
-    const colorStrong = isSelected ? '#F9FAFB' : '#9CA3AF';
+export function drawAngleIcon(ctx, rect, mode, isSelected, htmlOverlay, updateHtmlLabel, colors) {
+    const colorStrong = isSelected ? colors.uiIconSelected : colors.uiIconDefault;
     const center = { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
     ctx.save();
     ctx.translate(center.x, center.y);
-    const scale = rect.width / 32;
+    const scale = rect.width / UI_ICON_BASE_SIZE;
     ctx.scale(scale, scale);
     ctx.translate(-16, -16);
     ctx.strokeStyle = colorStrong;
-    ctx.lineWidth = 1.5;
+    ctx.lineWidth = UI_ICON_LINE_WIDTH_SMALL;
     const p1 = { x: 28, y: 30 };
     const p2 = { x: 4, y: 30 };
     const p3 = { x: 16, y: 8 };
@@ -2597,111 +3011,111 @@ export function drawAngleIcon(ctx, rect, mode, isSelected, htmlOverlay, updateHt
     ctx.stroke();
     let label = '';
     let labelPos = { x: 20, y: 22 };
-    if (mode !== 'none') {
+    if (mode !== ANGLE_DISPLAY_MODE_NONE) {
         ctx.beginPath();
         const angle = Math.atan2(p3.y - p2.y, p3.x - p2.x);
         ctx.arc(p2.x, p2.y, 8, angle, 0);
         ctx.stroke();
-        if (mode === 'degrees') {
+        if (mode === ANGLE_DISPLAY_MODE_DEGREES) {
             label = '60^\\circ';
-        } else if (mode === 'radians') {
+        } else if (mode === ANGLE_DISPLAY_MODE_RADIANS) {
             label = '\\pi/3';
         }
     }
     ctx.restore();
     if (label) {
         const labelId = 'icon-label-angles';
-        updateHtmlLabel({ id: labelId, content: label, x: center.x + (labelPos.x - 16) * scale, y: center.y + (labelPos.y - 16) * scale, color: isSelected ? '#E0F2FE' : '#D1D5DB', fontSize: 10, options: { textAlign: 'center', textBaseline: 'middle' } }, htmlOverlay);
-        
+        const labelColor = isSelected ? colors.uiTextSelected : colors.uiTextDefault;
+        updateHtmlLabel({ id: labelId, content: label, x: center.x + (labelPos.x - 16) * scale, y: center.y + (labelPos.y - 16) * scale, color: labelColor, fontSize: UI_ICON_LABEL_FONT_SIZE, options: { textAlign: 'center', textBaseline: 'middle' } }, htmlOverlay);
     }
 }
 
-export function drawDistanceIcon(ctx, rect, mode, isSelected, htmlOverlay, updateHtmlLabel) {
-    const colorStrong = isSelected ? '#F9FAFB' : '#9CA3AF';
+export function drawDistanceIcon(ctx, rect, mode, isSelected, htmlOverlay, updateHtmlLabel, colors) {
+    const colorStrong = isSelected ? colors.uiIconSelected : colors.uiIconDefault;
     const center = { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
     ctx.save();
     ctx.translate(center.x, center.y);
-    const scale = rect.width / 32;
+    const scale = rect.width / UI_ICON_BASE_SIZE;
     ctx.scale(scale, scale);
     ctx.translate(-16, -16);
     ctx.strokeStyle = colorStrong;
-    ctx.lineWidth = 1.5;
+    ctx.lineWidth = UI_ICON_LINE_WIDTH_SMALL;
     ctx.beginPath();
     ctx.moveTo(2, 30);
     ctx.lineTo(30, 30);
     ctx.stroke();
     let label = '';
     let labelPos = { x: 16, y: 22 };
-    if (mode === 'on') {
+    if (mode === DISTANCE_DISPLAY_MODE_ON) {
         label = '3.14';
     }
     ctx.restore();
     if (label) {
         const labelId = 'icon-label-distances';
-        updateHtmlLabel({ id: labelId, content: label, x: center.x + (labelPos.x - 16) * scale, y: center.y + (labelPos.y - 16) * scale, color: isSelected ? '#E0F2FE' : '#D1D5DB', fontSize: 12, options: { textAlign: 'center', textBaseline: 'middle' } }, htmlOverlay);
-        
+        const labelColor = isSelected ? colors.uiTextSelected : colors.uiTextDefault;
+        updateHtmlLabel({ id: labelId, content: label, x: center.x + (labelPos.x - 16) * scale, y: center.y + (labelPos.y - 16) * scale, color: labelColor, fontSize: 12, options: { textAlign: 'center', textBaseline: 'middle' } }, htmlOverlay);
     }
 }
 
-export function drawGridIcon(ctx, rect, mode, isSelected) {
-    const colorStrong = isSelected ? '#F9FAFB' : '#9CA3AF';
+export function drawGridIcon(ctx, rect, mode, isSelected, colors) {
+    const colorStrong = isSelected ? colors.uiIconSelected : colors.uiIconDefault;
     const center = { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
     ctx.save();
     ctx.translate(center.x, center.y);
-    const scale = rect.width / 32;
+    const scale = rect.width / UI_ICON_BASE_SIZE;
     ctx.scale(scale, scale);
     ctx.translate(-16, -16);
     ctx.strokeStyle = colorStrong;
     ctx.fillStyle = colorStrong;
-    ctx.lineWidth = 1.5;
+    ctx.lineWidth = UI_ICON_LINE_WIDTH_SMALL;
     switch (mode) {
-        case 'lines':
+        case GRID_DISPLAY_MODE_LINES:
             ctx.strokeRect(2, 2, 28, 28);
             ctx.beginPath();
             ctx.moveTo(2, 16); ctx.lineTo(30, 16);
             ctx.moveTo(16, 2); ctx.lineTo(16, 30);
             ctx.stroke();
             break;
-        case 'points':
+        case GRID_DISPLAY_MODE_POINTS:
             ctx.strokeRect(2, 2, 28, 28);
             ctx.beginPath();
             [8, 16, 24].forEach(x => {
                 [8, 16, 24].forEach(y => {
                     ctx.moveTo(x, y);
-                    ctx.arc(x, y, 1.5, 0, 2 * Math.PI);
+                    ctx.arc(x, y, UI_ICON_POINT_RADIUS, 0, RADIANS_IN_CIRCLE);
                 });
             });
             ctx.fill();
             break;
-        case 'triangular':
+        case GRID_DISPLAY_MODE_TRIANGULAR:
             ctx.strokeRect(2, 2, 28, 28);
             const triRadius = 8;
             const triCenterX = 16;
             const triCenterY = 16;
             ctx.beginPath();
-            ctx.arc(triCenterX, triCenterY, 1.5, 0, 2 * Math.PI);
+            ctx.arc(triCenterX, triCenterY, UI_ICON_POINT_RADIUS, 0, RADIANS_IN_CIRCLE);
             for (let i = 0; i < 6; i++) {
                 const angle = Math.PI / 3 * i;
                 const x = triCenterX + triRadius * Math.cos(angle);
                 const y = triCenterY + triRadius * Math.sin(angle);
                 ctx.moveTo(x, y);
-                ctx.arc(x, y, 1.5, 0, 2 * Math.PI);
+                ctx.arc(x, y, UI_ICON_POINT_RADIUS, 0, RADIANS_IN_CIRCLE);
             }
             ctx.fill();
             break;
-        case 'polar':
+        case GRID_DISPLAY_MODE_POLAR:
             ctx.beginPath();
-            ctx.arc(16, 16, 14, 0, 2 * Math.PI);
+            ctx.arc(16, 16, 14, 0, RADIANS_IN_CIRCLE);
             ctx.stroke();
             ctx.beginPath();
-            ctx.arc(16, 16, 7, 0, 2 * Math.PI);
+            ctx.arc(16, 16, 7, 0, RADIANS_IN_CIRCLE);
             ctx.stroke();
             ctx.beginPath();
             ctx.moveTo(2, 16); ctx.lineTo(30, 16);
             ctx.moveTo(16, 2); ctx.lineTo(16, 30);
             ctx.stroke();
             break;
-        case 'none':
+        case GRID_DISPLAY_MODE_NONE:
             ctx.strokeRect(2, 2, 28, 28);
             break;
     }
@@ -2709,48 +3123,56 @@ export function drawGridIcon(ctx, rect, mode, isSelected) {
 }
 
 export function drawDisplayIcon(ctx, icon, state, htmlOverlay, updateHtmlLabel) {
-    const { coordsDisplayMode, gridDisplayMode, angleDisplayMode, distanceDisplayMode } = state;
+    const { coordsDisplayMode, gridDisplayMode, angleDisplayMode, distanceDisplayMode, colors } = state;
+    console.log(`Drawing ${icon.group} icon:`, {
+        coordsDisplayMode,
+        gridDisplayMode, 
+        angleDisplayMode,
+        distanceDisplayMode
+    });
     let isSelected = false;
     switch (icon.group) {
         case 'coords':
-            isSelected = coordsDisplayMode !== 'none';
+            isSelected = coordsDisplayMode !== COORDS_DISPLAY_MODE_NONE;
             break;
         case 'grid':
-            isSelected = gridDisplayMode !== 'none';
+            isSelected = gridDisplayMode !== GRID_DISPLAY_MODE_NONE;
             break;
         case 'angles':
-            isSelected = angleDisplayMode !== 'none';
+            isSelected = angleDisplayMode !== ANGLE_DISPLAY_MODE_NONE;
             break;
         case 'distances':
-            isSelected = distanceDisplayMode === 'on';
+            isSelected = distanceDisplayMode === DISTANCE_DISPLAY_MODE_ON;
             break;
     }
     const rect = { x: icon.x, y: icon.y, width: icon.width, height: icon.height };
     switch (icon.group) {
         case 'coords':
-            drawCoordsIcon(ctx, rect, coordsDisplayMode, isSelected, htmlOverlay, updateHtmlLabel);
+            drawCoordsIcon(ctx, rect, coordsDisplayMode, isSelected, htmlOverlay, updateHtmlLabel, colors);
             break;
         case 'grid':
-            drawGridIcon(ctx, rect, gridDisplayMode, isSelected);
+            drawGridIcon(ctx, rect, gridDisplayMode, isSelected, colors);
             break;
         case 'angles':
-            drawAngleIcon(ctx, rect, angleDisplayMode, isSelected, htmlOverlay, updateHtmlLabel);
+            drawAngleIcon(ctx, rect, angleDisplayMode, isSelected, htmlOverlay, updateHtmlLabel, colors);
             break;
         case 'distances':
-            drawDistanceIcon(ctx, rect, distanceDisplayMode, isSelected, htmlOverlay, updateHtmlLabel);
+            drawDistanceIcon(ctx, rect, distanceDisplayMode, isSelected, htmlOverlay, updateHtmlLabel, colors);
             break;
     }
 }
 
 export function drawCanvasUI(ctx, htmlOverlay, state, updateHtmlLabel) {
-    const { dpr, canvasUI, isToolbarExpanded, isColorPaletteExpanded, isTransformPanelExpanded, isDisplayPanelExpanded, isPlacingTransform, placingTransformType, placingSnapPos, mousePos, selectedSwatchIndex, recentColors } = state;
+    // The state object is now passed through correctly
+    const { dpr, canvasUI, isToolbarExpanded, isColorPaletteExpanded, isTransformPanelExpanded, isDisplayPanelExpanded, isPlacingTransform, placingTransformType, placingSnapPos, mousePos, selectedSwatchIndex, recentColors, activeThemeName, colors } = state;
+    
     ctx.save();
     ctx.resetTransform();
     ctx.scale(dpr, dpr);
 
     const btn = canvasUI.toolbarButton;
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.8)";
-    ctx.lineWidth = 3;
+    ctx.strokeStyle = colors.uiDefault;
+    ctx.lineWidth = UI_MENU_ICON_LINE_WIDTH;
     ctx.beginPath();
     for (let i = 0; i < 3; i++) {
         const lineY = btn.y + 5 + i * 10;
@@ -2770,90 +3192,92 @@ export function drawCanvasUI(ctx, htmlOverlay, state, updateHtmlLabel) {
 
         const ttb = canvasUI.transformToolButton;
         if (ttb) {
-            const ttbLabelColor = "white";
-            updateHtmlLabel({ id: 'transform-tool-label', content: 'T', x: ttb.x + ttb.width / 2, y: ttb.y + ttb.height / 2, color: ttbLabelColor, fontSize: 24, options: { textAlign: 'center', textBaseline: 'middle' } }, htmlOverlay);
-            
+            updateHtmlLabel({ id: 'transform-tool-label', content: UI_TRANSFORM_TOOL_LABEL_TEXT, x: ttb.x + ttb.width / 2, y: ttb.y + ttb.height / 2, color: colors.uiIcon, fontSize: UI_TRANSFORM_TOOL_LABEL_FONT_SIZE, options: { textAlign: 'center', textBaseline: 'middle' } }, htmlOverlay);
         }
 
         const dtb = canvasUI.displayToolButton;
         if (dtb) {
-            const displayButtonColor = "rgba(255, 255, 255, 0.8)";
-            ctx.strokeStyle = displayButtonColor;
-            ctx.fillStyle = displayButtonColor;
-            ctx.lineWidth = 2;
-            const barWidth = dtb.width - 12;
+            ctx.strokeStyle = colors.uiDefault;
+            ctx.fillStyle = colors.uiDefault;
+            ctx.lineWidth = UI_ICON_LINE_WIDTH;
+            const barWidth = dtb.width - UI_DISPLAY_ICON_BAR_WIDTH_PADDING;
             for (let i = 0; i < 3; i++) {
-                const y = dtb.y + 10 + i * 10;
+                const y = dtb.y + UI_DISPLAY_ICON_Y_OFFSET + i * UI_DISPLAY_ICON_Y_SPACING;
                 ctx.beginPath();
                 ctx.moveTo(dtb.x + 6, y);
                 ctx.lineTo(dtb.x + 6 + barWidth, y);
                 ctx.stroke();
                 ctx.beginPath();
-                ctx.arc(dtb.x + 6 + barWidth * (i / 2), y, 3, 0, 2 * Math.PI);
+                ctx.arc(dtb.x + 6 + barWidth * (i / 2), y, UI_DISPLAY_ICON_KNOB_RADIUS, 0, RADIANS_IN_CIRCLE);
                 ctx.fill();
             }
         }
-    }
-
-    if (!isToolbarExpanded) {
         
+        const themeBtn = canvasUI.themeToggleButton;
+        if (themeBtn) {
+            drawThemeIcon(ctx, themeBtn, activeThemeName, colors);
+        }
     }
 
     if (isColorPaletteExpanded) {
         const removeBtn = canvasUI.removeColorButton;
         if (removeBtn) {
-            ctx.strokeStyle = "rgba(255, 255, 255, 0.8)";
-            ctx.lineWidth = 2;
+            ctx.strokeStyle = colors.uiDefault;
+            ctx.lineWidth = UI_BUTTON_BORDER_WIDTH;
             ctx.strokeRect(removeBtn.x, removeBtn.y, removeBtn.width, removeBtn.height);
             ctx.beginPath();
-            ctx.moveTo(removeBtn.x + 7, removeBtn.y + removeBtn.height / 2);
-            ctx.lineTo(removeBtn.x + removeBtn.width - 7, removeBtn.y + removeBtn.height / 2);
+            ctx.moveTo(removeBtn.x + UI_BUTTON_ICON_PADDING, removeBtn.y + removeBtn.height / 2);
+            ctx.lineTo(removeBtn.x + removeBtn.width - UI_BUTTON_ICON_PADDING, removeBtn.y + removeBtn.height / 2);
             ctx.stroke();
         }
         canvasUI.colorSwatches.forEach((swatch, index) => {
             ctx.fillStyle = swatch.color;
             ctx.fillRect(swatch.x, swatch.y, swatch.width, swatch.height);
             if (index === selectedSwatchIndex) {
-                ctx.strokeStyle = "#00ffff";
-                ctx.lineWidth = 3;
+                ctx.strokeStyle = colors.activeCenterGlow;
+                ctx.lineWidth = UI_SWATCH_SELECTED_BORDER_WIDTH;
                 ctx.strokeRect(swatch.x - 1, swatch.y - 1, swatch.width + 2, swatch.height + 2);
             }
         });
         const addBtn = canvasUI.addColorButton;
         if (addBtn) {
-            ctx.strokeStyle = "rgba(255, 255, 255, 0.8)";
-            ctx.lineWidth = 2;
+            ctx.strokeStyle = colors.uiDefault;
+            ctx.lineWidth = UI_BUTTON_BORDER_WIDTH;
             ctx.strokeRect(addBtn.x, addBtn.y, addBtn.width, addBtn.height);
             ctx.beginPath();
-            ctx.moveTo(addBtn.x + addBtn.width / 2, addBtn.y + 7);
-            ctx.lineTo(addBtn.x + addBtn.width / 2, addBtn.y + addBtn.height - 7);
-            ctx.moveTo(addBtn.x + 7, addBtn.y + addBtn.height / 2);
-            ctx.lineTo(addBtn.x + addBtn.width - 7, addBtn.y + addBtn.height / 2);
+            ctx.moveTo(addBtn.x + addBtn.width / 2, addBtn.y + UI_BUTTON_ICON_PADDING);
+            ctx.lineTo(addBtn.x + addBtn.width / 2, addBtn.y + addBtn.height - UI_BUTTON_ICON_PADDING);
+            ctx.moveTo(addBtn.x + UI_BUTTON_ICON_PADDING, addBtn.y + addBtn.height / 2);
+            ctx.lineTo(addBtn.x + addBtn.width - UI_BUTTON_ICON_PADDING, addBtn.y + addBtn.height / 2);
             ctx.stroke();
         }
     }
 
     if (isTransformPanelExpanded) {
         canvasUI.transformIcons.forEach(icon => {
-            drawUITransformSymbol(ctx, icon);
+            drawUITransformSymbol(ctx, icon, colors);
         });
     }
 
     if (isDisplayPanelExpanded) {
         canvasUI.displayIcons.forEach(icon => {
+            // This now correctly passes the complete state object, which contains
+            // the necessary display modes and colors for the icons to draw correctly.
             drawDisplayIcon(ctx, icon, state, htmlOverlay, updateHtmlLabel);
         });
     }
 
     if (isPlacingTransform) {
         const finalDrawPos = placingSnapPos || mousePos;
-        const ghostIcon = { type: placingTransformType, x: finalDrawPos.x - 15, y: finalDrawPos.y - 15, width: 30, height: 30 };
-        drawUITransformSymbol(ctx, ghostIcon);
+        if (finalDrawPos) {
+            const iconHalfSize = UI_GHOST_ICON_SIZE / 2;
+            const ghostIcon = { type: placingTransformType, x: finalDrawPos.x - iconHalfSize, y: finalDrawPos.y - iconHalfSize, width: UI_GHOST_ICON_SIZE, height: UI_GHOST_ICON_SIZE };
+            drawUITransformSymbol(ctx, ghostIcon, colors);
+        }
     }
 
     ctx.restore();
 }
-
 
 === script.js ===
 import {
@@ -2868,20 +3292,48 @@ import {
 } from './utils.js';
 
 import {
+    // Import the main THEMES object
+    THEMES,
+
+    // --- GEOMETRY & DRAWING ---
     POINT_RADIUS,
     CENTER_POINT_VISUAL_RADIUS,
     POINT_SELECT_RADIUS,
     LINE_WIDTH,
     DASH_PATTERN,
+
+    // --- INTERACTION ---
     DOUBLE_CLICK_MS,
     DRAG_THRESHOLD,
     EDGE_CLICK_THRESHOLD,
+    EDGE_ID_DELIMITER,
+    MIN_SCALE_VALUE,
+    ZOOM_FACTOR,
+    KEYBOARD_ZOOM_FACTOR,
+    GRID_SNAP_THRESHOLD_FACTOR,
+    BISECTOR_LINE_EXTENSION_FACTOR,
+    
+    // --- DEFAULTS ---
     DEFAULT_CALIBRATION_VIEW_SCALE,
     DEFAULT_REFERENCE_DISTANCE,
     DEFAULT_REFERENCE_ANGLE_RAD,
+
+    // --- UI & TOOLBAR ---
     UI_BUTTON_PADDING,
     UI_TOOLBAR_WIDTH,
     UI_SWATCH_SIZE,
+    MENU_BUTTON_WIDTH,
+    MENU_BUTTON_HEIGHT,
+    TOOLBAR_SECTION_GAP,
+    TOOL_BUTTON_HEIGHT,
+    DISPLAY_ICON_SIZE,
+    DISPLAY_ICON_PADDING,
+    TRANSFORM_ICON_SIZE,
+    TRANSFORM_ICON_PADDING,
+    TRANSFORM_ICON_Y_OFFSET,
+    COLOR_PALETTE_Y_OFFSET,
+
+    // --- SNAPPING PARAMETERS ---
     GEOMETRY_CALCULATION_EPSILON,
     SNAP_STICKINESS_RADIUS_SCREEN,
     LINE_TO_SNAP_RADIUS_SCREEN,
@@ -2891,7 +3343,42 @@ import {
     DRAW_SNAP_DISTANCE_FACTOR_LIMIT,
     MAX_HISTORY_SIZE,
     NINETY_DEG_ANGLE_SNAP_FRACTIONS,
-    SNAP_FACTORS
+    SNAP_FACTORS,
+
+    // --- ENUMS & LITERALS ---
+    POINT_TYPE_REGULAR,
+    TRANSFORM_TYPE_ROTATE_SCALE,
+    TRANSFORM_TYPE_ROTATE_ONLY,
+    TRANSFORM_TYPE_SCALE_ONLY,
+    COORDS_DISPLAY_MODE_REGULAR,
+    COORDS_DISPLAY_MODE_COMPLEX,
+    COORDS_DISPLAY_MODE_POLAR,
+    COORDS_DISPLAY_MODE_NONE,
+    GRID_DISPLAY_MODE_LINES,
+    GRID_DISPLAY_MODE_POINTS,
+    GRID_DISPLAY_MODE_TRIANGULAR,
+    GRID_DISPLAY_MODE_POLAR,
+    GRID_DISPLAY_MODE_NONE,
+    ANGLE_DISPLAY_MODE_DEGREES,
+    ANGLE_DISPLAY_MODE_RADIANS,
+    ANGLE_DISPLAY_MODE_NONE,
+    DISTANCE_DISPLAY_MODE_ON,
+    DISTANCE_DISPLAY_MODE_NONE,
+    KEY_SPACE,
+    KEY_ESCAPE,
+    KEY_DELETE,
+    KEY_BACKSPACE,
+    KEY_REPEAT,
+    KEY_ZOOM_IN,
+    KEY_ZOOM_IN_PLUS,
+    KEY_ZOOM_OUT,
+    KEY_COPY,
+    KEY_PASTE,
+    KEY_CUT,
+    KEY_UNDO,
+    KEY_REDO,
+    KEY_SELECT_ALL
+
 } from './constants.js';
 
 import {drawPoint, 
@@ -2908,10 +3395,6 @@ import {drawPoint,
         prepareReferenceElementsTexts,
         drawReferenceElementsGeometry
         } from './renderer.js';
-
-
-
-
 
 
 const canvas = document.getElementById('drawingCanvas');
@@ -2956,7 +3439,6 @@ let selectedPointIds = [];
 let selectedEdgeIds = [];
 let activeCenterId = null;
 let mousePos = { x: 0, y: 0 };
-let currentColor = '#ffffff';
 let frozenReference_D_g2g = null;
 let isToolbarExpanded = false;
 let isColorPaletteExpanded = false;
@@ -3014,10 +3496,8 @@ let lastAngularGridState = {
 };
 let labelsToKeepThisFrame = new Set();
 
-
-
-
-
+let activeThemeName = 'dark';
+let currentColor = THEMES[activeThemeName].point;
 
 
 
@@ -3300,7 +3780,6 @@ function getSnappedPosition(startPoint, mouseScreenPos, shiftPressed) {
         };
     }
 
-    const rawAngle = Math.atan2(mouseDataPos.y - startPoint.y, mouseDataPos.x - startPoint.x);
     const gridSnapThreshold = POINT_SELECT_RADIUS / viewTransform.scale * 0.8;
     let priorityGridCandidate = null;
     
@@ -3383,6 +3862,7 @@ function getSnappedPosition(startPoint, mouseScreenPos, shiftPressed) {
             }
         }
         
+        const rawAngle = Math.atan2(mouseDataPos.y - startPoint.y, mouseDataPos.x - startPoint.x);
         const snappedTurnRaw = finalAngle - drawingContext.offsetAngleRad;
         const rawTurn = rawAngle - drawingContext.offsetAngleRad;
         const turnOptions = [snappedTurnRaw, snappedTurnRaw + 2 * Math.PI, snappedTurnRaw - 2 * Math.PI];
@@ -3407,9 +3887,8 @@ function getSnappedPosition(startPoint, mouseScreenPos, shiftPressed) {
     }
 
     const categorizedSnapCandidates = [];
-    const searchExtentData = 1000;
     let closestGridPoint = null;
-    let minGridDistSq = Infinity;
+
     if (gridDisplayMode !== 'none' && lastGridState.interval1) {
         const dominantGridInterval = (lastGridState.alpha2 > lastGridState.alpha1 && lastGridState.interval2) ? lastGridState.interval2 : lastGridState.interval1;
         if (dominantGridInterval > 0) {
@@ -3417,33 +3896,17 @@ function getSnappedPosition(startPoint, mouseScreenPos, shiftPressed) {
                 const y_step = dominantGridInterval * Math.sqrt(3) / 2;
                 const i_f = (mouseDataPos.x / dominantGridInterval) - (mouseDataPos.y / (dominantGridInterval * Math.sqrt(3)));
                 const j_f = mouseDataPos.y / y_step;
-
-                let i_r = Math.round(i_f);
-                let j_r = Math.round(j_f);
-                let k_r = Math.round(-i_f - j_f);
-
-                const i_diff = Math.abs(i_r - i_f);
-                const j_diff = Math.abs(j_r - j_f);
-                const k_diff = Math.abs(k_r - (-i_f - j_f));
-
-                if (i_diff > j_diff && i_diff > k_diff) {
-                    i_r = -j_r - k_r;
-                } else if (j_diff > k_diff) {
-                    j_r = -i_r - k_r;
-                }
+                let i_r = Math.round(i_f), j_r = Math.round(j_f), k_r = Math.round(-i_f - j_f);
+                const i_diff = Math.abs(i_r - i_f), j_diff = Math.abs(j_r - j_f), k_diff = Math.abs(k_r - (-i_f - j_f));
+                if (i_diff > j_diff && i_diff > k_diff) { i_r = -j_r - k_r; } else if (j_diff > k_diff) { j_r = -i_r - k_r; }
                 const snappedX = i_r * dominantGridInterval + j_r * dominantGridInterval / 2;
                 const snappedY = j_r * y_step;
-                const pos = { x: snappedX, y: snappedY };
-                const dist = distanceSq(mouseDataPos, pos);
-
-                if (dist < minGridDistSq) {
-                    minGridDistSq = dist;
-                    closestGridPoint = { pos: pos, isGridPoint: true, type: 'triangular_grid_snap' };
-                }
+                closestGridPoint = { pos: { x: snappedX, y: snappedY }, isGridPoint: true, type: 'triangular_grid_snap' };
             } else if (gridDisplayMode === 'polar') {
                 const mouseAngleDeg = (Math.atan2(mouseDataPos.y, mouseDataPos.x) * 180 / Math.PI + 360) % 360;
                 const mouseRadius = Math.hypot(mouseDataPos.x, mouseDataPos.y);
                 const snappedRadius = Math.round(mouseRadius / dominantGridInterval) * dominantGridInterval;
+                let bestPolarDist = Infinity;
                 lastAngularGridState.forEach(level => {
                     if (level.alpha > 0.01 && level.angle > 0) {
                         const angularInterval = level.angle;
@@ -3451,33 +3914,38 @@ function getSnappedPosition(startPoint, mouseScreenPos, shiftPressed) {
                         const snappedAngleRad = snappedAngleDeg * Math.PI / 180;
                         const pos = { x: snappedRadius * Math.cos(snappedAngleRad), y: snappedRadius * Math.sin(snappedAngleRad) };
                         const dist = distanceSq(mouseDataPos, pos);
-                        if (dist < minGridDistSq) {
-                            minGridDistSq = dist;
-                            closestGridPoint = { pos: pos, isGridPoint: true, type: 'polar_grid_snap' };
+                        if (dist < bestPolarDist) {
+                            bestPolarDist = dist;
+                            closestGridPoint = { pos, isGridPoint: true, type: 'polar_grid_snap' };
                         }
                     }
                 });
             } else {
-                const startX = Math.floor((mouseDataPos.x - searchExtentData) / dominantGridInterval) * dominantGridInterval;
-                const endX = Math.ceil((mouseDataPos.x + searchExtentData) / dominantGridInterval) * dominantGridInterval;
-                const startY = Math.floor((mouseDataPos.y - searchExtentData) / dominantGridInterval) * dominantGridInterval;
-                const endY = Math.ceil((mouseDataPos.y + searchExtentData) / dominantGridInterval) * dominantGridInterval;
-                for (let x = startX; x <= endX; x += dominantGridInterval) {
-                    for (let y = startY; y <= endY; y += dominantGridInterval) {
-                        const pos = { x: x, y: y };
-                        const dist = distanceSq(mouseDataPos, pos);
-                        if (dist < minGridDistSq) {
-                            minGridDistSq = dist;
-                            closestGridPoint = { pos: pos, isGridPoint: true, type: 'rect_grid_snap' };
-                        }
+                const baseX = Math.floor(mouseDataPos.x / dominantGridInterval) * dominantGridInterval;
+                const baseY = Math.floor(mouseDataPos.y / dominantGridInterval) * dominantGridInterval;
+                const candidates = [
+                    { x: baseX, y: baseY },
+                    { x: baseX + dominantGridInterval, y: baseY },
+                    { x: baseX, y: baseY + dominantGridInterval },
+                    { x: baseX + dominantGridInterval, y: baseY + dominantGridInterval }
+                ];
+                let bestDistSq = Infinity;
+                let bestPos = null;
+                candidates.forEach(pos => {
+                    const dist = distanceSq(mouseDataPos, pos);
+                    if (dist < bestDistSq) {
+                        bestDistSq = dist;
+                        bestPos = pos;
                     }
-                }
+                });
+                closestGridPoint = { pos: bestPos, isGridPoint: true, type: 'rect_grid_snap' };
             }
         }
     }
     if (closestGridPoint) {
         categorizedSnapCandidates.push(closestGridPoint);
     }
+    
     let closestAngleDistanceSnap = null;
     let minAngleDistSnapSq = Infinity;
     const referenceAngleForSnapping = drawingContext.currentSegmentReferenceA_for_display;
@@ -3541,6 +4009,7 @@ function getSnappedPosition(startPoint, mouseScreenPos, shiftPressed) {
         if (bestOverallCandidate.angleTurn != null) {
             finalAngleTurn = bestOverallCandidate.angleTurn;
         } else {
+            const rawAngle = Math.atan2(mouseDataPos.y - startPoint.y, mouseDataPos.x - startPoint.x);
             const snappedTurnRaw = finalAngle - drawingContext.offsetAngleRad;
             const rawTurn = rawAngle - drawingContext.offsetAngleRad;
             const turnOptions = [snappedTurnRaw, snappedTurnRaw + 2 * Math.PI, snappedTurnRaw - 2 * Math.PI];
@@ -3591,8 +4060,8 @@ function getDragSnapPosition(dragOrigin, mouseDataPos) {
             const midPoint = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
             const perpVec = { x: -(p2.y - p1.y), y: p2.x - p1.x };
             if (Math.hypot(perpVec.x, perpVec.y) < GEOMETRY_CALCULATION_EPSILON) continue;
-            const bisectorP1 = { x: midPoint.x - perpVec.x * 100000, y: midPoint.y - perpVec.y * 100000 };
-            const bisectorP2 = { x: midPoint.x + perpVec.x * 100000, y: midPoint.y + perpVec.y * 100000 };
+            const bisectorP1 = { x: midPoint.x - perpVec.x * BISECTOR_LINE_EXTENSION_FACTOR, y: midPoint.y - perpVec.y * BISECTOR_LINE_EXTENSION_FACTOR };
+            const bisectorP2 = { x: midPoint.x + perpVec.x * BISECTOR_LINE_EXTENSION_FACTOR, y: midPoint.y + perpVec.y * BISECTOR_LINE_EXTENSION_FACTOR };
             const closestPointOnLine = getClosestPointOnLineSegment(mouseDataPos, bisectorP1, bisectorP2);
             if (closestPointOnLine.distance < minDistToBisector) {
                 minDistToBisector = closestPointOnLine.distance;
@@ -3647,11 +4116,11 @@ function getDragSnapPosition(dragOrigin, mouseDataPos) {
                 const startY = Math.floor(bottomRightData.y / dominantGridInterval) * dominantGridInterval;
                 const endY = Math.ceil(topLeftData.y / dominantGridInterval) * dominantGridInterval;
                 for (let x = startX; x <= endX; x += dominantGridInterval) {
-                    const intersection = getLineLineIntersection(bestBisector, { p1: { x: x, y: -100000 }, p2: { x: x, y: 100000 } });
+                    const intersection = getLineLineIntersection(bestBisector, { p1: { x: x, y: -BISECTOR_LINE_EXTENSION_FACTOR }, p2: { x: x, y: BISECTOR_LINE_EXTENSION_FACTOR } });
                     if (intersection) secondOrderCandidates.push(intersection);
                 }
                 for (let y = startY; y <= endY; y += dominantGridInterval) {
-                    const intersection = getLineLineIntersection(bestBisector, { p1: { x: -100000, y: y }, p2: { x: 100000, y: y } });
+                    const intersection = getLineLineIntersection(bestBisector, { p1: { x: -BISECTOR_LINE_EXTENSION_FACTOR, y: y }, p2: { x: BISECTOR_LINE_EXTENSION_FACTOR, y: y } });
                     if (intersection) secondOrderCandidates.push(intersection);
                 }
             }
@@ -3737,14 +4206,99 @@ function getDragSnapPosition(dragOrigin, mouseDataPos) {
     return { point: mouseDataPos, snapped: false };
 }
 
+
 function initializeCanvasUI() {
     canvasUI.toolbarButton = {
         id: "toolbar-button",
         x: UI_BUTTON_PADDING,
         y: UI_BUTTON_PADDING,
-        width: 36,
-        height: 30,
+        width: MENU_BUTTON_WIDTH,
+        height: MENU_BUTTON_HEIGHT,
         type: "menuButton"
+    };
+}
+
+
+
+function buildTransformPanelUI() {
+    canvasUI.transformIcons = [];
+    const panelX = UI_TOOLBAR_WIDTH + UI_BUTTON_PADDING;
+    const iconY = canvasUI.transformToolButton.y;
+    const iconSize = TRANSFORM_ICON_SIZE;
+    const iconPadding = TRANSFORM_ICON_PADDING;
+    const transformTypes = [TRANSFORM_TYPE_ROTATE_SCALE, TRANSFORM_TYPE_ROTATE_ONLY, TRANSFORM_TYPE_SCALE_ONLY];
+
+    transformTypes.forEach((type, index) => {
+        canvasUI.transformIcons.push({
+            id: `transform-icon-${type}`,
+            type: type,
+            x: panelX + index * (iconSize + iconPadding),
+            y: iconY + TRANSFORM_ICON_Y_OFFSET, // Align vertically with the T button
+            width: iconSize,
+            height: iconSize
+        });
+    });
+}
+
+function buildDisplayPanelUI() {
+    canvasUI.displayIcons = [];
+    if (!canvasUI.displayToolButton) return;
+
+    const panelX = UI_TOOLBAR_WIDTH + UI_BUTTON_PADDING;
+    const iconY = canvasUI.displayToolButton.y;
+    const iconSize = DISPLAY_ICON_SIZE;
+    const iconPadding = DISPLAY_ICON_PADDING;
+
+    const iconGroups = ['coords', 'grid', 'angles', 'distances'];
+
+    iconGroups.forEach((group, index) => {
+        canvasUI.displayIcons.push({
+            id: `display-icon-${group}`,
+            group: group,
+            x: panelX + index * (iconSize + iconPadding),
+            y: iconY,
+            width: iconSize,
+            height: iconSize
+        });
+    });
+}
+
+function buildColorPaletteUI() {
+    canvasUI.colorSwatches = [];
+    const paletteY = canvasUI.colorToolButton.y;
+
+    const removeBtnX = UI_TOOLBAR_WIDTH + UI_BUTTON_PADDING;
+    canvasUI.removeColorButton = {
+        id: "remove-color-button",
+        type: "button",
+        x: removeBtnX,
+        y: paletteY + COLOR_PALETTE_Y_OFFSET,
+        width: UI_SWATCH_SIZE,
+        height: UI_SWATCH_SIZE,
+    };
+
+    const swatchesX = removeBtnX + UI_SWATCH_SIZE + UI_BUTTON_PADDING;
+    recentColors.forEach((color, index) => {
+        canvasUI.colorSwatches.push({
+            id: `swatch-${color}-${index}`,
+            type: "colorSwatch",
+            x: swatchesX + index * (UI_SWATCH_SIZE + UI_BUTTON_PADDING),
+            y: paletteY + COLOR_PALETTE_Y_OFFSET,
+            width: UI_SWATCH_SIZE,
+            height: UI_SWATCH_SIZE,
+            index: index,
+            color: color
+        });
+    });
+
+    const addButtonX = swatchesX + recentColors.length * (UI_SWATCH_SIZE + UI_BUTTON_PADDING);
+    canvasUI.addColorButton = {
+        id: "add-color-button",
+        type: "button",
+        x: addButtonX,
+        y: paletteY + COLOR_PALETTE_Y_OFFSET,
+        width: UI_SWATCH_SIZE,
+        height: UI_SWATCH_SIZE,
     };
 }
 
@@ -3763,9 +4317,9 @@ function buildMainToolbarUI() {
         id: "color-tool-button",
         type: "toolButton",
         x: UI_BUTTON_PADDING,
-        y: canvasUI.toolbarButton.y + canvasUI.toolbarButton.height + 20,
+        y: canvasUI.toolbarButton.y + canvasUI.toolbarButton.height + TOOLBAR_SECTION_GAP,
         width: UI_TOOLBAR_WIDTH - (2 * UI_BUTTON_PADDING),
-        height: 40,
+        height: TOOL_BUTTON_HEIGHT,
     };
     
     canvasUI.transformToolButton = {
@@ -3774,7 +4328,7 @@ function buildMainToolbarUI() {
         x: UI_BUTTON_PADDING,
         y: canvasUI.colorToolButton.y + canvasUI.colorToolButton.height + UI_BUTTON_PADDING,
         width: UI_TOOLBAR_WIDTH - (2 * UI_BUTTON_PADDING),
-        height: 40,
+        height: TOOL_BUTTON_HEIGHT,
     };
 
     canvasUI.displayToolButton = {
@@ -3783,90 +4337,17 @@ function buildMainToolbarUI() {
         x: UI_BUTTON_PADDING,
         y: canvasUI.transformToolButton.y + canvasUI.transformToolButton.height + UI_BUTTON_PADDING,
         width: UI_TOOLBAR_WIDTH - (2 * UI_BUTTON_PADDING),
-        height: 40,
-    };
-}
-
-function buildDisplayPanelUI() {
-    canvasUI.displayIcons = [];
-    if (!canvasUI.displayToolButton) return;
-
-    const panelX = UI_TOOLBAR_WIDTH + UI_BUTTON_PADDING;
-    const iconY = canvasUI.displayToolButton.y;
-    const iconSize = 40;
-    const iconPadding = 15;
-
-    const iconGroups = ['coords', 'grid', 'angles', 'distances'];
-
-    iconGroups.forEach((group, index) => {
-        canvasUI.displayIcons.push({
-            id: `display-icon-${group}`,
-            group: group,
-            x: panelX + index * (iconSize + iconPadding),
-            y: iconY,
-            width: iconSize,
-            height: iconSize
-        });
-    });
-}
-
-function buildTransformPanelUI() {
-    canvasUI.transformIcons = [];
-    const panelX = UI_TOOLBAR_WIDTH + UI_BUTTON_PADDING;
-    const iconY = canvasUI.transformToolButton.y;
-    const iconSize = 30;
-    const iconPadding = 15;
-    const transformTypes = ['center_rotate_scale', 'center_rotate_only', 'center_scale_only'];
-
-    transformTypes.forEach((type, index) => {
-        canvasUI.transformIcons.push({
-            id: `transform-icon-${type}`,
-            type: type,
-            x: panelX + index * (iconSize + iconPadding),
-            y: iconY + 5, // Align vertically with the T button
-            width: iconSize,
-            height: iconSize
-        });
-    });
-}
-
-function buildColorPaletteUI() {
-    canvasUI.colorSwatches = [];
-    // This is the corrected line: The Y position is now based on the color tool button
-    const paletteY = canvasUI.colorToolButton.y;
-
-    const removeBtnX = UI_TOOLBAR_WIDTH + UI_BUTTON_PADDING;
-    canvasUI.removeColorButton = {
-        id: "remove-color-button",
-        type: "button",
-        x: removeBtnX,
-        y: paletteY + 5, // Add a small offset to center it with the button
-        width: UI_SWATCH_SIZE,
-        height: UI_SWATCH_SIZE,
+        height: TOOL_BUTTON_HEIGHT,
     };
 
-    const swatchesX = removeBtnX + UI_SWATCH_SIZE + UI_BUTTON_PADDING;
-    recentColors.forEach((color, index) => {
-        canvasUI.colorSwatches.push({
-            id: `swatch-${color}-${index}`,
-            type: "colorSwatch",
-            x: swatchesX + index * (UI_SWATCH_SIZE + UI_BUTTON_PADDING),
-            y: paletteY + 5, // Add a small offset to center it with the button
-            width: UI_SWATCH_SIZE,
-            height: UI_SWATCH_SIZE,
-            index: index,
-            color: color
-        });
-    });
-
-    const addButtonX = swatchesX + recentColors.length * (UI_SWATCH_SIZE + UI_BUTTON_PADDING);
-    canvasUI.addColorButton = {
-        id: "add-color-button",
-        type: "button",
-        x: addButtonX,
-        y: paletteY + 5, // Add a small offset to center it with the button
-        width: UI_SWATCH_SIZE,
-        height: UI_SWATCH_SIZE,
+    // Add theme toggle button
+    canvasUI.themeToggleButton = {
+        id: "theme-toggle-button",
+        type: "toolButton",
+        x: UI_BUTTON_PADDING,
+        y: canvasUI.displayToolButton.y + canvasUI.displayToolButton.height + UI_BUTTON_PADDING,
+        width: UI_TOOLBAR_WIDTH - (2 * UI_BUTTON_PADDING),
+        height: TOOL_BUTTON_HEIGHT,
     };
 }
 
@@ -3914,6 +4395,22 @@ function handleCanvasUIClick(screenPos) {
             screenPos.y >= dtb.y && screenPos.y <= dtb.y + dtb.height) {
             isDisplayPanelExpanded = !isDisplayPanelExpanded;
             if (isDisplayPanelExpanded) buildDisplayPanelUI();
+            return true;
+        }
+
+        // Add theme toggle button click handler
+        const themeBtn = canvasUI.themeToggleButton;
+        if (themeBtn && screenPos.x >= themeBtn.x && screenPos.x <= themeBtn.x + themeBtn.width &&
+            screenPos.y >= themeBtn.y && screenPos.y <= themeBtn.y + themeBtn.height) {
+            // Toggle between light and dark themes
+            activeThemeName = activeThemeName === 'dark' ? 'light' : 'dark';
+            
+            // Update the current color to match the new theme
+            currentColor = THEMES[activeThemeName].point;
+            
+            // Update color picker to match new theme
+            colorPicker.value = currentColor;
+            
             return true;
         }
     }
@@ -3975,22 +4472,22 @@ function handleCanvasUIClick(screenPos) {
 
                 switch (icon.group) {
                     case 'coords':
-                        const coordsModes = ['none', 'regular', 'complex', 'polar'];
+                        const coordsModes = [COORDS_DISPLAY_MODE_NONE, COORDS_DISPLAY_MODE_REGULAR, COORDS_DISPLAY_MODE_COMPLEX, COORDS_DISPLAY_MODE_POLAR];
                         coordsDisplayMode = coordsModes[(coordsModes.indexOf(coordsDisplayMode) + 1) % coordsModes.length];
                         break;
                     case 'grid':
-                        const gridModes = ['lines', 'points', 'triangular', 'polar', 'none'];
+                        const gridModes = [GRID_DISPLAY_MODE_LINES, GRID_DISPLAY_MODE_POINTS, GRID_DISPLAY_MODE_TRIANGULAR, GRID_DISPLAY_MODE_POLAR, GRID_DISPLAY_MODE_NONE];
                         gridDisplayMode = gridModes[(gridModes.indexOf(gridDisplayMode) + 1) % gridModes.length];
                         break;
                     case 'angles':
-                        const angleModes = ['degrees', 'radians', 'none'];
+                        const angleModes = [ANGLE_DISPLAY_MODE_DEGREES, ANGLE_DISPLAY_MODE_RADIANS, ANGLE_DISPLAY_MODE_NONE];
                         angleDisplayMode = angleModes[(angleModes.indexOf(angleDisplayMode) + 1) % angleModes.length];
-                        showAngles = angleDisplayMode !== 'none';
+                        showAngles = angleDisplayMode !== ANGLE_DISPLAY_MODE_NONE;
                         break;
                     case 'distances':
-                        const distModes = ['on', 'none'];
+                        const distModes = [DISTANCE_DISPLAY_MODE_ON, DISTANCE_DISPLAY_MODE_NONE];
                         distanceDisplayMode = distModes[(distModes.indexOf(distanceDisplayMode) + 1) % distModes.length];
-                        showDistances = distanceDisplayMode === 'on';
+                        showDistances = distanceDisplayMode === DISTANCE_DISPLAY_MODE_ON;
                         break;
                 }
                 return true;
@@ -4031,56 +4528,6 @@ function getPrecedingSegment(pointId, edgesToIgnoreIds = []) {
         }
     }
     return null;
-}
-
-function setCurrentColor(newColor) {
-    const oldColor = currentColor;
-    let changedPoints = [];
-    if (selectedPointIds.length > 0) {
-        selectedPointIds.forEach(id => {
-            const point = findPointById(id);
-            if (point && point.type === 'regular') {
-                changedPoints.push({ id: point.id, oldColor: point.color || oldColor });
-                point.color = newColor;
-            }
-        });
-    }
-    // FIX 2: Prevent transform centers from changing color
-    // activeCenterId is the *last selected* center, not necessarily all selected centers
-    selectedCenterIds.forEach(id => {
-        const center = findPointById(id);
-        // Only if it's explicitly a center point
-        if (center && center.type !== 'regular') {
-            // No color change for centers, they stay white as per drawCenterSymbol
-            // So no need to add to changedPoints here for color
-        }
-    });
-
-    if (changedPoints.length > 0) {
-        const actualUndoState = {
-            points: allPoints.map(p => {
-                const changed = changedPoints.find(cp => cp.id === p.id);
-                // Ensure center points are always stored with 'white' color in undo history if they were just placed
-                if (p.type !== 'regular') {
-                    return { ...p, color: 'white' }; // Centers always white in undo
-                }
-                return changed ? { ...p, color: changed.oldColor } : { ...p };
-            }),
-            edges: JSON.parse(JSON.stringify(allEdges)),
-            selectedPointIds: JSON.parse(JSON.stringify(selectedPointIds)),
-            selectedEdgeIds: JSON.parse(JSON.stringify(selectedEdgeIds)),
-            activeCenterId,
-            selectedCenterIds: JSON.parse(JSON.stringify(selectedCenterIds)), // Ensure selectedCenterIds is saved
-            isDrawingMode,
-            previewLineStartPointId
-        };
-        undoStack.push(actualUndoState);
-        if (undoStack.length > MAX_HISTORY_SIZE) undoStack.shift();
-        redoStack = [];
-    }
-    currentColor = newColor;
-    colorPicker.value = newColor;
-    addToRecentColors(newColor);
 }
 
 function saveStateForUndo() {
@@ -4273,7 +4720,7 @@ function handleCopy() {
     if (pointsToCopyIds.size === 0 && selectedEdgeIds.length === 0) return;
     
     selectedEdgeIds.forEach(edgeId => {
-        const [id1, id2] = edgeId.split('-');
+        const [id1, id2] = edgeId.split(EDGE_ID_DELIMITER);
         pointsToCopyIds.add(id1);
         pointsToCopyIds.add(id2);
     });
@@ -4285,7 +4732,6 @@ function handleCopy() {
     
     clipboard.edges = [];
     selectedEdgeIds.forEach(edgeId => {
-        const [id1, id2] = edgeId.split('-');
         const edge = allEdges.find(e => getEdgeId(e) === edgeId);
         if (edge) clipboard.edges.push({ ...edge });
     });
@@ -4304,10 +4750,7 @@ function handleCopy() {
 }
 
 function handleCut() {
-    const pointsToCutIds = new Set(selectedPointIds);
-    if (activeCenterId) pointsToCutIds.add(activeCenterId);
-    
-    if (pointsToCutIds.size === 0 && selectedEdgeIds.length === 0) return;
+    if (selectedPointIds.length === 0 && selectedEdgeIds.length === 0 && selectedCenterIds.length === 0) return;
     
     saveStateForUndo();
     handleCopy();
@@ -4343,7 +4786,6 @@ function deleteSelectedItems() {
     saveStateForUndo();
     
     selectedEdgeIds.forEach(edgeId => {
-        const [id1, id2] = edgeId.split('-');
         allEdges = allEdges.filter(edge => getEdgeId(edge) !== edgeId);
     });
     
@@ -4388,22 +4830,15 @@ function zoomAt(zoomCenterScreen_css_pixels, scaleFactor) {
     const oldScale = viewTransform.scale;
     let newScale = oldScale * scaleFactor;
 
-    // Prevent scale from becoming zero, which would break calculations.
-    // This value is small enough to be effectively infinite for zooming out.
-    if (newScale < 1e-20) {
-        newScale = 1e-20;
+    if (newScale < MIN_SCALE_VALUE) {
+        newScale = MIN_SCALE_VALUE;
     }
 
     const mouseX_physical = zoomCenterScreen_css_pixels.x * dpr;
     const mouseY_physical = zoomCenterScreen_css_pixels.y * dpr;
 
-    // This is the corrected, numerically stable calculation.
-    // It finds the new offset based on the old one and the scale factor,
-    // which is more robust at extreme zoom levels.
     viewTransform.offsetX = mouseX_physical * (1 - scaleFactor) + viewTransform.offsetX * scaleFactor;
     
-    // The offsetY calculation must account for the canvas's inverted Y-axis.
-    // This was the source of the bug in my previous version.
     viewTransform.offsetY = (canvas.height - mouseY_physical) * (1 - scaleFactor) + viewTransform.offsetY * scaleFactor;
 
     viewTransform.scale = newScale;
@@ -4583,13 +5018,61 @@ function applySelectionLogic(pointIdsToSelect, edgeIdsToSelect, wantsShift, want
     }
 }
 
+function setCurrentColor(newColor) {
+    const oldColor = currentColor;
+    const colors = THEMES[activeThemeName];
+    let changedPoints = [];
+    if (selectedPointIds.length > 0) {
+        selectedPointIds.forEach(id => {
+            const point = findPointById(id);
+            if (point && point.type === POINT_TYPE_REGULAR) {
+                changedPoints.push({ id: point.id, oldColor: point.color || oldColor });
+                point.color = newColor;
+            }
+        });
+    }
+
+    selectedCenterIds.forEach(id => {
+        const center = findPointById(id);
+        if (center && center.type !== POINT_TYPE_REGULAR) {
+            // No color change for centers, they stay white as per drawCenterSymbol
+        }
+    });
+
+    if (changedPoints.length > 0) {
+        const actualUndoState = {
+            points: allPoints.map(p => {
+                const changed = changedPoints.find(cp => cp.id === p.id);
+                if (p.type !== POINT_TYPE_REGULAR) {
+                    return { ...p, color: colors.uiIcon };
+                }
+                return changed ? { ...p, color: changed.oldColor } : { ...p };
+            }),
+            edges: JSON.parse(JSON.stringify(allEdges)),
+            selectedPointIds: JSON.parse(JSON.stringify(selectedPointIds)),
+            selectedEdgeIds: JSON.parse(JSON.stringify(selectedEdgeIds)),
+            activeCenterId,
+            selectedCenterIds: JSON.parse(JSON.stringify(selectedCenterIds)),
+            isDrawingMode,
+            previewLineStartPointId
+        };
+        undoStack.push(actualUndoState);
+        if (undoStack.length > MAX_HISTORY_SIZE) undoStack.shift();
+        redoStack = [];
+    }
+    currentColor = newColor;
+    colorPicker.value = newColor;
+    addToRecentColors(newColor);
+}
+
 function redrawAll() {
     labelsToKeepThisFrame.clear();
+    const colors = THEMES[activeThemeName]; // Get colors from current theme
     const actualCanvasWidth = canvas.width / dpr;
     const actualCanvasHeight = canvas.height / dpr;
     ctx.resetTransform();
     ctx.scale(dpr, dpr);
-    ctx.fillStyle = '#1a1a1a';
+    ctx.fillStyle = colors.background;
     ctx.fillRect(0, 0, actualCanvasWidth, actualCanvasHeight);
 
     const { grid1Interval, grid2Interval, alpha1, alpha2 } = calculateGridIntervals(viewTransform.scale);
@@ -4597,10 +5080,11 @@ function redrawAll() {
 
     lastAngularGridState = getDynamicAngularIntervals(viewTransform, actualCanvasWidth, actualCanvasHeight, dataToScreen);
 
-    drawGrid(ctx, { gridDisplayMode, canvas, dpr, viewTransform, gridAlpha }, dataToScreen, screenToData, lastGridState, lastAngularGridState);
+    // Pass `colors` object in the state parameter to all renderer functions
+    drawGrid(ctx, { gridDisplayMode, canvas, dpr, viewTransform, gridAlpha, colors }, dataToScreen, screenToData, lastGridState, lastAngularGridState);
 
-    if (coordsDisplayMode !== 'none') {
-        const stateForAxes = { canvas, dpr, coordsDisplayMode, viewTransform, angleDisplayMode };
+    if (coordsDisplayMode !== COORDS_DISPLAY_MODE_NONE) {
+        const stateForAxes = { canvas, dpr, coordsDisplayMode, viewTransform, angleDisplayMode, colors };
         drawAxes(ctx, htmlOverlay, stateForAxes, dataToScreen, screenToData, lastGridState, lastAngularGridState, updateHtmlLabel);
     }
 
@@ -4613,20 +5097,22 @@ function redrawAll() {
                 frozen_D_du_to_display: frozenReference_D_du,
                 frozen_D_g2g_to_display: frozenReference_D_g2g
             };
-            const stateForRefGeo = { showAngles, showDistances, viewTransform, mousePos };
+            const stateForRefGeo = { showAngles, showDistances, viewTransform, mousePos, colors };
             drawReferenceElementsGeometry(ctx, frozenDisplayContext, dataToScreen, screenToData, stateForRefGeo);
-            const stateForRefTexts = { showAngles, showDistances, viewTransform, mousePos, frozenReference_D_du, distanceSigFigs, angleDisplayMode };
+            const stateForRefTexts = { showAngles, showDistances, viewTransform, mousePos, frozenReference_D_du, distanceSigFigs, angleDisplayMode, colors };
             prepareReferenceElementsTexts(htmlOverlay, frozenDisplayContext, stateForRefTexts, screenToData, dataToScreen, updateHtmlLabel);
         }
     }
 
     if (transformIndicatorData) {
-        drawTransformIndicators(ctx, htmlOverlay, { transformIndicatorData, angleSigFigs, distanceSigFigs }, dataToScreen, updateHtmlLabel);
+        const stateForTransform = { transformIndicatorData, angleSigFigs, distanceSigFigs, colors };
+        drawTransformIndicators(ctx, htmlOverlay, stateForTransform, dataToScreen, updateHtmlLabel);
         labelsToKeepThisFrame.add('transform-angle-indicator');
         labelsToKeepThisFrame.add('transform-scale-indicator');
     }
 
-    drawAllEdges(ctx, { allEdges, selectedEdgeIds, isDragConfirmed, dragPreviewPoints, currentColor }, dataToScreen, findPointById, getEdgeId);
+    const stateForEdges = { allEdges, selectedEdgeIds, isDragConfirmed, dragPreviewPoints, currentColor, colors };
+    drawAllEdges(ctx, stateForEdges, dataToScreen, findPointById, getEdgeId);
 
     allPoints.forEach(point => {
         let pointToDraw = { ...point };
@@ -4637,7 +5123,7 @@ function redrawAll() {
                 pointToDraw.y = preview.y;
             }
         }
-        drawPoint(ctx, pointToDraw, { selectedPointIds, selectedCenterIds, activeCenterId, currentColor }, dataToScreen);
+        drawPoint(ctx, pointToDraw, { selectedPointIds, selectedCenterIds, activeCenterId, currentColor, colors }, dataToScreen);
     });
 
     if (isDragConfirmed) {
@@ -4645,7 +5131,7 @@ function redrawAll() {
             const draggedVersion = dragPreviewPoints.find(dp => dp.id === p.id);
             return draggedVersion || p;
         });
-        const stateForFeedback = { lastGridState, showDistances, showAngles, distanceSigFigs, angleDisplayMode, angleSigFigs, currentShiftPressed, viewTransform };
+        const stateForFeedback = { lastGridState, showDistances, showAngles, distanceSigFigs, angleDisplayMode, angleSigFigs, currentShiftPressed, viewTransform, colors };
         if (actionContext.targetPoint) {
             drawDragFeedback(ctx, htmlOverlay, actionContext.targetPoint.id, hybridPointStates, stateForFeedback, dataToScreen, findNeighbors, getEdgeId, currentShiftPressed, null, updateHtmlLabel);
         } else if (actionContext.targetEdge) {
@@ -4654,7 +5140,7 @@ function redrawAll() {
             drawDragFeedback(ctx, htmlOverlay, actionContext.targetEdge.id2, hybridPointStates, stateForFeedback, dataToScreen, findNeighbors, getEdgeId, false, draggedEdgeId, updateHtmlLabel);
         }
     } else {
-        const stateForFeedback = { lastGridState, showDistances, showAngles, distanceSigFigs, angleDisplayMode, angleSigFigs, currentShiftPressed, viewTransform };
+        const stateForFeedback = { lastGridState, showDistances, showAngles, distanceSigFigs, angleDisplayMode, angleSigFigs, currentShiftPressed, viewTransform, colors };
         if (selectedPointIds.length === 1 && selectedEdgeIds.length === 0) {
             drawDragFeedback(ctx, htmlOverlay, selectedPointIds[0], allPoints, stateForFeedback, dataToScreen, findNeighbors, getEdgeId, false, null, updateHtmlLabel);
         } else if (selectedEdgeIds.length === 1 && selectedPointIds.length <= 2) {
@@ -4671,7 +5157,7 @@ function redrawAll() {
         const screenPos = dataToScreen(ghostPointPosition);
         ctx.beginPath();
         ctx.arc(screenPos.x, screenPos.y, POINT_RADIUS, 0, 2 * Math.PI);
-        ctx.fillStyle = 'rgba(240, 240, 130, 0.9)';
+        ctx.fillStyle = colors.feedbackSnapped;
         ctx.fill();
     }
 
@@ -4687,23 +5173,23 @@ function redrawAll() {
             ctx.moveTo(startScreen.x, startScreen.y);
             ctx.lineTo(targetScreen.x, targetScreen.y);
             ctx.setLineDash(DASH_PATTERN);
-            ctx.strokeStyle = currentShiftPressed ? 'rgba(240, 240, 130, 0.9)' : currentColor;
+            ctx.strokeStyle = currentShiftPressed ? colors.feedbackSnapped : currentColor;
             ctx.lineWidth = LINE_WIDTH;
             ctx.stroke();
             ctx.setLineDash([]);
             if (snappedData.snapped) {
                 ctx.beginPath();
                 ctx.arc(targetScreen.x, targetScreen.y, POINT_RADIUS, 0, 2 * Math.PI);
-                ctx.fillStyle = 'rgba(240, 240, 130, 0.9)';
+                ctx.fillStyle = colors.feedbackSnapped;
                 ctx.fill();
             }
-            const stateForSnapInfo = { showDistances, showAngles, currentShiftPressed, distanceSigFigs, angleSigFigs, angleDisplayMode, viewTransform, frozenReference_D_du, gridDisplayMode, frozenReference_A_rad };
+            const stateForSnapInfo = { showDistances, showAngles, currentShiftPressed, distanceSigFigs, angleSigFigs, angleDisplayMode, viewTransform, frozenReference_D_du, gridDisplayMode, frozenReference_A_rad, colors };
             prepareSnapInfoTexts(ctx, htmlOverlay, startPoint, targetPosData, snappedData, stateForSnapInfo, dataToScreen, currentPreviewDrawingContext, updateHtmlLabel);
         }
     }
 
     if (isRectangleSelecting && isDragConfirmed) {
-        ctx.strokeStyle = 'rgba(255,255,255,0.7)';
+        ctx.strokeStyle = colors.mouseCoords;
         ctx.lineWidth = 1;
         ctx.setLineDash(DASH_PATTERN);
         const rX = Math.min(rectangleSelectStartPos.x, mousePos.x);
@@ -4714,9 +5200,29 @@ function redrawAll() {
         ctx.setLineDash([]);
     }
 
-    updateMouseCoordinates(htmlOverlay, { coordsDisplayMode, isMouseOverCanvas, currentShiftPressed, ghostPointPosition, gridDisplayMode, lastGridState, angleDisplayMode, canvas, dpr, mousePos}, screenToData, updateHtmlLabel);
-
-    const stateForUI = { dpr, canvasUI, isToolbarExpanded, isColorPaletteExpanded, isTransformPanelExpanded, isDisplayPanelExpanded, isPlacingTransform, placingTransformType, placingSnapPos, mousePos, selectedSwatchIndex, recentColors, coordsDisplayMode, gridDisplayMode, angleDisplayMode, distanceDisplayMode };
+    updateMouseCoordinates(htmlOverlay, { coordsDisplayMode, isMouseOverCanvas, currentShiftPressed, ghostPointPosition, gridDisplayMode, lastGridState, angleDisplayMode, canvas, dpr, mousePos, colors}, screenToData, updateHtmlLabel);
+    
+    const stateForUI = { 
+        dpr, 
+        canvasUI, 
+        isToolbarExpanded, 
+        isColorPaletteExpanded, 
+        isTransformPanelExpanded, 
+        isDisplayPanelExpanded, 
+        isPlacingTransform, 
+        placingTransformType, 
+        placingSnapPos, 
+        mousePos, 
+        selectedSwatchIndex, 
+        recentColors, 
+        activeThemeName, 
+        colors,
+        // Add these missing display mode properties:
+        coordsDisplayMode,
+        gridDisplayMode,
+        angleDisplayMode,
+        distanceDisplayMode
+    };
     drawCanvasUI(ctx, htmlOverlay, stateForUI, updateHtmlLabel);
     
     cleanupHtmlLabels();
@@ -5173,7 +5679,7 @@ canvas.addEventListener('mousedown', (event) => {
                 x: dataPos.x,
                 y: dataPos.y,
                 type: placingTransformType,
-                color: 'white'
+                color: THEMES[activeThemeName].uiIcon
             };
             allPoints.push(newCenter);
             handleCenterSelection(newCenter.id, false, false);
@@ -5536,7 +6042,7 @@ window.addEventListener('keyup', (event) => {
 window.addEventListener('keydown', (event) => {
     const isCtrlOrCmd = event.ctrlKey || event.metaKey;
     
-    if (isCtrlOrCmd && event.key.toLowerCase() === 'r') {
+    if (isCtrlOrCmd && event.key.toLowerCase() === KEY_REPEAT) {
         event.preventDefault();
         if (isDrawingMode && previewLineStartPointId) {
             handleRepeat();
@@ -5553,44 +6059,44 @@ window.addEventListener('keydown', (event) => {
     }
 
     const allowedDuringAction = ['Shift', 'Control', 'Meta', 'Alt', 'Escape', 'Delete', 'Backspace'];
-    if (isActionInProgress && !allowedDuringAction.includes(event.key) && !(isCtrlOrCmd && ['c','x','v','z','y','a','-','=','+'].includes(event.key.toLowerCase()))) return;
+    if (isActionInProgress && !allowedDuringAction.includes(event.key) && !(isCtrlOrCmd && [KEY_COPY,KEY_CUT,KEY_PASTE,KEY_UNDO,KEY_REDO,KEY_SELECT_ALL,KEY_ZOOM_OUT,KEY_ZOOM_IN,KEY_ZOOM_IN_PLUS].includes(event.key.toLowerCase()))) return;
 
-    if (isMouseOverCanvas && isCtrlOrCmd && (event.key === '=' || event.key === '+')) {
+    if (isMouseOverCanvas && isCtrlOrCmd && (event.key === KEY_ZOOM_IN || event.key === KEY_ZOOM_IN_PLUS)) {
         event.preventDefault();
         const centerScreen = { x: (canvas.width/dpr)/2, y: (canvas.height/dpr)/2 };
-        zoomAt(centerScreen, 1.15);
+        zoomAt(centerScreen, KEYBOARD_ZOOM_FACTOR);
         return;
     }
-    if (isMouseOverCanvas && isCtrlOrCmd && event.key === '-') {
+    if (isMouseOverCanvas && isCtrlOrCmd && event.key === KEY_ZOOM_OUT) {
         event.preventDefault();
         const centerScreen = { x: (canvas.width/dpr)/2, y: (canvas.height/dpr)/2 };
-        zoomAt(centerScreen, 1/1.15);
+        zoomAt(centerScreen, 1/KEYBOARD_ZOOM_FACTOR);
         return;
     }
 
-    if (event.key === ' ') {
+    if (event.key === KEY_SPACE) {
         event.preventDefault();
         completeGraphOnSelectedPoints();
-    } else if (event.key === 'Escape') {
+    } else if (event.key === KEY_ESCAPE) {
         performEscapeAction();
-    } else if (event.key === 'Delete' || event.key === 'Backspace') {
+    } else if (event.key === KEY_DELETE || event.key === KEY_BACKSPACE) {
         deleteSelectedItems();
-    } else if (isCtrlOrCmd && event.key.toLowerCase() === 'c') {
+    } else if (isCtrlOrCmd && event.key.toLowerCase() === KEY_COPY) {
         event.preventDefault();
         handleCopy();
-    } else if (isCtrlOrCmd && event.key.toLowerCase() === 'x') {
+    } else if (isCtrlOrCmd && event.key.toLowerCase() === KEY_CUT) {
         event.preventDefault();
         handleCut();
-    } else if (isCtrlOrCmd && event.key.toLowerCase() === 'v') {
+    } else if (isCtrlOrCmd && event.key.toLowerCase() === KEY_PASTE) {
         event.preventDefault();
         handlePaste();
-    } else if (isCtrlOrCmd && event.key.toLowerCase() === 'z' && !event.shiftKey) {
+    } else if (isCtrlOrCmd && event.key.toLowerCase() === KEY_UNDO && !event.shiftKey) {
         event.preventDefault();
         handleUndo();
-    } else if (isCtrlOrCmd && (event.key.toLowerCase() === 'y' || (event.shiftKey && event.key.toLowerCase() === 'z'))) {
+    } else if (isCtrlOrCmd && (event.key.toLowerCase() === KEY_REDO || (event.shiftKey && event.key.toLowerCase() === KEY_UNDO))) {
         event.preventDefault();
         handleRedo();
-    } else if (isCtrlOrCmd && event.key.toLowerCase() === 'a') {
+    } else if (isCtrlOrCmd && event.key.toLowerCase() === KEY_SELECT_ALL) {
         event.preventDefault();
         selectedPointIds = allPoints.filter(p => p.type === 'regular').map(p => p.id);
         selectedEdgeIds = allEdges.map(edge => getEdgeId(edge));
@@ -5691,12 +6197,28 @@ canvas {
 }
 
 === utils.js ===
+import {
+    SCIENTIFIC_NOTATION_UPPER_BOUND,
+    SCIENTIFIC_NOTATION_LOWER_BOUND,
+    MAX_DECIMAL_PLACES_FORMAT,
+    GEOMETRY_CALCULATION_EPSILON,
+    RADIANS_IN_CIRCLE,
+    DEGREES_IN_CIRCLE,
+    ZERO_TOLERANCE,
+    FRACTION_FORMAT_TOLERANCE,
+    FRACTION_FORMAT_MAX_DENOMINATOR,
+    KATEX_MINUS_PHANTOM,
+    ON_SEGMENT_STRICT_T_MIN,
+    ON_SEGMENT_STRICT_T_MAX,
+    ANGLE_SNAP_THRESHOLD_RAD
+} from './constants.js';
+
 export function formatNumber(value, sigFigs) {
     if (value === 0) return "0";
     const absValue = Math.abs(value);
     const sign = value < 0 ? "-" : "";
     let formattedString;
-    if (absValue >= 1000 || (absValue !== 0 && absValue < 0.001)) {
+    if (absValue >= SCIENTIFIC_NOTATION_UPPER_BOUND || (absValue !== 0 && absValue < SCIENTIFIC_NOTATION_LOWER_BOUND)) {
         const expStr = absValue.toExponential(Math.max(0, sigFigs - 1));
         const parts = expStr.split('e');
         let coefficient = parseFloat(parts[0]).toString();
@@ -5718,7 +6240,7 @@ export function formatNumber(value, sigFigs) {
         } else {
             decimalPlacesToDisplay = Math.max(0, sigFigs - integerDigits);
         }
-        decimalPlacesToDisplay = Math.min(decimalPlacesToDisplay, 10);
+        decimalPlacesToDisplay = Math.min(decimalPlacesToDisplay, MAX_DECIMAL_PLACES_FORMAT);
         let fixedStr = absValue.toFixed(decimalPlacesToDisplay);
         let num = parseFloat(fixedStr);
         if (Math.abs(num) === 0 && value !== 0) {
@@ -5737,7 +6259,7 @@ export function generateAngleSnapFractions(maxDenominator, maxResultingMultipleO
     const fractionsSet = new Set();
     fractionsSet.add(0);
     for (let q = 1; q <= maxDenominator; q++) {
-        for (let p = 0; p <= q * maxResultingMultipleOfBase; p++) { // p can be 0 for 0A or 0D
+        for (let p = 0; p <= q * maxResultingMultipleOfBase; p++) {
             fractionsSet.add(p / q);
         }
     }
@@ -5746,7 +6268,7 @@ export function generateAngleSnapFractions(maxDenominator, maxResultingMultipleO
 
 export function solveForPoint(N1, N2, d1, alpha) {
     const d_n = distance(N1, N2);
-    if (d_n < 1e-6 || Math.sin(alpha) < 1e-6) return [];
+    if (d_n < GEOMETRY_CALCULATION_EPSILON || Math.sin(alpha) < GEOMETRY_CALCULATION_EPSILON) return [];
     const solutions = [];
     const A = 1,
         B = -2 * d1 * Math.cos(alpha),
@@ -5769,13 +6291,11 @@ export function solveForPoint(N1, N2, d1, alpha) {
 export function generateDistanceSnapFactors() {
     const fractionsSet = new Set();
     fractionsSet.add(0);
-    // Denominators up to 6 for factors <= 1
     for (let q = 1; q <= 6; q++) {
         for (let p = 1; p <= q; p++) {
             fractionsSet.add(p / q);
         }
     }
-    // Denominators 1 and 2 for factors > 1
     for (let i = 1; i <= 10; i++) {
         fractionsSet.add(i);
         if (i > 1) {
@@ -5790,22 +6310,22 @@ export function generateUniqueId() {
 }
 
 export function normalizeAngle(angleRad) {
-    while (angleRad < 0) angleRad += 2 * Math.PI;
-    while (angleRad >= 2 * Math.PI) angleRad -= 2 * Math.PI;
+    while (angleRad < 0) angleRad += RADIANS_IN_CIRCLE;
+    while (angleRad >= RADIANS_IN_CIRCLE) angleRad -= RADIANS_IN_CIRCLE;
     return angleRad;
 }
 
 export function normalizeAngleToPi(angleRad) {
     angleRad = normalizeAngle(angleRad);
     if (angleRad > Math.PI) {
-        angleRad -= 2 * Math.PI;
+        angleRad -= RADIANS_IN_CIRCLE;
     }
     return angleRad;
 }
 
 export function normalizeAngleDegrees(angleDeg) {
-    while (angleDeg < 0) angleDeg += 360;
-    while (angleDeg >= 360) angleDeg -= 360;
+    while (angleDeg < 0) angleDeg += DEGREES_IN_CIRCLE;
+    while (angleDeg >= DEGREES_IN_CIRCLE) angleDeg -= DEGREES_IN_CIRCLE;
     return angleDeg;
 }
 
@@ -5834,12 +6354,10 @@ export function getLineCircleIntersection(line, circle) {
 export function getLineLineIntersection(line1, line2) {
     const p1 = line1.p1, p2 = line1.p2, p3 = line2.p1, p4 = line2.p2;
     const den = (p1.x - p2.x) * (p3.y - p4.y) - (p1.y - p2.y) * (p3.x - p4.x);
-    if (Math.abs(den) < 1e-9) return null;
+    if (Math.abs(den) < GEOMETRY_CALCULATION_EPSILON) return null;
     const t = ((p1.x - p3.x) * (p3.y - p4.y) - (p1.y - p3.y) * (p3.x - p4.x)) / den;
     const u = -((p1.x - p2.x) * (p1.y - p3.y) - (p1.y - p2.y) * (p1.x - p3.x)) / den;
     
-    // We are interested in intersections on the infinite bisector line, so we don't check if t is between 0 and 1.
-    // We only care that the intersection happens on the grid line segment, which u controls.
     if (u >= 0 && u <= 1) { 
         return { x: p1.x + t * (p2.x - p1.x), y: p1.y + t * (p2.y - p1.y) };
     }
@@ -5867,15 +6385,12 @@ export function formatSimplifiedRoot(coeff, radicand, symbol = '') {
     const symString = symbol ? `\\${symbol}` : '';
 
     if (radicand === 1) {
-        // It's a perfect square, no root symbol needed.
         if (coeff === 1 && symbol) return symString;
         return `${coeff}${symString}`;
     }
     if (coeff === 1) {
-        // No coefficient needed.
         return `\\sqrt{${radicand}}${symString}`;
     }
-    // Default case
     return `${coeff}\\sqrt{${radicand}}${symString}`;
 }
 
@@ -5901,14 +6416,14 @@ export function distance(p1, p2) {
     return Math.sqrt(Math.pow(p1.x - p2.x, 2) + Math.pow(p1.y - p2.y, 2));
 }
 
-export function formatFraction(decimal, tolerance = 0.015, maxDisplayDenominator = 32) {
-    if (Math.abs(decimal) < 0.00001) return "0";
+export function formatFraction(decimal, tolerance = FRACTION_FORMAT_TOLERANCE, maxDisplayDenominator = FRACTION_FORMAT_MAX_DENOMINATOR) {
+    if (Math.abs(decimal) < ZERO_TOLERANCE) return "0";
     const originalSign = decimal < 0 ? "-" : "";
     const absDecimal = Math.abs(decimal);
 
     if (Math.abs(absDecimal - Math.round(absDecimal)) < tolerance) {
-      const rounded = Math.round(absDecimal);
-      return originalSign + rounded.toString();
+        const rounded = Math.round(absDecimal);
+        return originalSign + rounded.toString();
     }
 
     const fractions = [
@@ -5927,7 +6442,7 @@ export function formatFraction(decimal, tolerance = 0.015, maxDisplayDenominator
 
     for (let currentDen = 1; currentDen <= maxDisplayDenominator; currentDen++) {
         const currentNum = Math.round(absDecimal * currentDen);
-        if (currentNum === 0 && absDecimal > 0.00001) continue;
+        if (currentNum === 0 && absDecimal > ZERO_TOLERANCE) continue;
         if (Math.abs(absDecimal - currentNum / currentDen) < tolerance / currentDen) {
             const common = gcd(currentNum, currentDen);
             const n = currentNum/common;
@@ -5937,7 +6452,7 @@ export function formatFraction(decimal, tolerance = 0.015, maxDisplayDenominator
         }
     }
     let fixedPrecision = 2;
-         if (absDecimal < 0.01) fixedPrecision = 3;
+        if (absDecimal < 0.01) fixedPrecision = 3;
     else if (absDecimal < 0.1)  fixedPrecision = 2;
     else if (absDecimal < 10)   fixedPrecision = 1;
     else                        fixedPrecision = 0;
@@ -5949,7 +6464,7 @@ export function formatCoordinateValue(value, decimalPlaces) {
     if (typeof value !== 'number' || isNaN(value)) {
         return '...';
     }
-    const sign = value < 0 ? "-" : "\\phantom{-}";
+    const sign = value < 0 ? "-" : KATEX_MINUS_PHANTOM;
     const fixedValue = Math.abs(value).toFixed(decimalPlaces);
     return sign + fixedValue;
 }
@@ -5971,7 +6486,7 @@ export function getClosestPointOnLineSegment(p, a, b) {
         return { x: a.x, y: a.y, distance: distance(p, a), onSegmentStrict: true, t: 0 };
     }
     let t = (acx * abx + acy * aby) / lenSqAB;
-    const onSegmentStrict = t > 0.00001 && t < 0.99999;
+    const onSegmentStrict = t > ON_SEGMENT_STRICT_T_MIN && t < ON_SEGMENT_STRICT_T_MAX;
     const clampedT = Math.max(0, Math.min(1, t));
     const closestX = a.x + clampedT * abx;
     const closestY = a.y + clampedT * aby;
@@ -5985,7 +6500,7 @@ export function getMousePosOnCanvas(event, canvasElement) {
 }
 
 export function snapToAngle(targetAngleRad, offsetAngleRad, angleSnapFractionsArray, baseReferenceAngleRad, forceSnap = false) {
-    if (isNaN(targetAngleRad) || isNaN(offsetAngleRad) || Math.abs(baseReferenceAngleRad) < 1e-9) {
+    if (isNaN(targetAngleRad) || isNaN(offsetAngleRad) || Math.abs(baseReferenceAngleRad) < GEOMETRY_CALCULATION_EPSILON) {
         const defaultAngle = isNaN(offsetAngleRad) ? 0 : offsetAngleRad;
         return { angle: defaultAngle, turn: 0, factor: null };
     }
@@ -5994,12 +6509,9 @@ export function snapToAngle(targetAngleRad, offsetAngleRad, angleSnapFractionsAr
     let bestTurn = normalizeAngleToPi(targetAngleRad - offsetAngleRad);
     let bestFactor = null;
 
-    // Calculate the maximum allowed snap factor to keep the turn <= 180 degrees (PI).
-    // Add a small tolerance to avoid floating point inaccuracies.
     const maxAllowedFactor = (Math.PI + 0.0001) / Math.abs(baseReferenceAngleRad);
 
     for (const fraction of angleSnapFractionsArray) {
-        // Ensure the snap factor does not result in a turn greater than a half circle.
         if (fraction > maxAllowedFactor) {
             continue;
         }
@@ -6027,8 +6539,7 @@ export function snapToAngle(targetAngleRad, offsetAngleRad, angleSnapFractionsAr
         }
     }
 
-    const snapThresholdRad = Math.PI / 24;
-    if (forceSnap || minAngleDifference < snapThresholdRad) {
+    if (forceSnap || minAngleDifference < ANGLE_SNAP_THRESHOLD_RAD) {
         return { angle: bestSnappedAngleRad, turn: bestTurn, factor: bestFactor };
     }
 
@@ -6039,7 +6550,7 @@ export function hslToRgb(h, s, l) {
     let r, g, b;
 
     if (s === 0) {
-        r = g = b = l; // This handles the gray (achromatic) case
+        r = g = b = l;
     } else {
         const hue2rgb = (p, q, t) => {
             if (t < 0) t += 1;

@@ -79,6 +79,8 @@ import {
     UI_MENU_ICON_LINE_WIDTH,
     UI_TRANSFORM_TOOL_LABEL_FONT_SIZE,
     UI_TRANSFORM_TOOL_LABEL_TEXT,
+    UI_SYMMETRY_TOOL_LABEL_FONT_SIZE,
+    UI_SYMMETRY_TOOL_LABEL_TEXT,
     UI_DISPLAY_ICON_BAR_WIDTH_PADDING,
     UI_DISPLAY_ICON_Y_OFFSET,
     UI_DISPLAY_ICON_Y_SPACING,
@@ -88,6 +90,7 @@ import {
     UI_BUTTON_ICON_PADDING,
     UI_GHOST_ICON_SIZE,
     COLOR_WHEEL_FADE_START_RADIUS_FACTOR,
+    TRANSFORM_ICON_SIZE,
 
     // --- FEEDBACK LABELS & TEXT ---
     FEEDBACK_LABEL_FONT_SIZE,
@@ -149,6 +152,10 @@ import {
     TRANSFORM_TYPE_ROTATE_SCALE,
     TRANSFORM_TYPE_ROTATE_ONLY,
     TRANSFORM_TYPE_SCALE_ONLY,
+    SYMMETRY_TYPE_TRANSLATION,
+    SYMMETRY_TYPE_ROTATION,
+    SYMMETRY_TYPE_SCALE,
+    SYMMETRY_TYPE_MIRROR,
     COORDS_DISPLAY_MODE_NONE,
     COORDS_DISPLAY_MODE_REGULAR,
     COORDS_DISPLAY_MODE_COMPLEX,
@@ -1538,8 +1545,8 @@ function drawCenterSymbol(ctx, point, dataToScreen, colors) {
     }
 }
 
-export function drawPoint(ctx, point, { selectedPointIds, selectedCenterIds, activeCenterId, currentColor, colors }, dataToScreen) {
-        let isSelected;
+export function drawPoint(ctx, point, { selectedPointIds, selectedCenterIds, activeCenterId, currentColor, colors }, dataToScreen, updateHtmlLabel) {
+    let isSelected;
     if (point.type === POINT_TYPE_REGULAR) {
         isSelected = selectedPointIds.includes(point.id);
     } else {
@@ -1549,13 +1556,44 @@ export function drawPoint(ctx, point, { selectedPointIds, selectedCenterIds, act
     const pointColor = point.color || currentColor;
     const screenPos = dataToScreen(point);
 
-    if (point.type !== POINT_TYPE_REGULAR) {
-        drawCenterSymbol(ctx, point, dataToScreen, colors);
-    } else {
-        ctx.beginPath();
-        ctx.arc(screenPos.x, screenPos.y, POINT_RADIUS, 0, RADIANS_IN_CIRCLE);
-        ctx.fillStyle = pointColor;
-        ctx.fill();
+    switch (point.type) {
+        case POINT_TYPE_REGULAR:
+            ctx.beginPath();
+            ctx.arc(screenPos.x, screenPos.y, POINT_RADIUS, 0, RADIANS_IN_CIRCLE);
+            ctx.fillStyle = pointColor;
+            ctx.fill();
+            break;
+        case TRANSFORM_TYPE_ROTATE_SCALE:
+        case TRANSFORM_TYPE_ROTATE_ONLY:
+        case TRANSFORM_TYPE_SCALE_ONLY:
+            drawCenterSymbol(ctx, point, dataToScreen, colors);
+            break;
+        case SYMMETRY_TYPE_TRANSLATION:
+        case SYMMETRY_TYPE_ROTATION:
+        case SYMMETRY_TYPE_SCALE:
+        case SYMMETRY_TYPE_MIRROR:
+            const onCanvasIconSize = CENTER_POINT_VISUAL_RADIUS * 2;
+            const icon = {
+                type: point.type,
+                x: screenPos.x - onCanvasIconSize / 2,
+                y: screenPos.y - onCanvasIconSize / 2,
+                width: onCanvasIconSize,
+                height: onCanvasIconSize
+            };
+            drawUISymmetrySymbol(ctx, icon, colors);
+            if (point.type !== SYMMETRY_TYPE_MIRROR) {
+                const labelId = `symmetry-n-label-${point.id}`;
+                updateHtmlLabel({
+                    id: labelId,
+                    content: point.n.toString(),
+                    x: screenPos.x + onCanvasIconSize / 2 * 0.9,
+                    y: screenPos.y - onCanvasIconSize / 2 * 0.9,
+                    color: colors.uiIcon,
+                    fontSize: UI_ICON_LABEL_FONT_SIZE * 1.5,
+                    options: { textAlign: 'center', textBaseline: 'middle' }
+                });
+            }
+            break;
     }
 
     if (isSelected) {
@@ -1565,7 +1603,12 @@ export function drawPoint(ctx, point, { selectedPointIds, selectedCenterIds, act
         ctx.globalAlpha = SELECTION_GLOW_ALPHA;
 
         ctx.beginPath();
-        const glowRadius = point.type !== POINT_TYPE_REGULAR ? CENTER_POINT_VISUAL_RADIUS + SELECTION_GLOW_RADIUS_OFFSET : POINT_RADIUS + SELECTION_GLOW_RADIUS_OFFSET;
+        let glowRadius;
+        if (point.type === POINT_TYPE_REGULAR) {
+            glowRadius = POINT_RADIUS + SELECTION_GLOW_RADIUS_OFFSET;
+        } else {
+            glowRadius = CENTER_POINT_VISUAL_RADIUS + SELECTION_GLOW_RADIUS_OFFSET;
+        }
         ctx.arc(screenPos.x, screenPos.y, glowRadius, 0, RADIANS_IN_CIRCLE);
         ctx.strokeStyle = point.id === activeCenterId ? colors.activeCenterGlow : colors.selectionGlow;
         ctx.lineWidth = SELECTION_GLOW_LINE_WIDTH;
@@ -2665,10 +2708,81 @@ export function drawDisplayIcon(ctx, icon, state, htmlOverlay, updateHtmlLabel) 
     }
 }
 
+function drawUISymmetrySymbol(ctx, icon, colors) {
+    const screenPos = { x: icon.x + icon.width / 2, y: icon.y + icon.height / 2 };
+    const radius = icon.width / 2;
+    ctx.strokeStyle = colors.uiIcon;
+    ctx.fillStyle = colors.uiIcon;
+    ctx.setLineDash([]);
+    ctx.lineWidth = UI_ICON_LINE_WIDTH_SMALL;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+
+    ctx.save();
+    ctx.translate(screenPos.x, screenPos.y);
+
+    switch (icon.type) {
+        case SYMMETRY_TYPE_TRANSLATION: {
+            const yPos = [-0.6, 0, 0.6];
+            yPos.forEach(y => {
+                ctx.beginPath();
+                ctx.moveTo(-radius, y * radius);
+                ctx.lineTo(radius, y * radius);
+                ctx.stroke();
+            });
+            break;
+        }
+
+        case SYMMETRY_TYPE_ROTATION: {
+            for (let i = 0; i < 3; i++) {
+                const angle = i * (Math.PI / 3);
+                ctx.save();
+                ctx.rotate(angle);
+                ctx.beginPath();
+                ctx.moveTo(-radius, 0);
+                ctx.lineTo(radius, 0);
+                ctx.stroke();
+                ctx.restore();
+            }
+            break;
+        }
+
+        case SYMMETRY_TYPE_SCALE: {
+            const radii = [0.33, 0.66, 1.0];
+            radii.forEach(r => {
+                ctx.beginPath();
+                ctx.arc(0, 0, radius * r, 0, 2 * Math.PI);
+                ctx.stroke();
+            });
+            break;
+        }
+
+        case SYMMETRY_TYPE_MIRROR: {
+            ctx.beginPath();
+            ctx.moveTo(0, -radius);
+            ctx.lineTo(0, radius);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.moveTo(-radius, 0);
+            ctx.lineTo(radius, 0);
+            ctx.moveTo(-radius, 0);
+            ctx.lineTo(-radius + 4, -3);
+            ctx.moveTo(-radius, 0);
+            ctx.lineTo(-radius + 4, 3);
+            ctx.moveTo(radius, 0);
+            ctx.lineTo(radius - 4, -3);
+            ctx.moveTo(radius, 0);
+            ctx.lineTo(radius - 4, 3);
+            ctx.stroke();
+            break;
+        }
+    }
+    ctx.restore();
+}
+
 export function drawCanvasUI(ctx, htmlOverlay, state, updateHtmlLabel) {
-    // The state object is now passed through correctly
-    const { dpr, canvasUI, isToolbarExpanded, isColorPaletteExpanded, isTransformPanelExpanded, isDisplayPanelExpanded, isPlacingTransform, placingTransformType, placingSnapPos, mousePos, selectedSwatchIndex, recentColors, activeThemeName, colors } = state;
-    
+    const { dpr, canvasUI, isToolbarExpanded, isColorPaletteExpanded, isTransformPanelExpanded, isDisplayPanelExpanded, isSymmetryPanelExpanded, isPlacingTransform, placingTransformType, isPlacingSymmetry, placingSymmetryType, placingSnapPos, mousePos, selectedSwatchIndex, recentColors, activeThemeName, colors } = state;
+
     ctx.save();
     ctx.resetTransform();
     ctx.scale(dpr, dpr);
@@ -2698,6 +2812,11 @@ export function drawCanvasUI(ctx, htmlOverlay, state, updateHtmlLabel) {
             updateHtmlLabel({ id: 'transform-tool-label', content: UI_TRANSFORM_TOOL_LABEL_TEXT, x: ttb.x + ttb.width / 2, y: ttb.y + ttb.height / 2, color: colors.uiIcon, fontSize: UI_TRANSFORM_TOOL_LABEL_FONT_SIZE, options: { textAlign: 'center', textBaseline: 'middle' } }, htmlOverlay);
         }
 
+        const stb = canvasUI.symmetryToolButton;
+        if (stb) {
+            updateHtmlLabel({ id: 'symmetry-tool-label', content: UI_SYMMETRY_TOOL_LABEL_TEXT, x: stb.x + stb.width / 2, y: stb.y + stb.height / 2, color: colors.uiIcon, fontSize: UI_SYMMETRY_TOOL_LABEL_FONT_SIZE, options: { textAlign: 'center', textBaseline: 'middle' } }, htmlOverlay);
+        }
+
         const dtb = canvasUI.displayToolButton;
         if (dtb) {
             ctx.strokeStyle = colors.uiDefault;
@@ -2715,7 +2834,7 @@ export function drawCanvasUI(ctx, htmlOverlay, state, updateHtmlLabel) {
                 ctx.fill();
             }
         }
-        
+
         const themeBtn = canvasUI.themeToggleButton;
         if (themeBtn) {
             drawThemeIcon(ctx, themeBtn, activeThemeName, colors);
@@ -2762,10 +2881,14 @@ export function drawCanvasUI(ctx, htmlOverlay, state, updateHtmlLabel) {
         });
     }
 
+    if (isSymmetryPanelExpanded) {
+        canvasUI.symmetryIcons.forEach(icon => {
+            drawUISymmetrySymbol(ctx, icon, colors);
+        });
+    }
+
     if (isDisplayPanelExpanded) {
         canvasUI.displayIcons.forEach(icon => {
-            // This now correctly passes the complete state object, which contains
-            // the necessary display modes and colors for the icons to draw correctly.
             drawDisplayIcon(ctx, icon, state, htmlOverlay, updateHtmlLabel);
         });
     }
@@ -2776,6 +2899,15 @@ export function drawCanvasUI(ctx, htmlOverlay, state, updateHtmlLabel) {
             const iconHalfSize = UI_GHOST_ICON_SIZE / 2;
             const ghostIcon = { type: placingTransformType, x: finalDrawPos.x - iconHalfSize, y: finalDrawPos.y - iconHalfSize, width: UI_GHOST_ICON_SIZE, height: UI_GHOST_ICON_SIZE };
             drawUITransformSymbol(ctx, ghostIcon, colors);
+        }
+    }
+
+    if (isPlacingSymmetry) {
+        const finalDrawPos = placingSnapPos || mousePos;
+        if (finalDrawPos) {
+            const iconHalfSize = UI_GHOST_ICON_SIZE / 2;
+            const ghostIcon = { type: placingSymmetryType, x: finalDrawPos.x - iconHalfSize, y: finalDrawPos.y - iconHalfSize, width: UI_GHOST_ICON_SIZE, height: UI_GHOST_ICON_SIZE };
+            drawUISymmetrySymbol(ctx, ghostIcon, colors);
         }
     }
 
