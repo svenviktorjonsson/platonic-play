@@ -133,43 +133,11 @@ export function normalizeAngle(angleRad) {
     return angleRad;
 }
 
-export function calculateRotationAngle(startAngle, currentAngle, previousRotation = 0) {
-    // Calculate the raw difference
-    let rawDiff = currentAngle - startAngle;
-    
-    // Always choose the path that continues in the same direction as previous rotation
-    if (Math.abs(previousRotation) > 0.01) {
-        // We have a previous rotation - continue in the same direction
-        const wasPositive = previousRotation > 0;
-        
-        // Check if we need to add/subtract full rotations to maintain direction
-        while (wasPositive && rawDiff < previousRotation - Math.PI) {
-            rawDiff += 2 * Math.PI;
-        }
-        while (!wasPositive && rawDiff > previousRotation + Math.PI) {
-            rawDiff -= 2 * Math.PI;
-        }
-        
-        // Also handle if we're close to the previous angle but wrapped around
-        const diffFromPrevious = Math.abs(rawDiff - previousRotation);
-        const diffFromPreviousPlusTwoPi = Math.abs(rawDiff + 2 * Math.PI - previousRotation);
-        const diffFromPreviousMinusTwoPi = Math.abs(rawDiff - 2 * Math.PI - previousRotation);
-        
-        if (diffFromPreviousPlusTwoPi < diffFromPrevious && diffFromPreviousPlusTwoPi < diffFromPreviousMinusTwoPi) {
-            rawDiff += 2 * Math.PI;
-        } else if (diffFromPreviousMinusTwoPi < diffFromPrevious && diffFromPreviousMinusTwoPi < diffFromPreviousPlusTwoPi) {
-            rawDiff -= 2 * Math.PI;
-        }
-    } else {
-        // Initial rotation - just handle basic ±180° wrapping for the shorter path
-        if (rawDiff > Math.PI) {
-            rawDiff -= 2 * Math.PI;
-        } else if (rawDiff < -Math.PI) {
-            rawDiff += 2 * Math.PI;
-        }
-    }
-    
-    return rawDiff;
+export function calculateRotationAngle(initialStartAngle, currentMouseAngle, totalAccumulatedRotationFromStart = 0) {
+    let rawDeltaAngle = currentMouseAngle - initialStartAngle;
+    let numRevolutions = Math.round((totalAccumulatedRotationFromStart - rawDeltaAngle) / (2 * Math.PI));
+    let continuousDeltaAngle = rawDeltaAngle + numRevolutions * (2 * Math.PI);
+    return continuousDeltaAngle;
 }
 
 export function normalizeAngleToPi(angleRad) {
