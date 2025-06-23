@@ -7,12 +7,15 @@ import {
     getMousePosOnCanvas,
     getLineCircleIntersection,
     getLineLineIntersection,
-    getNearestGridPoints
+    getNearestGridPoints,
+    invertGrayscaleValue,
+    getCurrentTheme,
+    calculateRotationAngle
 } from './utils.js';
 
 import {
-    // Import the main THEMES object
-    THEMES,
+    BASE_THEME,
+    DEFAULT_RECENT_COLORS,
 
     // --- GEOMETRY & DRAWING ---
     POINT_RADIUS,
@@ -192,7 +195,7 @@ let backgroundPanStartOffset = { x: 0, y: 0 };
 let initialDragPointStates = [];
 let rectangleSelectStartPos = { x: 0, y: 0 };
 let actionContext = null;
-let recentColors = ['#ffffff', '#ff4444', '#44ff44', '#4444ff', '#ffff44', '#ff44ff', '#44ffff', '#ffa544'];
+let recentColors = DEFAULT_RECENT_COLORS;
 let isDrawingMode = false;
 let previewLineStartPointId = null;
 let actionTargetPoint = null;
@@ -230,9 +233,25 @@ let lastAngularGridState = {
 let labelsToKeepThisFrame = new Set();
 
 let activeThemeName = 'dark';
-let currentColor = THEMES[activeThemeName].point;
+let currentColor = getColors().point;
 
+function getColors() {
+    return getCurrentTheme(activeThemeName, BASE_THEME);
+}
 
+function invertPointColors() {
+    allPoints.forEach(point => {
+        if (point.type === POINT_TYPE_REGULAR) {
+            // Always invert the color, whether it exists or not
+            if (point.color) {
+                point.color = invertGrayscaleValue(point.color);
+            } else {
+                // If no color, use the current theme's point color
+                point.color = getColors().point;
+            }
+        }
+    });
+}
 
 function updateHtmlLabel({ id, content, x, y, color, fontSize, options = {} }) {
     labelsToKeepThisFrame.add(id);
@@ -465,11 +484,30 @@ function getTransformSnap(center, mouseDataPos, startReferencePoint, transformTy
         
         if (useAngleSnaps) {
             const rotationSnaps = angleSnapFractions.flatMap(f => (f === 0 ? [0] : [f * Math.PI / 2, -f * Math.PI / 2]));
-            for (const rot of rotationSnaps) {
+            for (const snapRotation of rotationSnaps) {
+                let targetAngle = startAngle + snapRotation;
+                
+                if (transformIndicatorData && Math.abs(transformIndicatorData.rotation) > 0.01) {
+                    const currentRotation = transformIndicatorData.rotation;
+                    const alternatives = [
+                        snapRotation,
+                        snapRotation + 2 * Math.PI,
+                        snapRotation - 2 * Math.PI
+                    ];
+                    
+                    const best = alternatives.reduce((best, current) => {
+                        return Math.abs(current - currentRotation) < Math.abs(best - currentRotation) ? current : best;
+                    });
+                    
+                    targetAngle = startAngle + best;
+                }
+                
                 const dist = startDist;
                 allCandidates.push({
-                    pos: { x: center.x + dist * Math.cos(startAngle + rot), y: center.y + dist * Math.sin(startAngle + rot) },
-                    type: 'transform', pureRotation: rot, pureScale: 1
+                    pos: { x: center.x + dist * Math.cos(targetAngle), y: center.y + dist * Math.sin(targetAngle) },
+                    type: 'transform', 
+                    pureRotation: snapRotation, 
+                    pureScale: 1
                 });
             }
         }
@@ -515,7 +553,8 @@ function getTransformSnap(center, mouseDataPos, startReferencePoint, transformTy
     } else {
         if (transformType === TRANSFORMATION_TYPE_ROTATION) {
             finalScale = 1;
-            finalRotation = normalizeAngleToPi(Math.atan2(finalVec.y, finalVec.x) - startAngle);
+            const currentAngle = Math.atan2(finalVec.y, finalVec.x);
+            finalRotation = calculateRotationAngle(startAngle, currentAngle, transformIndicatorData?.rotation || 0);
         } else {
             finalScale = (startDist > GEOMETRY_CALCULATION_EPSILON) ? Math.hypot(finalVec.x, finalVec.y) / startDist : 1;
             finalRotation = 0;
@@ -998,6 +1037,10 @@ function getDragSnapPosition(dragOrigin, mouseDataPos) {
     return { point: mouseDataPos, snapped: false };
 }
 
+function invertRecentColors() {
+    recentColors = recentColors.map(color => invertGrayscaleValue(color));
+}
+
 function getDirectionalScalingSnap(center, mouseDataPos, startReferencePoint) {
     const startVector = { x: startReferencePoint.x - center.x, y: startReferencePoint.y - center.y };
     const startDist = Math.hypot(startVector.x, startVector.y);
@@ -1374,9 +1417,7 @@ function handleCanvasUIClick(screenPos) {
         const themeBtn = canvasUI.themeToggleButton;
         if (themeBtn && screenPos.x >= themeBtn.x && screenPos.x <= themeBtn.x + themeBtn.width &&
             screenPos.y >= themeBtn.y && screenPos.y <= themeBtn.y + themeBtn.height) {
-            activeThemeName = activeThemeName === 'dark' ? 'light' : 'dark';
-            currentColor = THEMES[activeThemeName].point;
-            colorPicker.value = currentColor;
+            handleThemeToggle();
             return true;
         }
     }
@@ -1462,6 +1503,26 @@ function handleCanvasUIClick(screenPos) {
     }
 
     return false;
+}
+
+function handleThemeToggle() {
+    saveStateForUndo();
+    
+    // Toggle theme name
+    activeThemeName = activeThemeName === 'dark' ? 'light' : 'dark';
+    
+    // Invert all point colors, recent colors, and current color
+    invertPointColors();
+    invertRecentColors();
+    currentColor = invertGrayscaleValue(currentColor);
+    colorPicker.value = currentColor;
+    
+    // Update UI if needed
+    if (isColorPaletteExpanded) {
+        buildColorPaletteUI();
+        const currentIndex = recentColors.indexOf(currentColor);
+        selectedSwatchIndex = (currentIndex > -1) ? currentIndex : null;
+    }
 }
 
 function addToRecentColors(color) {
@@ -1986,7 +2047,7 @@ function applySelectionLogic(pointIdsToSelect, edgeIdsToSelect, wantsShift, want
 
 function setCurrentColor(newColor) {
     const oldColor = currentColor;
-    const colors = THEMES[activeThemeName];
+    const colors = getColors();
     let changedPoints = [];
     if (selectedPointIds.length > 0) {
         selectedPointIds.forEach(id => {
@@ -2039,7 +2100,8 @@ function calculateTransformFromMouse(center, mouseData, startReferencePoint, cen
     const startAngle = Math.atan2(startVector.y, startVector.x);
     const currentAngle = Math.atan2(currentVector.y, currentVector.x);
 
-    let rotation = normalizeAngleToPi(currentAngle - startAngle);
+    // Use the new rotation calculation that handles ±180° crossing
+    let rotation = calculateRotationAngle(startAngle, currentAngle, transformIndicatorData?.rotation || 0);
     let scale = 1;
     let directionalScale = false;
 
@@ -2058,7 +2120,7 @@ function calculateTransformFromMouse(center, mouseData, startReferencePoint, cen
         scale = 1.0;
     } else if (scale < 0) {
         scale = -scale;
-        rotation = normalizeAngleToPi(rotation + Math.PI);
+        rotation = rotation + Math.PI;
     }
 
     return { rotation, scale, directionalScale };
@@ -2066,7 +2128,7 @@ function calculateTransformFromMouse(center, mouseData, startReferencePoint, cen
 
 function redrawAll() {
     labelsToKeepThisFrame.clear();
-    const colors = THEMES[activeThemeName];
+    const colors = getColors() // Get current theme colors here
     const actualCanvasWidth = canvas.width / dpr;
     const actualCanvasHeight = canvas.height / dpr;
     ctx.resetTransform();
@@ -2101,7 +2163,7 @@ function redrawAll() {
     const copyCount = parseInt(copyCountInput || '1', 10);
     const isCopyPreviewMode = copyCount > 1 && isDragConfirmed && initialDragPointStates.length > 0 && initialDragPointStates.some(p => p.type === 'regular');
     const effectiveDragPreviews = isCopyPreviewMode ? [] : dragPreviewPoints;
-    const stateForEdges = { allEdges, selectedEdgeIds, isDragConfirmed, dragPreviewPoints: effectiveDragPreviews, currentColor, colors };
+    const stateForEdges = { allEdges, selectedEdgeIds, isDragConfirmed, dragPreviewPoints: effectiveDragPreviews, currentColor, colors }; // Pass colors here
     drawAllEdges(ctx, stateForEdges, dataToScreen, findPointById, getEdgeId);
 
     const mergeRadiusData = POINT_SELECT_RADIUS / viewTransform.scale;
@@ -2117,7 +2179,7 @@ function redrawAll() {
         }
         const isSelectedAndInCopyPreview = isCopyPreviewMode && initialDragPointStates.some(p => p.id === point.id);
         if (!isSelectedAndInCopyPreview) {
-             drawPoint(ctx, pointToDraw, { selectedPointIds, selectedCenterIds, activeCenterId, currentColor, colors }, dataToScreen, updateHtmlLabel);
+            drawPoint(ctx, pointToDraw, { selectedPointIds, selectedCenterIds, activeCenterId, currentColor, colors }, dataToScreen, updateHtmlLabel); // Pass colors here
         }
     });
     
@@ -2130,7 +2192,7 @@ function redrawAll() {
             pointIdsToCopy.has(edge.id1) && pointIdsToCopy.has(edge.id2)
         );
         
-        pointsToCopyFrom.forEach(p => drawPoint(ctx, p, { selectedPointIds:[], selectedCenterIds:[], activeCenterId:null, currentColor, colors }, dataToScreen, ()=>{}))
+        pointsToCopyFrom.forEach(p => drawPoint(ctx, p, { selectedPointIds:[], selectedCenterIds:[], activeCenterId:null, currentColor, colors }, dataToScreen, ()=>{})) // Pass colors here
         ctx.setLineDash(DASH_PATTERN);
         incidentEdges.forEach(edge => {
             const p1 = allPoints.find(p => p.id === edge.id1);
@@ -2141,7 +2203,7 @@ function redrawAll() {
                 ctx.beginPath();
                 ctx.moveTo(p1Screen.x, p1Screen.y);
                 ctx.lineTo(p2Screen.x, p2Screen.y);
-                ctx.strokeStyle = colors.defaultStroke;
+                ctx.strokeStyle = colors.defaultStroke; // Use theme color
                 ctx.stroke();
             }
         });
@@ -2156,11 +2218,9 @@ function redrawAll() {
                 let effectiveRotation, effectiveScale;
                 
                 if (directionalScale) {
-                    // For directional scaling: each copy uses the same scale factor, rotation is additive
                     effectiveRotation = rotation * i;
                     effectiveScale = scale;
                 } else {
-                    // For regular scaling/rotation: compound the transformations
                     effectiveRotation = rotation * i;
                     effectiveScale = Math.pow(Math.abs(scale), i);
                     const effectiveScaleSign = scale < 0 ? Math.pow(-1, i) : 1;
@@ -2201,19 +2261,19 @@ function redrawAll() {
                         ctx.beginPath();
                         ctx.moveTo(p1Screen.x, p1Screen.y);
                         ctx.lineTo(p2Screen.x, p2Screen.y);
-                        ctx.strokeStyle = colors.defaultStroke;
+                        ctx.strokeStyle = colors.defaultStroke; // Use theme color
                         ctx.stroke();
                     }
                 }
             });
-            previewPointsForThisCopy.forEach(point => drawPoint(ctx, point, { selectedPointIds:[], selectedCenterIds:[], activeCenterId:null, currentColor, colors }, dataToScreen, ()=>{}));
+            previewPointsForThisCopy.forEach(point => drawPoint(ctx, point, { selectedPointIds:[], selectedCenterIds:[], activeCenterId:null, currentColor, colors }, dataToScreen, ()=>{})); // Pass colors here
         }
         ctx.globalAlpha = 1.0;
         ctx.setLineDash([]);
     }
     
     if (transformIndicatorData) {
-        const stateForTransform = { transformIndicatorData, angleSigFigs, distanceSigFigs, colors };
+        const stateForTransform = { transformIndicatorData, angleSigFigs, distanceSigFigs, colors }; // Pass colors here
         drawTransformIndicators(ctx, htmlOverlay, stateForTransform, dataToScreen, updateHtmlLabel);
         labelsToKeepThisFrame.add('transform-angle-indicator');
         labelsToKeepThisFrame.add('transform-scale-indicator');
@@ -2227,7 +2287,7 @@ function redrawAll() {
             const draggedVersion = dragPreviewPoints.find(dp => dp.id === p.id);
             return draggedVersion || p;
         });
-        const stateForFeedback = { lastGridState, showDistances, showAngles, distanceSigFigs, angleDisplayMode, angleSigFigs, currentShiftPressed, viewTransform, colors };
+        const stateForFeedback = { lastGridState, showDistances, showAngles, distanceSigFigs, angleDisplayMode, angleSigFigs, currentShiftPressed, viewTransform, colors }; // Pass colors here
         
         const draggedPointIds = new Set(dragPreviewPoints.map(dp => dp.id));
         const isDraggingAllPointsInGraph = actionContext && actionContext.targetPoint && 
@@ -2259,27 +2319,27 @@ function redrawAll() {
                     frozenReference_D_du: null,
                     gridDisplayMode,
                     frozenReference_A_rad: null,
-                    colors
+                    colors // Pass colors here
                 };
                 drawTranslationFeedback(ctx, htmlOverlay, translationFeedbackState, dataToScreen, updateHtmlLabel);
             }
         } else if (actionContext && actionContext.targetPoint && !isDraggingAllPointsInGraph) {
-            drawDragFeedback(ctx, htmlOverlay, actionContext.targetPoint.id, hybridPointStates, stateForFeedback, dataToScreen, findNeighbors, getEdgeId, currentShiftPressed, null, updateHtmlLabel);
+            drawDragFeedback(ctx, htmlOverlay, actionContext.targetPoint.id, hybridPointStates, stateForFeedback, dataToScreen, findNeighbors, getEdgeId, currentShiftPressed, null, updateHtmlLabel, false); // Add isStaticDisplay: false
         } else if (actionContext && actionContext.targetEdge) {
             const draggedEdgeId = getEdgeId(actionContext.targetEdge);
-            drawDragFeedback(ctx, htmlOverlay, actionContext.targetEdge.id1, hybridPointStates, stateForFeedback, dataToScreen, findNeighbors, getEdgeId, false, null, updateHtmlLabel);
-            drawDragFeedback(ctx, htmlOverlay, actionContext.targetEdge.id2, hybridPointStates, stateForFeedback, dataToScreen, findNeighbors, getEdgeId, false, draggedEdgeId, updateHtmlLabel);
+            drawDragFeedback(ctx, htmlOverlay, actionContext.targetEdge.id1, hybridPointStates, stateForFeedback, dataToScreen, findNeighbors, getEdgeId, false, null, updateHtmlLabel, false); // Add isStaticDisplay: false
+            drawDragFeedback(ctx, htmlOverlay, actionContext.targetEdge.id2, hybridPointStates, stateForFeedback, dataToScreen, findNeighbors, getEdgeId, false, draggedEdgeId, updateHtmlLabel, false); // Add isStaticDisplay: false
         }
     } else if (!isDragConfirmed && !isTransforming && currentShiftPressed) {
-        const stateForFeedback = { lastGridState, showDistances, showAngles, distanceSigFigs, angleDisplayMode, angleSigFigs, currentShiftPressed, viewTransform, colors };
+        const stateForFeedback = { lastGridState, showDistances, showAngles, distanceSigFigs, angleDisplayMode, angleSigFigs, currentShiftPressed, viewTransform, colors }; // Pass colors here
         if (selectedPointIds.length === 1 && selectedEdgeIds.length === 0) {
-            drawDragFeedback(ctx, htmlOverlay, selectedPointIds[0], allPoints, stateForFeedback, dataToScreen, findNeighbors, getEdgeId, false, null, updateHtmlLabel);
+            drawDragFeedback(ctx, htmlOverlay, selectedPointIds[0], allPoints, stateForFeedback, dataToScreen, findNeighbors, getEdgeId, false, null, updateHtmlLabel, true); // Add isStaticDisplay: true
         } else if (selectedEdgeIds.length === 1 && selectedPointIds.length <= 2) {
             const selectedEdgeId = selectedEdgeIds[0];
             const edge = allEdges.find(e => getEdgeId(e) === selectedEdgeId);
             if (edge) {
-                drawDragFeedback(ctx, htmlOverlay, edge.id1, allPoints, stateForFeedback, dataToScreen, findNeighbors, getEdgeId, false, null, updateHtmlLabel);
-                drawDragFeedback(ctx, htmlOverlay, edge.id2, allPoints, stateForFeedback, dataToScreen, findNeighbors, getEdgeId, false, selectedEdgeId, updateHtmlLabel);
+                drawDragFeedback(ctx, htmlOverlay, edge.id1, allPoints, stateForFeedback, dataToScreen, findNeighbors, getEdgeId, false, null, updateHtmlLabel, true); // Add isStaticDisplay: true
+                drawDragFeedback(ctx, htmlOverlay, edge.id2, allPoints, stateForFeedback, dataToScreen, findNeighbors, getEdgeId, false, selectedEdgeId, updateHtmlLabel, true); // Add isStaticDisplay: true
             }
         }
     }
@@ -2288,7 +2348,7 @@ function redrawAll() {
         const screenPos = dataToScreen(ghostPointPosition);
         ctx.beginPath();
         ctx.arc(screenPos.x, screenPos.y, POINT_RADIUS, 0, 2 * Math.PI);
-        ctx.fillStyle = colors.feedbackSnapped;
+        ctx.fillStyle = colors.feedbackSnapped; // Use theme color
         ctx.fill();
     }
 
@@ -2296,7 +2356,7 @@ function redrawAll() {
         const screenPos = dataToScreen(ghostPoint);
         ctx.beginPath();
         ctx.arc(screenPos.x, screenPos.y, POINT_RADIUS, 0, 2 * Math.PI);
-        ctx.fillStyle = colors.feedbackSnapped;
+        ctx.fillStyle = colors.feedbackSnapped; // Use theme color
         ctx.fill();
     });
 
@@ -2319,16 +2379,16 @@ function redrawAll() {
             if (snappedData.snapped) {
                 ctx.beginPath();
                 ctx.arc(targetScreen.x, targetScreen.y, POINT_RADIUS, 0, 2 * Math.PI);
-                ctx.fillStyle = colors.feedbackSnapped;
+                ctx.fillStyle = colors.feedbackSnapped; // Use theme color
                 ctx.fill();
             }
-            const stateForSnapInfo = { showDistances, showAngles, currentShiftPressed, distanceSigFigs, angleSigFigs, angleDisplayMode, viewTransform, frozenReference_D_du, gridDisplayMode, frozenReference_A_rad, colors };
+            const stateForSnapInfo = { showDistances, showAngles, currentShiftPressed, distanceSigFigs, angleSigFigs, angleDisplayMode, viewTransform, frozenReference_D_du, gridDisplayMode, frozenReference_A_rad, colors }; // Pass colors here
             prepareSnapInfoTexts(ctx, htmlOverlay, startPoint, targetPosData, snappedData, stateForSnapInfo, dataToScreen, currentPreviewDrawingContext, updateHtmlLabel);
         }
     }
 
     if (isRectangleSelecting && isDragConfirmed) {
-        ctx.strokeStyle = colors.mouseCoords;
+        ctx.strokeStyle = colors.mouseCoords; // Use theme color
         ctx.lineWidth = 1;
         ctx.setLineDash(DASH_PATTERN);
         const rX = Math.min(rectangleSelectStartPos.x, mousePos.x);
@@ -2339,7 +2399,7 @@ function redrawAll() {
         ctx.setLineDash([]);
     }
 
-    updateMouseCoordinates(htmlOverlay, { coordsDisplayMode, isMouseOverCanvas, currentShiftPressed, ghostPointPosition, gridDisplayMode, lastGridState, angleDisplayMode, canvas, dpr, mousePos, colors}, screenToData, updateHtmlLabel);
+    updateMouseCoordinates(htmlOverlay, { coordsDisplayMode, isMouseOverCanvas, currentShiftPressed, ghostPointPosition, gridDisplayMode, lastGridState, angleDisplayMode, canvas, dpr, mousePos, colors}, screenToData, updateHtmlLabel); // Pass colors here
 
     const stateForUI = {
         dpr, canvasUI, isToolbarExpanded, isColorPaletteExpanded, isTransformPanelExpanded, isDisplayPanelExpanded,
@@ -2626,7 +2686,14 @@ function gameLoop() {
 
 
 colorPicker.addEventListener('change', (e) => {
-    setCurrentColor(e.target.value);
+    const newColor = e.target.value;
+    setCurrentColor(newColor);
+    addToRecentColors(newColor);
+    if (isColorPaletteExpanded) {
+        buildColorPaletteUI();
+        const currentIndex = recentColors.indexOf(newColor);
+        selectedSwatchIndex = (currentIndex > -1) ? currentIndex : null;
+    }
 });
 
 
@@ -3020,7 +3087,7 @@ canvas.addEventListener('mousedown', (event) => {
                 x: dataPos.x,
                 y: dataPos.y,
                 type: type,
-                color: THEMES[activeThemeName].uiIcon,
+                color: getColors().uiIcon,
                 n: 2
             };
             allPoints.push(newObject);

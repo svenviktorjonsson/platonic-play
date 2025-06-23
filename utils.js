@@ -11,7 +11,7 @@ import {
     KATEX_MINUS_PHANTOM,
     ON_SEGMENT_STRICT_T_MIN,
     ON_SEGMENT_STRICT_T_MAX,
-    ANGLE_SNAP_THRESHOLD_RAD
+    ANGLE_SNAP_THRESHOLD_RAD,
 } from './constants.js';
 
 export function formatNumber(value, sigFigs) {
@@ -131,6 +131,45 @@ export function normalizeAngle(angleRad) {
     while (angleRad < 0) angleRad += RADIANS_IN_CIRCLE;
     while (angleRad >= RADIANS_IN_CIRCLE) angleRad -= RADIANS_IN_CIRCLE;
     return angleRad;
+}
+
+export function calculateRotationAngle(startAngle, currentAngle, previousRotation = 0) {
+    // Calculate the raw difference
+    let rawDiff = currentAngle - startAngle;
+    
+    // Always choose the path that continues in the same direction as previous rotation
+    if (Math.abs(previousRotation) > 0.01) {
+        // We have a previous rotation - continue in the same direction
+        const wasPositive = previousRotation > 0;
+        
+        // Check if we need to add/subtract full rotations to maintain direction
+        while (wasPositive && rawDiff < previousRotation - Math.PI) {
+            rawDiff += 2 * Math.PI;
+        }
+        while (!wasPositive && rawDiff > previousRotation + Math.PI) {
+            rawDiff -= 2 * Math.PI;
+        }
+        
+        // Also handle if we're close to the previous angle but wrapped around
+        const diffFromPrevious = Math.abs(rawDiff - previousRotation);
+        const diffFromPreviousPlusTwoPi = Math.abs(rawDiff + 2 * Math.PI - previousRotation);
+        const diffFromPreviousMinusTwoPi = Math.abs(rawDiff - 2 * Math.PI - previousRotation);
+        
+        if (diffFromPreviousPlusTwoPi < diffFromPrevious && diffFromPreviousPlusTwoPi < diffFromPreviousMinusTwoPi) {
+            rawDiff += 2 * Math.PI;
+        } else if (diffFromPreviousMinusTwoPi < diffFromPrevious && diffFromPreviousMinusTwoPi < diffFromPreviousPlusTwoPi) {
+            rawDiff -= 2 * Math.PI;
+        }
+    } else {
+        // Initial rotation - just handle basic ±180° wrapping for the shorter path
+        if (rawDiff > Math.PI) {
+            rawDiff -= 2 * Math.PI;
+        } else if (rawDiff < -Math.PI) {
+            rawDiff += 2 * Math.PI;
+        }
+    }
+    
+    return rawDiff;
 }
 
 export function normalizeAngleToPi(angleRad) {
@@ -362,6 +401,92 @@ export function snapToAngle(targetAngleRad, offsetAngleRad, angleSnapFractionsAr
     }
 
     return { angle: targetAngleRad, turn: normalizeAngleToPi(targetAngleRad - offsetAngleRad), factor: null };
+}
+
+function rgbToHsl(r, g, b) {
+    r /= 255;
+    g /= 255;
+    b /= 255;
+    
+    const max = Math.max(r, g, b);
+    const min = Math.min(r, g, b);
+    let h, s, l = (max + min) / 2;
+
+    if (max === min) {
+        h = s = 0; // achromatic
+    } else {
+        const d = max - min;
+        s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+        
+        switch (max) {
+            case r: h = (g - b) / d + (g < b ? 6 : 0); break;
+            case g: h = (b - r) / d + 2; break;
+            case b: h = (r - g) / d + 4; break;
+        }
+        h /= 6;
+    }
+
+    return [h, s, l];
+}
+
+export function invertGrayscaleValue(value) {
+    if (Array.isArray(value)) {
+        const [h, s, l] = rgbToHsl(value[0], value[1], value[2]);
+        const invertedL = 1 - l; // Invert lightness
+        const [newR, newG, newB] = hslToRgb(h, s, invertedL);
+        return [newR, newG, newB];
+    }
+    
+    if (typeof value === 'string') {
+        if (value.startsWith('rgba(')) {
+            const match = value.match(/rgba\((\d+),\s*(\d+),\s*(\d+),\s*([\d.]+)\)/);
+            if (match) {
+                const [, r, g, b, a] = match;
+                const rVal = parseInt(r), gVal = parseInt(g), bVal = parseInt(b);
+                const [h, s, l] = rgbToHsl(rVal, gVal, bVal);
+                const invertedL = 1 - l;
+                const [newR, newG, newB] = hslToRgb(h, s, invertedL);
+                return `rgba(${newR}, ${newG}, ${newB}, ${a})`;
+            }
+        }
+        
+        if (value.startsWith('#')) {
+            if (value.length === 7) {
+                const r = parseInt(value.slice(1, 3), 16);
+                const g = parseInt(value.slice(3, 5), 16);
+                const b = parseInt(value.slice(5, 7), 16);
+                const [h, s, l] = rgbToHsl(r, g, b);
+                const invertedL = 1 - l;
+                const [newR, newG, newB] = hslToRgb(h, s, invertedL);
+                return `#${newR.toString(16).padStart(2, '0')}${newG.toString(16).padStart(2, '0')}${newB.toString(16).padStart(2, '0')}`;
+            }
+        }
+        
+        // Handle named colors
+        if (value === 'white') return 'black';
+        if (value === 'black') return 'white';
+    }
+    
+    return value;
+}
+
+// Function to get the current theme based on active theme name
+export function getCurrentTheme(activeThemeName, baseTheme) {
+    if (activeThemeName === 'dark') {
+        return baseTheme;
+    } else {
+        // Generate light theme by inverting the base (dark) theme
+        const lightTheme = {};
+        for (const [key, value] of Object.entries(baseTheme)) {
+            // Keep some colors the same for light theme (like accent colors)
+            if (key === 'frozenReference' || key === 'feedbackSnapped' || key === 'geometryInfoTextSnapped') {
+                lightTheme[key] = 'rgba(217, 119, 6, 0.95)'; // Orange accent for light theme
+            } else {
+                lightTheme[key] = invertGrayscaleValue(value);
+            }
+        }
+        return lightTheme;
+    }
 }
 
 export function hslToRgb(h, s, l) {

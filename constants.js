@@ -1,17 +1,11 @@
 // constants.js
 
-export const THEMES = {
-  dark: {
-    // Page & Canvas
+export const BASE_THEME = {
     background: '#1a1a1a',
     htmlBody: '#1e1e1e',
-
-    // Grid & Axes
     grid: [136, 136, 136],
     axis: 'rgba(255, 255, 255, 1)',
     axisTickLabel: [255, 255, 255],
-
-    // Geometry & Feedback
     defaultStroke: 'white',
     point: '#ffffff',
     frozenReference: 'rgba(240, 240, 130, 0.95)',
@@ -20,8 +14,6 @@ export const THEMES = {
     geometryInfoText: 'rgba(255, 255, 255, 0.95)',
     geometryInfoTextSnapped: 'rgba(240, 240, 130, 0.95)',
     mouseCoords: 'rgba(255, 255, 255, 0.7)',
-
-    // UI & Icons
     uiIcon: 'white',
     uiIconDefault: '#9CA3AF',
     uiIconSelected: '#F9FAFB',
@@ -30,39 +22,8 @@ export const THEMES = {
     uiDefault: 'rgba(255, 255, 255, 0.8)',
     selectionGlow: '#4da6ff',
     activeCenterGlow: '#00ffff',
-  },
-  light: {
-    // Page & Canvas
-    background: '#f5f5f5',
-    htmlBody: '#e7e5e4',
-
-    // Grid & Axes
-    grid: [203, 203, 203],
-    axis: 'rgba(0, 0, 0, 1)',
-    axisTickLabel: [0, 0, 0],
-
-    // Geometry & Feedback
-    defaultStroke: 'black',
-    point: '#1f2937',
-    frozenReference: 'rgba(217, 119, 6, 0.95)',
-    feedbackDefault: [50, 50, 50],
-    feedbackSnapped: 'rgba(217, 119, 6, 0.95)',
-    geometryInfoText: 'rgba(0, 0, 0, 0.95)',
-    geometryInfoTextSnapped: 'rgba(217, 119, 6, 0.95)',
-    mouseCoords: 'rgba(0, 0, 0, 0.7)',
-
-    // UI & Icons
-    uiIcon: '#1f2937',
-    uiIconDefault: '#4B5563',
-    uiIconSelected: '#1f2937',
-    uiTextSelected: '#1E40AF',
-    uiTextDefault: '#374151',
-    uiDefault: 'rgba(0, 0, 0, 0.8)',
-    selectionGlow: '#2563EB',
-    activeCenterGlow: '#0891B2',
-  }
+    helperLine: 'rgba(200, 200, 200, 0.6)'
 };
-
 
 // --- GEOMETRY & DRAWING ---
 export const POINT_RADIUS = 5;
@@ -173,6 +134,7 @@ export const UI_BUTTON_ICON_PADDING = 7;
 export const UI_GHOST_ICON_SIZE = 30;
 export const COLOR_PALETTE_Y_OFFSET = 5;
 export const COLOR_WHEEL_FADE_START_RADIUS_FACTOR = 0.75;
+export const DEFAULT_RECENT_COLORS = ['#ffffff', '#ff4444', '#44ff44', '#4444ff', '#ffff44', '#ff44ff', '#44ffff', '#ffa544']
 
 // --- FEEDBACK LABELS & TEXT ---
 export const FEEDBACK_LABEL_FONT_SIZE = 12;

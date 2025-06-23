@@ -206,6 +206,8 @@ export function calculateGridIntervals(viewTransformScale) {
     return { grid1Interval, grid2Interval, alpha1, alpha2 };
 }
 
+
+
 export function getDynamicAngularIntervals(viewTransform, canvasWidth, canvasHeight, dataToScreen) {
     const originScreen = dataToScreen({ x: 0, y: 0 });
     const screenCenter = { x: canvasWidth / 2, y: canvasHeight / 2 };
@@ -1651,7 +1653,7 @@ export function drawAllEdges(ctx, { allEdges, selectedEdgeIds, isDragConfirmed, 
 }
 
 export function drawDragFeedback(ctx, htmlOverlay, targetPointId, currentPointStates, { lastGridState, showDistances, showAngles, distanceSigFigs, angleDisplayMode, angleSigFigs, currentShiftPressed, viewTransform, colors }, dataToScreen, findNeighbors, getEdgeId, isSnapping = false, excludedEdgeId = null, updateHtmlLabel = null) {
-        const feedbackColor = isSnapping ? colors.feedbackSnapped : `rgba(${colors.feedbackDefault.join(',')}, 1.0)`;
+    const feedbackColor = isSnapping ? colors.feedbackSnapped : `rgba(${colors.feedbackDefault.join(',')}, 1.0)`;
 
     const livePoints = new Map(currentPointStates.map(p => [p.id, { ...p }]));
     const getLivePoint = (id) => livePoints.get(id);
@@ -1822,8 +1824,9 @@ export function drawTransformIndicators(ctx, htmlOverlay, { transformIndicatorDa
         ctx.stroke();
 
         if (Math.abs(rotation) > MIN_TRANSFORM_ACTION_THRESHOLD) {
+            // Convert data rotation to screen rotation (flip Y)
             const screenRotation = -rotation;
-            const anticlockwise = screenRotation < 0;
+            const anticlockwise = rotation > 0; // Use data rotation for direction
             ctx.setLineDash([]);
             ctx.beginPath();
             ctx.arc(centerScreen.x, centerScreen.y, arcRadius, startAngleScreen, startAngleScreen + screenRotation, anticlockwise);
@@ -1854,14 +1857,16 @@ export function drawTransformIndicators(ctx, htmlOverlay, { transformIndicatorDa
     ctx.restore();
 
     if (transformType === TRANSFORMATION_TYPE_ROTATION && Math.abs(rotation) > MIN_TRANSFORM_ACTION_THRESHOLD) {
-        const angleDeg = rotation * (DEGREES_IN_HALF_CIRCLE / Math.PI);
+        // Display the actual rotation angle in degrees (maintain sign)
+        const angleDeg = rotation * (180 / Math.PI);
         const angleText = `${parseFloat(angleDeg.toFixed(4)).toString()}^{\\circ}`;
         const startVecScreen = { x: startScreen.x - centerScreen.x, y: startScreen.y - centerScreen.y };
         const currentVecScreen = { x: dataToScreen(currentPos).x - centerScreen.x, y: dataToScreen(currentPos).y - centerScreen.y };
         const startAngleScreen = Math.atan2(startVecScreen.y, startVecScreen.x);
         const currentAngleScreen = Math.atan2(currentVecScreen.y, currentVecScreen.x);
-        const angleDiff = normalizeAngleToPi(currentAngleScreen - startAngleScreen);
-        const bisectorAngle = startAngleScreen + angleDiff / 2;
+        
+        // Calculate bisector for label placement
+        const bisectorAngle = startAngleScreen + (-rotation) / 2; // Use negative rotation for screen space
         const arcRadius = Math.hypot(startVecScreen.x, startVecScreen.y);
         const labelRadius = arcRadius + TRANSFORM_ANGLE_LABEL_OFFSET;
         const angleTextX = centerScreen.x + labelRadius * Math.cos(bisectorAngle);
@@ -2584,6 +2589,7 @@ export function drawCoordsIcon(ctx, rect, mode, isSelected, htmlOverlay, updateH
 export function drawAngleIcon(ctx, rect, mode, isSelected, htmlOverlay, updateHtmlLabel, colors) {
     const colorStrong = isSelected ? colors.uiIconSelected : colors.uiIconDefault;
     const center = { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+    let sizeIncrease = 0;
     ctx.save();
     ctx.translate(center.x, center.y);
     const scale = rect.width / UI_ICON_BASE_SIZE;
@@ -2609,14 +2615,15 @@ export function drawAngleIcon(ctx, rect, mode, isSelected, htmlOverlay, updateHt
         if (mode === ANGLE_DISPLAY_MODE_DEGREES) {
             label = '60^\\circ';
         } else if (mode === ANGLE_DISPLAY_MODE_RADIANS) {
-            label = '\\pi/3';
+            label = '\\frac{\\pi}{3}';
+            sizeIncrease = 2
         }
     }
     ctx.restore();
     if (label) {
         const labelId = 'icon-label-angles';
         const labelColor = isSelected ? colors.uiTextSelected : colors.uiTextDefault;
-        updateHtmlLabel({ id: labelId, content: label, x: center.x + (labelPos.x - 16) * scale, y: center.y + (labelPos.y - 16) * scale, color: labelColor, fontSize: UI_ICON_LABEL_FONT_SIZE, options: { textAlign: 'center', textBaseline: 'middle' } }, htmlOverlay);
+        updateHtmlLabel({ id: labelId, content: label, x: center.x + (labelPos.x - 16) * scale, y: center.y + (labelPos.y - 20) * scale, color: labelColor, fontSize: UI_ICON_LABEL_FONT_SIZE+sizeIncrease, options: { textAlign: 'center', textBaseline: 'middle' } }, htmlOverlay);
     }
 }
 
