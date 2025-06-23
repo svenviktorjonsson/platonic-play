@@ -247,6 +247,8 @@ export const MAX_INITIAL_METER_SNAP_MULTIPLIER = 10;
 export const MAX_SNAP_DENOMINATOR = 6;
 export const MAX_SNAP_INTEGER = 10;
 
+export const MERGE_RADIUS_SCREEN = 5;
+
 export const NINETY_DEG_ANGLE_SNAP_FRACTIONS = (() => {
     const uniqueFractions = new Set();
     const denominators = [1, 2, 3, 4, 5, 6];
@@ -274,9 +276,9 @@ export const SNAP_FACTORS = generateSnapFactors(MAX_SNAP_DENOMINATOR, MAX_SNAP_I
 
 // --- ENUMS & LITERALS ---
 export const POINT_TYPE_REGULAR = 'regular';
-export const TRANSFORMATION_TYPE_ROTATION = 'symmetry_rotation';
-export const TRANSFORMATION_TYPE_SCALE = 'symmetry_scale';
-export const TRANSFORMATION_TYPE_REFLECTION = 'symmetry_reflection';
+export const TRANSFORMATION_TYPE_ROTATION = ' transformation_rotation';
+export const TRANSFORMATION_TYPE_SCALE = ' transformation_scale';
+export const TRANSFORMATION_TYPE_DIRECTIONAL_SCALE = 'transformation_directional_scale';
 export const COORDS_DISPLAY_MODE_NONE = 'none';
 export const COORDS_DISPLAY_MODE_REGULAR = 'regular';
 export const COORDS_DISPLAY_MODE_COMPLEX = 'complex';

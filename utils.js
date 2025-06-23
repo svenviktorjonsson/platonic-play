@@ -68,6 +68,22 @@ export function generateAngleSnapFractions(maxDenominator, maxResultingMultipleO
     return Array.from(fractionsSet).sort((a, b) => a - b);
 }
 
+export function getNearestGridPoints(mouseDataPos, gridInterval) {
+    if (!gridInterval || gridInterval <= 0) return [];
+    
+    // Find the grid cell that contains the mouse position
+    const gridX = Math.floor(mouseDataPos.x / gridInterval) * gridInterval;
+    const gridY = Math.floor(mouseDataPos.y / gridInterval) * gridInterval;
+    
+    // Return the 4 corners of this grid cell
+    return [
+        { x: gridX, y: gridY, isGridPoint: true },
+        { x: gridX + gridInterval, y: gridY, isGridPoint: true },
+        { x: gridX, y: gridY + gridInterval, isGridPoint: true },
+        { x: gridX + gridInterval, y: gridY + gridInterval, isGridPoint: true }
+    ];
+}
+
 export function solveForPoint(N1, N2, d1, alpha) {
     const d_n = distance(N1, N2);
     if (d_n < GEOMETRY_CALCULATION_EPSILON || Math.sin(alpha) < GEOMETRY_CALCULATION_EPSILON) return [];
