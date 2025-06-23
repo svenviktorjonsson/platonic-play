@@ -25,7 +25,9 @@ exclude_files = (
     'project_content.txt',
     'write_content_to_file.py',
     'session.json',
-    'cm_logo.ico'
+    'cm_logo.ico',
+    "temp.js",
+    "temp2.js"
 )
 
 # Output file name

@@ -274,13 +274,9 @@ export const SNAP_FACTORS = generateSnapFactors(MAX_SNAP_DENOMINATOR, MAX_SNAP_I
 
 // --- ENUMS & LITERALS ---
 export const POINT_TYPE_REGULAR = 'regular';
-export const TRANSFORM_TYPE_ROTATE_SCALE = 'center_rotate_scale';
-export const TRANSFORM_TYPE_ROTATE_ONLY = 'center_rotate_only';
-export const TRANSFORM_TYPE_SCALE_ONLY = 'center_scale_only';
-export const SYMMETRY_TYPE_TRANSLATION = 'symmetry_translation';
-export const SYMMETRY_TYPE_ROTATION = 'symmetry_rotation';
-export const SYMMETRY_TYPE_SCALE = 'symmetry_scale';
-export const SYMMETRY_TYPE_MIRROR = 'symmetry_mirror';
+export const TRANSFORMATION_TYPE_ROTATION = 'symmetry_rotation';
+export const TRANSFORMATION_TYPE_SCALE = 'symmetry_scale';
+export const TRANSFORMATION_TYPE_REFLECTION = 'symmetry_reflection';
 export const COORDS_DISPLAY_MODE_NONE = 'none';
 export const COORDS_DISPLAY_MODE_REGULAR = 'regular';
 export const COORDS_DISPLAY_MODE_COMPLEX = 'complex';
