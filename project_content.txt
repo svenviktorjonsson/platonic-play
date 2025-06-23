@@ -3475,6 +3475,7 @@ let placingSymmetryType = null;
 let copyCountInput = '';
 let copyCountTimer = null;
 let ghostPoints = [];
+let currentAccumulatedRotation = 0;
 let lastGridState = {
     interval1: null,
     interval2: null,
@@ -3669,72 +3670,55 @@ function getBestSnapPosition(mouseDataPos) {
     return bestCandidate.pos;
 }
 
-function getTransformSnap(center, mouseDataPos, startReferencePoint, transformType) {
+function getTransformSnap(center, mouseDataPos, startReferencePoint, transformType, currentAccumulatedRotation) {
     const allCandidates = [];
     const startVector = { x: startReferencePoint.x - center.x, y: startReferencePoint.y - center.y };
     const startDist = Math.hypot(startVector.x, startVector.y);
     const startAngle = Math.atan2(startVector.y, startVector.x);
 
-    if (gridDisplayMode !== 'none') {
-        const mouseRelativeToCenter = { x: mouseDataPos.x - center.x, y: mouseDataPos.y - center.y };
-
-        if (gridDisplayMode === 'polar') {
-            const dominantRadialInterval = (lastGridState.alpha2 > lastGridState.alpha1 && lastGridState.interval2) ? lastGridState.interval2 : lastGridState.interval1;
-            if (dominantRadialInterval > 0) {
-                const mouseAngleDeg = (Math.atan2(mouseRelativeToCenter.y, mouseRelativeToCenter.x) * 180 / Math.PI + 360) % 360;
-                const mouseRadius = Math.hypot(mouseRelativeToCenter.x, mouseRelativeToCenter.y);
-                const snappedRadius = Math.round(mouseRadius / dominantRadialInterval) * dominantRadialInterval;
-                
+    if (gridDisplayMode !== 'none' && lastGridState.interval1) {
+        const dominantGridInterval = (lastGridState.alpha2 > lastGridState.alpha1 && lastGridState.interval2) ? lastGridState.interval2 : lastGridState.interval1;
+        if (dominantGridInterval > 0) {
+            if (gridDisplayMode === 'polar') {
+                const mouseAngleDeg = (Math.atan2(mouseDataPos.y, mouseDataPos.x) * 180 / Math.PI + 360) % 360;
+                const mouseRadius = Math.hypot(mouseDataPos.x, mouseDataPos.y);
+                const snappedRadius = Math.round(mouseRadius / dominantGridInterval) * dominantGridInterval;
                 lastAngularGridState.forEach(level => {
                     if (level.alpha > 0.01 && level.angle > 0) {
                         const angularInterval = level.angle;
                         const snappedAngleDeg = Math.round(mouseAngleDeg / angularInterval) * angularInterval;
                         const snappedAngleRad = snappedAngleDeg * Math.PI / 180;
-                        allCandidates.push({
-                            pos: { x: center.x + snappedRadius * Math.cos(snappedAngleRad), y: center.y + snappedRadius * Math.sin(snappedAngleRad) },
-                            type: 'grid', pureRotation: null, pureScale: null
-                        });
+                        const gridPoint = { x: snappedRadius * Math.cos(snappedAngleRad), y: snappedRadius * Math.sin(snappedAngleRad) };
+                        allCandidates.push({ pos: gridPoint, type: 'grid', isGridPoint: true });
                     }
                 });
-            }
-        } else {
-            const gridInterval = (lastGridState.alpha2 > lastGridState.alpha1 && lastGridState.interval2) ? lastGridState.interval2 : lastGridState.interval1;
-            if (gridInterval > 0) {
-                const snappedRelativeX = Math.round(mouseRelativeToCenter.x / gridInterval) * gridInterval;
-                const snappedRelativeY = Math.round(mouseRelativeToCenter.y / gridInterval) * gridInterval;
-                
-                const epsilon = gridInterval * GEOMETRY_CALCULATION_EPSILON;
-                const centerIsOnGridX = Math.abs(center.x / gridInterval - Math.round(center.x / gridInterval)) < epsilon;
-                const centerIsOnGridY = Math.abs(center.y / gridInterval - Math.round(center.y / gridInterval)) < epsilon;
-                const startIsOnGridX = Math.abs(startReferencePoint.x / gridInterval - Math.round(startReferencePoint.x / gridInterval)) < epsilon;
-                const startIsOnGridY = Math.abs(startReferencePoint.y / gridInterval - Math.round(startReferencePoint.y / gridInterval)) < epsilon;
-                
-                let gridToGridInfo = null;
-                if (centerIsOnGridX && centerIsOnGridY && startIsOnGridX && startIsOnGridY) {
-                    const deltaX_start = Math.round((startReferencePoint.x - center.x) / gridInterval);
-                    const deltaY_start = Math.round((startReferencePoint.y - center.y) / gridInterval);
-                    const deltaX_snap = Math.round(snappedRelativeX / gridInterval);
-                    const deltaY_snap = Math.round(snappedRelativeY / gridInterval);
-                    
-                    const startSquaredSum = deltaX_start * deltaX_start + deltaY_start * deltaY_start;
-                    const snapSquaredSum = deltaX_snap * deltaX_snap + deltaY_snap * deltaY_snap;
-                    
-                    if (startSquaredSum > 0 && snapSquaredSum > 0) {
-                        gridToGridInfo = {
-                            startSquaredSum,
-                            snapSquaredSum,
-                            gridInterval
-                        };
-                    }
+            } else if (gridDisplayMode === 'triangular') {
+                const y_step = dominantGridInterval * Math.sqrt(3) / 2;
+                const i_f = (mouseDataPos.x / dominantGridInterval) - (mouseDataPos.y / (dominantGridInterval * Math.sqrt(3)));
+                const j_f = mouseDataPos.y / y_step;
+
+                let i_r = Math.round(i_f);
+                let j_r = Math.round(j_f);
+                let k_r = Math.round(-i_f - j_f);
+
+                const i_diff = Math.abs(i_r - i_f);
+                const j_diff = Math.abs(j_r - j_f);
+                const k_diff = Math.abs(k_r - (-i_f - j_f));
+
+                if (i_diff > j_diff && i_diff > k_diff) {
+                    i_r = -j_r - k_r;
+                } else if (j_diff > k_diff) {
+                    j_r = -i_r - k_r;
                 }
-                
-                allCandidates.push({
-                    pos: { x: center.x + snappedRelativeX, y: center.y + snappedRelativeY },
-                    type: 'grid', 
-                    pureRotation: null, 
-                    pureScale: null,
-                    gridToGridInfo
-                });
+                const snappedX = i_r * dominantGridInterval + j_r * dominantGridInterval / 2;
+                const snappedY = j_r * y_step;
+                const gridPoint = { x: snappedX, y: snappedY };
+                allCandidates.push({ pos: gridPoint, type: 'grid', isGridPoint: true });
+            } else {
+                const gridX = Math.round(mouseDataPos.x / dominantGridInterval) * dominantGridInterval;
+                const gridY = Math.round(mouseDataPos.y / dominantGridInterval) * dominantGridInterval;
+                const gridPoint = { x: gridX, y: gridY };
+                allCandidates.push({ pos: gridPoint, type: 'grid', isGridPoint: true });
             }
         }
     }
@@ -3742,56 +3726,29 @@ function getTransformSnap(center, mouseDataPos, startReferencePoint, transformTy
     if (startDist > GEOMETRY_CALCULATION_EPSILON) {
         const scaleSnapFactors = [...SNAP_FACTORS.filter(f => f > 0), ...SNAP_FACTORS.filter(f => f > 0).map(f => -f)];
         const angleSnapFractions = NINETY_DEG_ANGLE_SNAP_FRACTIONS;
-        const useAngleSnaps = transformType === TRANSFORMATION_TYPE_ROTATION;
-        const useScaleSnaps = transformType === TRANSFORMATION_TYPE_SCALE || transformType === TRANSFORMATION_TYPE_DIRECTIONAL_SCALE;
-        
-        if (useAngleSnaps) {
-            const rotationSnaps = angleSnapFractions.flatMap(f => (f === 0 ? [0] : [f * Math.PI / 2, -f * Math.PI / 2]));
-            for (const snapRotation of rotationSnaps) {
-                let targetAngle = startAngle + snapRotation;
-                
-                if (transformIndicatorData && Math.abs(transformIndicatorData.rotation) > 0.01) {
-                    const currentRotation = transformIndicatorData.rotation;
-                    const alternatives = [
-                        snapRotation,
-                        snapRotation + 2 * Math.PI,
-                        snapRotation - 2 * Math.PI
-                    ];
-                    
-                    const best = alternatives.reduce((best, current) => {
-                        return Math.abs(current - currentRotation) < Math.abs(best - currentRotation) ? current : best;
-                    });
-                    
-                    targetAngle = startAngle + best;
-                }
-                
-                const dist = startDist;
+
+        if (transformType === TRANSFORMATION_TYPE_ROTATION) {
+            const rotationIncrements = angleSnapFractions.flatMap(f => (f === 0 ? [0] : [f * Math.PI / 2, -f * Math.PI / 2]));
+            for (const snapIncrement of rotationIncrements) {
+                const candidateTargetAngleAbsolute = startAngle + snapIncrement;
                 allCandidates.push({
-                    pos: { x: center.x + dist * Math.cos(targetAngle), y: center.y + dist * Math.sin(targetAngle) },
-                    type: 'transform', 
-                    pureRotation: snapRotation, 
-                    pureScale: 1
+                    pos: { x: center.x + startDist * Math.cos(candidateTargetAngleAbsolute), y: center.y + startDist * Math.sin(candidateTargetAngleAbsolute) },
+                    type: 'transform_angle_snap',
+                    rawSnapIncrement: snapIncrement
                 });
             }
         }
-        
-        if (useScaleSnaps) {
+
+        if (transformType === TRANSFORMATION_TYPE_SCALE || transformType === TRANSFORMATION_TYPE_DIRECTIONAL_SCALE) {
             for (const factor of scaleSnapFactors) {
-                if (transformType === TRANSFORMATION_TYPE_DIRECTIONAL_SCALE) {
-                    const scaledDist = Math.abs(factor) * startDist;
-                    const direction = factor >= 0 ? 1 : -1;
-                    allCandidates.push({
-                        pos: { x: center.x + direction * scaledDist * Math.cos(startAngle), y: center.y + direction * scaledDist * Math.sin(startAngle) },
-                        type: 'transform', pureRotation: 0, pureScale: factor, directionalScale: true
-                    });
-                } else {
-                    const scaledDist = Math.abs(factor) * startDist;
-                    const direction = factor >= 0 ? 1 : -1;
-                    allCandidates.push({
-                        pos: { x: center.x + direction * scaledDist * Math.cos(startAngle), y: center.y + direction * scaledDist * Math.sin(startAngle) },
-                        type: 'transform', pureRotation: 0, pureScale: factor
-                    });
-                }
+                const scaledDist = factor * startDist;
+                const candidatePos = { x: center.x + scaledDist * Math.cos(startAngle), y: center.y + scaledDist * Math.sin(startAngle) };
+                allCandidates.push({
+                    pos: candidatePos,
+                    type: 'transform_scale_snap',
+                    pureScale: factor,
+                    directionalScale: (transformType === TRANSFORMATION_TYPE_DIRECTIONAL_SCALE)
+                });
             }
         }
     }
@@ -3804,34 +3761,70 @@ function getTransformSnap(center, mouseDataPos, startReferencePoint, transformTy
     });
 
     const finalVec = { x: bestCandidate.pos.x - center.x, y: bestCandidate.pos.y - center.y };
-    let finalScale, finalRotation, directionalScale = false;
+    const finalAngleOfSnappedPos = Math.atan2(finalVec.y, finalVec.x);
+    const finalDistOfSnappedPos = Math.hypot(finalVec.x, finalVec.y);
 
-    if (bestCandidate.directionalScale) {
-        directionalScale = true;
-        finalScale = bestCandidate.pureScale;
-        finalRotation = 0;
-    } else if (bestCandidate.pureScale !== null) {
-        finalScale = bestCandidate.pureScale;
-        finalRotation = bestCandidate.pureRotation || 0;
-    } else {
-        if (transformType === TRANSFORMATION_TYPE_ROTATION) {
-            finalScale = 1;
-            const currentAngle = Math.atan2(finalVec.y, finalVec.x);
-            finalRotation = calculateRotationAngle(startAngle, currentAngle, transformIndicatorData?.rotation || 0);
-        } else {
-            finalScale = (startDist > GEOMETRY_CALCULATION_EPSILON) ? Math.hypot(finalVec.x, finalVec.y) / startDist : 1;
-            finalRotation = 0;
+    let calculatedRotation = 0;
+    let calculatedScale = 1;
+    let calculatedDirectionalScale = false;
+    let pureScaleForDisplay = null;
+    let pureRotationForDisplay = null;
+    let gridToGridInfo = null;
+
+    if (bestCandidate.type === 'grid') {
+        const gridInterval = (lastGridState.alpha2 > lastGridState.alpha1 && lastGridState.interval2) ? lastGridState.interval2 : lastGridState.interval1;
+        const epsilon = gridInterval * GEOMETRY_CALCULATION_EPSILON;
+        const startIsOnGridX = Math.abs(startReferencePoint.x / gridInterval - Math.round(startReferencePoint.x / gridInterval)) < epsilon;
+        const startIsOnGridY = Math.abs(startReferencePoint.y / gridInterval - Math.round(startReferencePoint.y / gridInterval)) < epsilon;
+
+        if (startIsOnGridX && startIsOnGridY) {
+            const deltaX = bestCandidate.pos.x - startReferencePoint.x;
+            const deltaY = bestCandidate.pos.y - startReferencePoint.y;
+            const dx_grid = Math.round(deltaX / gridInterval);
+            const dy_grid = Math.round(deltaY / gridInterval);
+            const startDX_grid = Math.round((startReferencePoint.x - center.x) / gridInterval);
+            const startDY_grid = Math.round((startReferencePoint.y - center.y) / gridInterval);
+            const startSquaredSum = startDX_grid * startDX_grid + startDY_grid * startDY_grid;
+            const snapSquaredSum = dx_grid * dx_grid + dy_grid * dy_grid;
+
+            if (startSquaredSum > 0 && snapSquaredSum > 0) {
+                gridToGridInfo = { startSquaredSum, snapSquaredSum, gridInterval };
+            }
+        }
+    }
+
+    if (transformType === TRANSFORMATION_TYPE_ROTATION) {
+        calculatedScale = 1;
+        calculatedRotation = calculateRotationAngle(startAngle, finalAngleOfSnappedPos, currentAccumulatedRotation);
+        if (bestCandidate.type === 'transform_angle_snap') {
+            pureRotationForDisplay = bestCandidate.rawSnapIncrement;
+        }
+    } else if (transformType === TRANSFORMATION_TYPE_SCALE) {
+        calculatedRotation = 0;
+        calculatedScale = (startDist > GEOMETRY_CALCULATION_EPSILON) ? finalDistOfSnappedPos / startDist : 1;
+        if (bestCandidate.type === 'transform_scale_snap') {
+            pureScaleForDisplay = bestCandidate.pureScale;
+        }
+    } else if (transformType === TRANSFORMATION_TYPE_DIRECTIONAL_SCALE) {
+        calculatedRotation = 0;
+        calculatedDirectionalScale = true;
+        const startNormalized = { x: startVector.x / startDist, y: startVector.y / startDist };
+        const projectedDistance = (finalVec.x * startNormalized.x + finalVec.y * startNormalized.y);
+        calculatedScale = (startDist > GEOMETRY_CALCULATION_EPSILON) ? projectedDistance / startDist : 1;
+        if (bestCandidate.type === 'transform_scale_snap') {
+            pureScaleForDisplay = bestCandidate.pureScale;
         }
     }
 
     return {
-        snapped: true, 
-        pos: bestCandidate.pos, 
-        rotation: finalRotation,
-        scale: bestCandidate.pureScale ?? finalScale,
-        pureScaleForDisplay: bestCandidate.pureScale,
-        gridToGridInfo: bestCandidate.gridToGridInfo,
-        directionalScale
+        snapped: true,
+        pos: bestCandidate.pos,
+        rotation: calculatedRotation,
+        scale: calculatedScale,
+        pureScaleForDisplay: pureScaleForDisplay,
+        pureRotationForDisplay: pureRotationForDisplay,
+        gridToGridInfo: gridToGridInfo,
+        directionalScale: calculatedDirectionalScale
     };
 }
 
@@ -4307,109 +4300,109 @@ function invertRecentColors() {
 function getDirectionalScalingSnap(center, mouseDataPos, startReferencePoint) {
     const startVector = { x: startReferencePoint.x - center.x, y: startReferencePoint.y - center.y };
     const startDist = Math.hypot(startVector.x, startVector.y);
-    
+
     if (startDist <= GEOMETRY_CALCULATION_EPSILON) {
         return { snapped: false };
     }
-    
+
     const startNormalized = { x: startVector.x / startDist, y: startVector.y / startDist };
-    
+
     const snapCandidates = getAllSnapCandidatesNearMouse(mouseDataPos);
     const projectedCandidates = [];
-    
+
+    const scaleSnapFactors = [...SNAP_FACTORS.filter(f => f > 0), ...SNAP_FACTORS.filter(f => f > 0).map(f => -f)];
+    scaleSnapFactors.forEach(factor => {
+        const scaledDist = factor * startDist;
+        const projectedPoint = {
+            x: center.x + scaledDist * startNormalized.x,
+            y: center.y + scaledDist * startNormalized.y
+        };
+        projectedCandidates.push({
+            point: projectedPoint,
+            scale: factor,
+            type: 'transform_scale_snap'
+        });
+    });
+
     snapCandidates.forEach(candidate => {
         const candidateVector = { x: candidate.x - center.x, y: candidate.y - center.y };
-        const projectedDistance = (candidateVector.x * startNormalized.x + candidateVector.y * startNormalized.y);
-        
-        if (Math.abs(projectedDistance) > GEOMETRY_CALCULATION_EPSILON) {
+        const projectedDistanceAlongAxis = (candidateVector.x * startNormalized.x + candidateVector.y * startNormalized.y);
+
+        if (Math.abs(projectedDistanceAlongAxis) > GEOMETRY_CALCULATION_EPSILON) {
             const projectedPoint = {
-                x: center.x + projectedDistance * startNormalized.x,
-                y: center.y + projectedDistance * startNormalized.y
+                x: center.x + projectedDistanceAlongAxis * startNormalized.x,
+                y: center.y + projectedDistanceAlongAxis * startNormalized.y
             };
-            
+
             projectedCandidates.push({
                 point: projectedPoint,
-                scale: projectedDistance / startDist,
-                originalCandidate: candidate,
+                scale: projectedDistanceAlongAxis / startDist,
+                type: 'snap_candidate',
                 isGridPoint: candidate.isGridPoint || false
             });
         }
     });
-    
+
     if (projectedCandidates.length === 0) {
         const mouseVector = { x: mouseDataPos.x - center.x, y: mouseDataPos.y - center.y };
-        const mouseProjectedDistance = (mouseVector.x * startNormalized.x + mouseVector.y * startNormalized.y);
-        const fallbackScale = Math.abs(mouseProjectedDistance) > GEOMETRY_CALCULATION_EPSILON ? mouseProjectedDistance / startDist : 1;
-        
+        const mouseProjectedDistanceAlongAxis = (mouseVector.x * startNormalized.x + mouseVector.y * startNormalized.y);
+        const fallbackScale = (startDist > GEOMETRY_CALCULATION_EPSILON) ? mouseProjectedDistanceAlongAxis / startDist : 1;
+
         return {
-            snapped: true,
+            snapped: false,
             pos: { x: center.x + fallbackScale * startDist * startNormalized.x, y: center.y + fallbackScale * startDist * startNormalized.y },
             scale: fallbackScale,
             rotation: 0,
             directionalScale: true,
-            pureScaleForDisplay: fallbackScale
+            pureScaleForDisplay: null,
+            gridToGridInfo: null
         };
     }
-    
-    const mouseVector = { x: mouseDataPos.x - center.x, y: mouseDataPos.y - center.y };
-    const mouseProjectedDistance = (mouseVector.x * startNormalized.x + mouseVector.y * startNormalized.y);
-    const naturalProjectedPoint = {
-        x: center.x + mouseProjectedDistance * startNormalized.x,
-        y: center.y + mouseProjectedDistance * startNormalized.y
-    };
-    
+
     const bestCandidate = projectedCandidates.reduce((best, current) => {
-        const bestDist = distance(naturalProjectedPoint, best.point);
-        const currentDist = distance(naturalProjectedPoint, current.point);
-        return currentDist < bestDist ? current : best;
+        const bestDistSq = distance(mouseDataPos, best.point);
+        const currentDistSq = distance(mouseDataPos, current.point);
+        return currentDistSq < bestDistSq ? current : best;
     });
-    
+
+    let pureScaleForDisplay = null;
     let gridToGridInfo = null;
-    if (bestCandidate.isGridPoint && gridDisplayMode !== 'none' && gridDisplayMode !== 'polar') {
+
+    if (bestCandidate.type === 'transform_scale_snap') {
+        pureScaleForDisplay = bestCandidate.scale;
+    } else if (bestCandidate.isGridPoint && lastGridState.interval1) {
         const gridInterval = (lastGridState.alpha2 > lastGridState.alpha1 && lastGridState.interval2) ? lastGridState.interval2 : lastGridState.interval1;
         const epsilon = gridInterval * GEOMETRY_CALCULATION_EPSILON;
-        
+
         const centerIsOnGridX = Math.abs(center.x / gridInterval - Math.round(center.x / gridInterval)) < epsilon;
         const centerIsOnGridY = Math.abs(center.y / gridInterval - Math.round(center.y / gridInterval)) < epsilon;
         const startIsOnGridX = Math.abs(startReferencePoint.x / gridInterval - Math.round(startReferencePoint.x / gridInterval)) < epsilon;
         const startIsOnGridY = Math.abs(startReferencePoint.y / gridInterval - Math.round(startReferencePoint.y / gridInterval)) < epsilon;
-        
+
         if (centerIsOnGridX && centerIsOnGridY && startIsOnGridX && startIsOnGridY) {
-            // Calculate the actual projected distances in terms of grid units
-            const startVector = { x: startReferencePoint.x - center.x, y: startReferencePoint.y - center.y };
-            const startDist = Math.hypot(startVector.x, startVector.y);
-            const startNormalized = { x: startVector.x / startDist, y: startVector.y / startDist };
-            
-            // Project the snapped point onto the scaling direction
             const snappedVector = { x: bestCandidate.point.x - center.x, y: bestCandidate.point.y - center.y };
             const projectedDistance = (snappedVector.x * startNormalized.x + snappedVector.y * startNormalized.y);
-            
-            // Convert both distances to grid units
+
             const startGridDistance = startDist / gridInterval;
             const projectedGridDistance = Math.abs(projectedDistance) / gridInterval;
-            
-            // Calculate squared sums for the sqrt expressions
+
             const startSquaredSum = Math.round(startGridDistance * startGridDistance);
             const snapSquaredSum = Math.round(projectedGridDistance * projectedGridDistance);
-            
+
             if (startSquaredSum > 0 && snapSquaredSum > 0) {
-                gridToGridInfo = {
-                    startSquaredSum,
-                    snapSquaredSum,
-                    gridInterval
-                };
+                gridToGridInfo = { startSquaredSum, snapSquaredSum, gridInterval };
             }
         }
     }
-    
+
     return {
         snapped: true,
         pos: bestCandidate.point,
         scale: bestCandidate.scale,
         rotation: 0,
         directionalScale: true,
-        pureScaleForDisplay: bestCandidate.scale,
-        gridToGridInfo
+        pureScaleForDisplay: pureScaleForDisplay,
+        gridToGridInfo: gridToGridInfo
     };
 }
 
@@ -5355,7 +5348,7 @@ function setCurrentColor(newColor) {
     addToRecentColors(newColor);
 }
 
-function calculateTransformFromMouse(center, mouseData, startReferencePoint, centerType) {
+function calculateTransformFromMouse(center, mouseData, startReferencePoint, centerType, currentAccumulatedRotation = 0) {
     const startVector = { x: startReferencePoint.x - center.x, y: startReferencePoint.y - center.y };
     const currentVector = { x: mouseData.x - center.x, y: mouseData.y - center.y };
     const startDist = Math.hypot(startVector.x, startVector.y);
@@ -5363,27 +5356,26 @@ function calculateTransformFromMouse(center, mouseData, startReferencePoint, cen
     const startAngle = Math.atan2(startVector.y, startVector.x);
     const currentAngle = Math.atan2(currentVector.y, currentVector.x);
 
-    // Use the new rotation calculation that handles ±180° crossing
-    let rotation = calculateRotationAngle(startAngle, currentAngle, transformIndicatorData?.rotation || 0);
+    let rotation = 0;
     let scale = 1;
     let directionalScale = false;
 
-    if (startDist > GEOMETRY_CALCULATION_EPSILON) {
-        const startNormalized = { x: startVector.x / startDist, y: startVector.y / startDist };
-        const projectedDistance = (currentVector.x * startNormalized.x + currentVector.y * startNormalized.y);
-        scale = projectedDistance / startDist;
-    }
-
-    if (centerType === TRANSFORMATION_TYPE_DIRECTIONAL_SCALE) {
+    if (centerType === TRANSFORMATION_TYPE_ROTATION) {
+        scale = 1.0;
+        rotation = calculateRotationAngle(startAngle, currentAngle, currentAccumulatedRotation);
+    } else if (centerType === TRANSFORMATION_TYPE_SCALE) {
+        rotation = 0.0;
+        if (startDist > GEOMETRY_CALCULATION_EPSILON) {
+            scale = currentDist / startDist;
+        }
+    } else if (centerType === TRANSFORMATION_TYPE_DIRECTIONAL_SCALE) {
         directionalScale = true;
         rotation = 0;
-    } else if (centerType === TRANSFORMATION_TYPE_SCALE) {
-        rotation = 0;
-    } else if (centerType === TRANSFORMATION_TYPE_ROTATION) {
-        scale = 1.0;
-    } else if (scale < 0) {
-        scale = -scale;
-        rotation = rotation + Math.PI;
+        if (startDist > GEOMETRY_CALCULATION_EPSILON) {
+            const startNormalized = { x: startVector.x / startDist, y: startVector.y / startDist };
+            const projectedDistance = (currentVector.x * startNormalized.x + currentVector.y * startNormalized.y);
+            scale = projectedDistance / startDist;
+        }
     }
 
     return { rotation, scale, directionalScale };
@@ -5391,7 +5383,7 @@ function calculateTransformFromMouse(center, mouseData, startReferencePoint, cen
 
 function redrawAll() {
     labelsToKeepThisFrame.clear();
-    const colors = getColors() // Get current theme colors here
+    const colors = getColors();
     const actualCanvasWidth = canvas.width / dpr;
     const actualCanvasHeight = canvas.height / dpr;
     ctx.resetTransform();
@@ -5408,7 +5400,7 @@ function redrawAll() {
         const stateForAxes = { canvas, dpr, coordsDisplayMode, viewTransform, angleDisplayMode, colors };
         drawAxes(ctx, htmlOverlay, stateForAxes, dataToScreen, screenToData, lastGridState, lastAngularGridState, updateHtmlLabel);
     }
-    
+
     if (isDrawingMode && currentShiftPressed && frozenReference_Origin_Data) {
         const frozenDisplayContext = {
             frozen_Origin_Data_to_display: frozenReference_Origin_Data,
@@ -5422,31 +5414,37 @@ function redrawAll() {
         const stateForRefTexts = { showAngles, showDistances, viewTransform, mousePos, frozenReference_D_du, distanceSigFigs, angleDisplayMode, colors };
         prepareReferenceElementsTexts(htmlOverlay, frozenDisplayContext, stateForRefTexts, screenToData, dataToScreen, updateHtmlLabel);
     }
-    
+
     const copyCount = parseInt(copyCountInput || '1', 10);
-    const isCopyPreviewMode = copyCount > 1 && isDragConfirmed && initialDragPointStates.length > 0 && initialDragPointStates.some(p => p.type === 'regular');
-    const effectiveDragPreviews = isCopyPreviewMode ? [] : dragPreviewPoints;
-    const stateForEdges = { allEdges, selectedEdgeIds, isDragConfirmed, dragPreviewPoints: effectiveDragPreviews, currentColor, colors }; // Pass colors here
+    // Modified: isCopyPreviewMode should only affect drawing of *clones*, not the primary transform indicator
+    const isCopyPreviewActive = copyCount > 1 && isDragConfirmed && initialDragPointStates.length > 0 && initialDragPointStates.some(p => p.type === 'regular');
+
+    // Only exclude dragPreviewPoints from main drawing if copy preview is active for regular points
+    const effectiveDragPreviewsForMainDrawing = isCopyPreviewActive ? [] : dragPreviewPoints;
+    const stateForEdges = { allEdges, selectedEdgeIds, isDragConfirmed, dragPreviewPoints: effectiveDragPreviewsForMainDrawing, currentColor, colors };
     drawAllEdges(ctx, stateForEdges, dataToScreen, findPointById, getEdgeId);
 
     const mergeRadiusData = POINT_SELECT_RADIUS / viewTransform.scale;
 
     allPoints.forEach(point => {
         let pointToDraw = { ...point };
-        if (isDragConfirmed && effectiveDragPreviews.length > 0) {
-            const preview = effectiveDragPreviews.find(dp => dp.id === point.id);
+        // Exclude points if they are part of a copy preview *and* are regular points
+        const isSelectedRegularPointInCopyPreview = isCopyPreviewActive && initialDragPointStates.some(p => p.id === point.id && p.type === 'regular');
+
+        if (isDragConfirmed && effectiveDragPreviewsForMainDrawing.length > 0) {
+            const preview = effectiveDragPreviewsForMainDrawing.find(dp => dp.id === point.id);
             if (preview) {
                 pointToDraw.x = preview.x;
                 pointToDraw.y = preview.y;
             }
         }
-        const isSelectedAndInCopyPreview = isCopyPreviewMode && initialDragPointStates.some(p => p.id === point.id);
-        if (!isSelectedAndInCopyPreview) {
-            drawPoint(ctx, pointToDraw, { selectedPointIds, selectedCenterIds, activeCenterId, currentColor, colors }, dataToScreen, updateHtmlLabel); // Pass colors here
+
+        if (!isSelectedRegularPointInCopyPreview) {
+            drawPoint(ctx, pointToDraw, { selectedPointIds, selectedCenterIds, activeCenterId, currentColor, colors }, dataToScreen, updateHtmlLabel);
         }
     });
-    
-    if (isCopyPreviewMode) {
+
+    if (isCopyPreviewActive) {
         ctx.globalAlpha = 0.5;
 
         const pointsToCopyFrom = initialDragPointStates.filter(p => p.type === 'regular');
@@ -5454,8 +5452,9 @@ function redrawAll() {
         const incidentEdges = allEdges.filter(edge =>
             pointIdsToCopy.has(edge.id1) && pointIdsToCopy.has(edge.id2)
         );
-        
-        pointsToCopyFrom.forEach(p => drawPoint(ctx, p, { selectedPointIds:[], selectedCenterIds:[], activeCenterId:null, currentColor, colors }, dataToScreen, ()=>{})) // Pass colors here
+
+        // Draw original points (ghosted)
+        pointsToCopyFrom.forEach(p => drawPoint(ctx, p, { selectedPointIds:[], selectedCenterIds:[], activeCenterId:null, currentColor, colors }, dataToScreen, ()=>{}))
         ctx.setLineDash(DASH_PATTERN);
         incidentEdges.forEach(edge => {
             const p1 = allPoints.find(p => p.id === edge.id1);
@@ -5466,7 +5465,7 @@ function redrawAll() {
                 ctx.beginPath();
                 ctx.moveTo(p1Screen.x, p1Screen.y);
                 ctx.lineTo(p2Screen.x, p2Screen.y);
-                ctx.strokeStyle = colors.defaultStroke; // Use theme color
+                ctx.strokeStyle = colors.defaultStroke;
                 ctx.stroke();
             }
         });
@@ -5475,21 +5474,14 @@ function redrawAll() {
             let previewPointsForThisCopy;
 
             if (transformIndicatorData) {
-                const { center, rotation, scale, currentPos, directionalScale } = transformIndicatorData;
-                const startVector = { x: transformIndicatorData.startPos.x - center.x, y: transformIndicatorData.startPos.y - center.y };
-                
-                let effectiveRotation, effectiveScale;
-                
-                if (directionalScale) {
-                    effectiveRotation = rotation * i;
-                    effectiveScale = scale;
-                } else {
-                    effectiveRotation = rotation * i;
-                    effectiveScale = Math.pow(Math.abs(scale), i);
-                    const effectiveScaleSign = scale < 0 ? Math.pow(-1, i) : 1;
-                    effectiveScale *= effectiveScaleSign;
-                }
-                
+                const { center, rotation, scale, directionalScale, startPos } = transformIndicatorData;
+                const effectiveRotation = rotation * i;
+                let effectiveScale = Math.pow(Math.abs(scale), i);
+                const effectiveScaleSign = scale < 0 ? Math.pow(-1, i) : 1;
+                effectiveScale *= effectiveScaleSign;
+                const startVector = { x: startPos.x - center.x, y: startPos.y - center.y };
+
+
                 previewPointsForThisCopy = pointsToCopyFrom.map(p => {
                     const newPos = applyTransformToPoint(p, center, effectiveRotation, effectiveScale, directionalScale, startVector);
                     return { ...p, id: `preview_${p.id}_${i}`, x: newPos.x, y: newPos.y };
@@ -5503,18 +5495,18 @@ function redrawAll() {
                     ...p, id: `preview_${p.id}_${i}`, x: p.x + effectiveDeltaX, y: p.y + effectiveDeltaY
                 }));
             }
-            
+
             const newIdMap = new Map(previewPointsForThisCopy.map((p, j) => [pointsToCopyFrom[j].id, p.id]));
-            
+
             ctx.setLineDash(DASH_PATTERN);
             incidentEdges.forEach(edge => {
                 const id1WasCopied = pointIdsToCopy.has(edge.id1);
                 const id2WasCopied = pointIdsToCopy.has(edge.id2);
-                
+
                 if (id1WasCopied && id2WasCopied) {
                     const newId1 = newIdMap.get(edge.id1);
                     const newId2 = newIdMap.get(edge.id2);
-                    
+
                     const p1 = previewPointsForThisCopy.find(p => p.id === newId1);
                     const p2 = previewPointsForThisCopy.find(p => p.id === newId2);
 
@@ -5524,94 +5516,89 @@ function redrawAll() {
                         ctx.beginPath();
                         ctx.moveTo(p1Screen.x, p1Screen.y);
                         ctx.lineTo(p2Screen.x, p2Screen.y);
-                        ctx.strokeStyle = colors.defaultStroke; // Use theme color
+                        ctx.strokeStyle = colors.defaultStroke;
                         ctx.stroke();
                     }
                 }
             });
-            previewPointsForThisCopy.forEach(point => drawPoint(ctx, point, { selectedPointIds:[], selectedCenterIds:[], activeCenterId:null, currentColor, colors }, dataToScreen, ()=>{})); // Pass colors here
+            previewPointsForThisCopy.forEach(point => drawPoint(ctx, point, { selectedPointIds:[], selectedCenterIds:[], activeCenterId:null, currentColor, colors }, dataToScreen, ()=>{}));
         }
         ctx.globalAlpha = 1.0;
         ctx.setLineDash([]);
     }
-    
+
+    // Always draw transform indicators if transformIndicatorData exists
     if (transformIndicatorData) {
-        const stateForTransform = { transformIndicatorData, angleSigFigs, distanceSigFigs, colors }; // Pass colors here
-        drawTransformIndicators(ctx, htmlOverlay, stateForTransform, dataToScreen, updateHtmlLabel);
+        drawTransformIndicators(ctx, htmlOverlay, { transformIndicatorData, angleSigFigs, distanceSigFigs, colors }, dataToScreen, updateHtmlLabel);
         labelsToKeepThisFrame.add('transform-angle-indicator');
         labelsToKeepThisFrame.add('transform-scale-indicator');
     }
 
+
     const isTransforming = transformIndicatorData || (activeCenterId && findPointById(activeCenterId)?.type?.startsWith('transformation_'));
     const isRegularTranslation = isDragConfirmed && copyCount <= 1 && !isTransforming;
 
-    if (isDragConfirmed && !isTransforming && !isCopyPreviewMode) {
-        const hybridPointStates = allPoints.map(p => {
-            const draggedVersion = dragPreviewPoints.find(dp => dp.id === p.id);
-            return draggedVersion || p;
-        });
-        const stateForFeedback = { lastGridState, showDistances, showAngles, distanceSigFigs, angleDisplayMode, angleSigFigs, currentShiftPressed, viewTransform, colors }; // Pass colors here
-        
-        const draggedPointIds = new Set(dragPreviewPoints.map(dp => dp.id));
-        const isDraggingAllPointsInGraph = actionContext && actionContext.targetPoint && 
-            draggedPointIds.size > 1 && isDraggingEntireConnectedComponent(actionContext.targetPoint.id, draggedPointIds);
-        
-        if (isRegularTranslation && currentShiftPressed && actionContext && actionContext.targetPoint && isDraggingAllPointsInGraph) {
-            const dragOrigin = initialDragPointStates.find(p => p && p.id === actionContext.targetPoint.id);
-            if (dragOrigin) {
-                const targetMousePos = { x: mousePos.x + (actionStartPos.x - dataToScreen(dragOrigin).x), y: mousePos.y + (actionStartPos.y - dataToScreen(dragOrigin).y) };
-                const snappedData = getSnappedPosition(dragOrigin, targetMousePos, currentShiftPressed);
-                
-                const translationDrawingContext = {
-                    offsetAngleRad: 0,
-                    currentSegmentReferenceD: DEFAULT_REFERENCE_DISTANCE,
-                    currentSegmentReferenceA_for_display: Math.PI / 2,
-                    isFirstSegmentBeingDrawn: true
-                };
-                
-                const translationFeedbackState = {
-                    dragOrigin: dragOrigin,
-                    snappedData: snappedData,
-                    drawingContext: translationDrawingContext,
-                    showDistances,
-                    showAngles,
-                    distanceSigFigs,
-                    angleDisplayMode,
-                    angleSigFigs,
-                    viewTransform,
-                    frozenReference_D_du: null,
-                    gridDisplayMode,
-                    frozenReference_A_rad: null,
-                    colors // Pass colors here
-                };
-                drawTranslationFeedback(ctx, htmlOverlay, translationFeedbackState, dataToScreen, updateHtmlLabel);
+    const stateForFeedback = { lastGridState, showDistances, showAngles, distanceSigFigs, angleDisplayMode, angleSigFigs, currentShiftPressed, viewTransform, colors };
+
+    if (isDragConfirmed) {
+        // Condition for drawing transform indicators moved above to always draw
+        if (!isTransforming) { // Only draw drag feedback if NOT transforming
+            const hybridPointStates = allPoints.map(p => {
+                const draggedVersion = dragPreviewPoints.find(dp => dp.id === p.id);
+                return draggedVersion || p;
+            });
+
+            const draggedPointIds = new Set(dragPreviewPoints.map(dp => dp.id));
+            const isDraggingAllPointsInGraph = actionContext && actionContext.targetPoint &&
+                draggedPointIds.size > 1 && isDraggingEntireConnectedComponent(actionContext.targetPoint.id, draggedPointIds);
+
+            if (isDraggingAllPointsInGraph && currentShiftPressed && actionContext && actionContext.targetPoint) {
+                const dragOrigin = initialDragPointStates.find(p => p && p.id === actionContext.targetPoint.id);
+                if (dragOrigin) {
+                    const snappedData = getSnappedPosition(dragOrigin, mousePos, currentShiftPressed); // Pass raw mousePos
+                    const translationDrawingContext = {
+                        offsetAngleRad: 0,
+                        currentSegmentReferenceD: DEFAULT_REFERENCE_DISTANCE,
+                        currentSegmentReferenceA_for_display: Math.PI / 2,
+                        isFirstSegmentBeingDrawn: true
+                    };
+                    const translationFeedbackState = {
+                        dragOrigin: dragOrigin,
+                        snappedData: snappedData,
+                        drawingContext: translationDrawingContext,
+                        showDistances,
+                        showAngles,
+                        distanceSigFigs,
+                        angleDisplayMode,
+                        angleSigFigs,
+                        viewTransform,
+                        frozenReference_D_du: null,
+                        gridDisplayMode,
+                        frozenReference_A_rad: null,
+                        colors
+                    };
+                    drawTranslationFeedback(ctx, htmlOverlay, translationFeedbackState, dataToScreen, updateHtmlLabel);
+                }
+            } else if (actionContext && actionContext.targetPoint) {
+                drawDragFeedback(ctx, htmlOverlay, actionContext.targetPoint.id, hybridPointStates, stateForFeedback, dataToScreen, findNeighbors, getEdgeId, currentShiftPressed, null, updateHtmlLabel);
+            } else if (actionContext && actionContext.targetEdge) {
+                const draggedEdgeId = getEdgeId(actionContext.targetEdge);
+                drawDragFeedback(ctx, htmlOverlay, actionContext.targetEdge.id1, hybridPointStates, stateForFeedback, dataToScreen, findNeighbors, getEdgeId, currentShiftPressed, null, updateHtmlLabel);
+                drawDragFeedback(ctx, htmlOverlay, actionContext.targetEdge.id2, hybridPointStates, stateForFeedback, dataToScreen, findNeighbors, getEdgeId, currentShiftPressed, draggedEdgeId, updateHtmlLabel);
             }
-        } else if (actionContext && actionContext.targetPoint && !isDraggingAllPointsInGraph) {
-            drawDragFeedback(ctx, htmlOverlay, actionContext.targetPoint.id, hybridPointStates, stateForFeedback, dataToScreen, findNeighbors, getEdgeId, currentShiftPressed, null, updateHtmlLabel, false); // Add isStaticDisplay: false
-        } else if (actionContext && actionContext.targetEdge) {
-            const draggedEdgeId = getEdgeId(actionContext.targetEdge);
-            drawDragFeedback(ctx, htmlOverlay, actionContext.targetEdge.id1, hybridPointStates, stateForFeedback, dataToScreen, findNeighbors, getEdgeId, false, null, updateHtmlLabel, false); // Add isStaticDisplay: false
-            drawDragFeedback(ctx, htmlOverlay, actionContext.targetEdge.id2, hybridPointStates, stateForFeedback, dataToScreen, findNeighbors, getEdgeId, false, draggedEdgeId, updateHtmlLabel, false); // Add isStaticDisplay: false
         }
-    } else if (!isDragConfirmed && !isTransforming && currentShiftPressed) {
-        const stateForFeedback = { lastGridState, showDistances, showAngles, distanceSigFigs, angleDisplayMode, angleSigFigs, currentShiftPressed, viewTransform, colors }; // Pass colors here
+    } else if ((showDistances || showAngles) && !isTransforming && !isDrawingMode && !isCopyPreviewActive && !isPlacingTransform && !isPlacingSymmetry) {
         if (selectedPointIds.length === 1 && selectedEdgeIds.length === 0) {
-            drawDragFeedback(ctx, htmlOverlay, selectedPointIds[0], allPoints, stateForFeedback, dataToScreen, findNeighbors, getEdgeId, false, null, updateHtmlLabel, true); // Add isStaticDisplay: true
-        } else if (selectedEdgeIds.length === 1 && selectedPointIds.length <= 2) {
-            const selectedEdgeId = selectedEdgeIds[0];
-            const edge = allEdges.find(e => getEdgeId(e) === selectedEdgeId);
-            if (edge) {
-                drawDragFeedback(ctx, htmlOverlay, edge.id1, allPoints, stateForFeedback, dataToScreen, findNeighbors, getEdgeId, false, null, updateHtmlLabel, true); // Add isStaticDisplay: true
-                drawDragFeedback(ctx, htmlOverlay, edge.id2, allPoints, stateForFeedback, dataToScreen, findNeighbors, getEdgeId, false, selectedEdgeId, updateHtmlLabel, true); // Add isStaticDisplay: true
-            }
+            drawDragFeedback(ctx, htmlOverlay, selectedPointIds[0], allPoints, { ...stateForFeedback, currentShiftPressed: false }, dataToScreen, findNeighbors, getEdgeId, false, null, updateHtmlLabel);
         }
     }
+
 
     if (ghostPointPosition) {
         const screenPos = dataToScreen(ghostPointPosition);
         ctx.beginPath();
         ctx.arc(screenPos.x, screenPos.y, POINT_RADIUS, 0, 2 * Math.PI);
-        ctx.fillStyle = colors.feedbackSnapped; // Use theme color
+        ctx.fillStyle = colors.feedbackSnapped;
         ctx.fill();
     }
 
@@ -5619,7 +5606,7 @@ function redrawAll() {
         const screenPos = dataToScreen(ghostPoint);
         ctx.beginPath();
         ctx.arc(screenPos.x, screenPos.y, POINT_RADIUS, 0, 2 * Math.PI);
-        ctx.fillStyle = colors.feedbackSnapped; // Use theme color
+        ctx.fillStyle = colors.feedbackSnapped;
         ctx.fill();
     });
 
@@ -5642,16 +5629,16 @@ function redrawAll() {
             if (snappedData.snapped) {
                 ctx.beginPath();
                 ctx.arc(targetScreen.x, targetScreen.y, POINT_RADIUS, 0, 2 * Math.PI);
-                ctx.fillStyle = colors.feedbackSnapped; // Use theme color
+                ctx.fillStyle = colors.feedbackSnapped;
                 ctx.fill();
             }
-            const stateForSnapInfo = { showDistances, showAngles, currentShiftPressed, distanceSigFigs, angleSigFigs, angleDisplayMode, viewTransform, frozenReference_D_du, gridDisplayMode, frozenReference_A_rad, colors }; // Pass colors here
+            const stateForSnapInfo = { showDistances, showAngles, currentShiftPressed, distanceSigFigs, angleSigFigs, angleDisplayMode, viewTransform, frozenReference_D_du, gridDisplayMode, frozenReference_A_rad, colors };
             prepareSnapInfoTexts(ctx, htmlOverlay, startPoint, targetPosData, snappedData, stateForSnapInfo, dataToScreen, currentPreviewDrawingContext, updateHtmlLabel);
         }
     }
 
     if (isRectangleSelecting && isDragConfirmed) {
-        ctx.strokeStyle = colors.mouseCoords; // Use theme color
+        ctx.strokeStyle = colors.mouseCoords;
         ctx.lineWidth = 1;
         ctx.setLineDash(DASH_PATTERN);
         const rX = Math.min(rectangleSelectStartPos.x, mousePos.x);
@@ -5662,7 +5649,7 @@ function redrawAll() {
         ctx.setLineDash([]);
     }
 
-    updateMouseCoordinates(htmlOverlay, { coordsDisplayMode, isMouseOverCanvas, currentShiftPressed, ghostPointPosition, gridDisplayMode, lastGridState, angleDisplayMode, canvas, dpr, mousePos, colors}, screenToData, updateHtmlLabel); // Pass colors here
+    updateMouseCoordinates(htmlOverlay, { coordsDisplayMode, isMouseOverCanvas, currentShiftPressed, ghostPointPosition, gridDisplayMode, lastGridState, angleDisplayMode, canvas, dpr, mousePos, colors}, screenToData, updateHtmlLabel);
 
     const stateForUI = {
         dpr, canvasUI, isToolbarExpanded, isColorPaletteExpanded, isTransformPanelExpanded, isDisplayPanelExpanded,
@@ -5673,6 +5660,7 @@ function redrawAll() {
 
     cleanupHtmlLabels();
 }
+
 
 function isDraggingEntireConnectedComponent(startPointId, draggedPointIds) {
     const visited = new Set();
@@ -5750,55 +5738,40 @@ function performEscapeAction() {
 }
 
 function applyTransformToPoint(point, center, rotation, scale, directionalScale, startVector) {
-    // Calculate the vector from center to the point being transformed
     const pointVector = { x: point.x - center.x, y: point.y - center.y };
-    
+
     if (directionalScale) {
-        // For directional scaling: scale only along the direction of startVector
         const startDist = Math.hypot(startVector.x, startVector.y);
         if (startDist > GEOMETRY_CALCULATION_EPSILON) {
             const startNormalized = { x: startVector.x / startDist, y: startVector.y / startDist };
-            
-            // Project the point vector onto the scaling direction
+
             const parallelComponent = (pointVector.x * startNormalized.x + pointVector.y * startNormalized.y);
-            
-            // Calculate the perpendicular component (unchanged)
-            const perpVector = { 
-                x: pointVector.x - parallelComponent * startNormalized.x, 
-                y: pointVector.y - parallelComponent * startNormalized.y 
+            const perpVector = {
+                x: pointVector.x - parallelComponent * startNormalized.x,
+                y: pointVector.y - parallelComponent * startNormalized.y
             };
-            
-            // Scale only the parallel component
+
             const scaledParallelComponent = parallelComponent * scale;
-            
-            // Reconstruct the vector
+
             const newVector = {
                 x: scaledParallelComponent * startNormalized.x + perpVector.x,
                 y: scaledParallelComponent * startNormalized.y + perpVector.y
             };
-            
+
             return { x: center.x + newVector.x, y: center.y + newVector.y };
         }
         return { x: point.x, y: point.y };
     } else {
-        // For regular scaling and rotation: apply both transformations
         let transformedVector = { ...pointVector };
-        
-        // Apply scaling first
-        transformedVector.x *= Math.abs(scale);
-        transformedVector.y *= Math.abs(scale);
-        
-        // Apply rotation
-        let finalRotation = rotation;
-        if (scale < 0) {
-            finalRotation += Math.PI;
-        }
-        
+
+        transformedVector.x *= scale;
+        transformedVector.y *= scale;
+
         const x = transformedVector.x;
         const y = transformedVector.y;
-        transformedVector.x = x * Math.cos(finalRotation) - y * Math.sin(finalRotation);
-        transformedVector.y = x * Math.sin(finalRotation) + y * Math.cos(finalRotation);
-        
+        transformedVector.x = x * Math.cos(rotation) - y * Math.sin(rotation);
+        transformedVector.y = x * Math.sin(rotation) + y * Math.cos(rotation);
+
         return { x: center.x + transformedVector.x, y: center.y + transformedVector.y };
     }
 }
@@ -5980,18 +5953,13 @@ canvas.addEventListener('contextmenu', (event) => event.preventDefault());
 
 canvas.addEventListener('mousemove', (event) => {
     mousePos = getMousePosOnCanvas(event, canvas);
-    currentShiftPressed = event.shiftKey;
-    placingSnapPos = null;
-    ghostPointPosition = null;
-    
-    const copyCount = parseInt(copyCountInput || '1', 10);
+    currentShiftPressed = event.shiftKey; // Update currentShiftPressed
 
-    if (currentShiftPressed) {
+    // Always update ghost point position if shift is pressed and no action in progress
+    if (currentShiftPressed && !isActionInProgress) {
         const mouseDataPos = screenToData(mousePos);
-        let potentialSnapPos = null;
-
         if (isPlacingTransform) {
-            potentialSnapPos = getBestSnapPosition(mouseDataPos);
+            const potentialSnapPos = getBestSnapPosition(mouseDataPos);
             if (potentialSnapPos) {
                 placingSnapPos = dataToScreen(potentialSnapPos);
                 ghostPointPosition = potentialSnapPos;
@@ -6000,16 +5968,18 @@ canvas.addEventListener('mousemove', (event) => {
             const startPoint = findPointById(previewLineStartPointId);
             if (startPoint) {
                 const snappedData = getSnappedPosition(startPoint, mousePos, currentShiftPressed);
-                potentialSnapPos = { x: snappedData.x, y: snappedData.y };
-                ghostPointPosition = potentialSnapPos;
+                ghostPointPosition = { x: snappedData.x, y: snappedData.y };
             }
-        } else if (!isActionInProgress) {
-            potentialSnapPos = getBestSnapPosition(mouseDataPos);
-            if (potentialSnapPos) {
-                ghostPointPosition = potentialSnapPos;
-            }
+        } else {
+            ghostPointPosition = getBestSnapPosition(mouseDataPos);
         }
+    } else if (!currentShiftPressed) { // If shift is not down, ensure ghost is off
+        ghostPointPosition = null;
+        placingSnapPos = null;
     }
+
+
+    const copyCount = parseInt(copyCountInput || '1', 10);
 
     if (!isActionInProgress) {
         return;
@@ -6032,6 +6002,14 @@ canvas.addEventListener('mousemove', (event) => {
                 initialDragPointStates = JSON.parse(JSON.stringify([pointToDrag]));
                 dragPreviewPoints = JSON.parse(JSON.stringify([pointToDrag]));
                 canvas.style.cursor = 'grabbing';
+            }
+            // Initialize currentAccumulatedRotation when a transform drag starts
+            if (pointToDrag && pointToDrag.type === TRANSFORMATION_TYPE_ROTATION) {
+                const center = pointToDrag;
+                const startReferencePoint = screenToData(actionStartPos); // Use the actual start mouse position for reference
+                const startVector = { x: startReferencePoint.x - center.x, y: startReferencePoint.y - center.y };
+                actionContext.initialRotationStartAngle = Math.atan2(startVector.y, startVector.x);
+                currentAccumulatedRotation = 0; // Reset for a new drag
             }
             return;
         } else if (targetEdge) {
@@ -6081,6 +6059,31 @@ canvas.addEventListener('mousemove', (event) => {
                 dragPreviewPoints = JSON.parse(JSON.stringify(pointsToDrag));
                 canvas.style.cursor = 'grabbing';
             }
+
+            // Initialize currentAccumulatedRotation when a transform drag starts
+            if (activeCenterId && findPointById(activeCenterId)?.type === TRANSFORMATION_TYPE_ROTATION) {
+                const center = findPointById(activeCenterId);
+                const referencePoint = actionTargetPoint?.type === 'regular' ? actionTargetPoint : initialDragPointStates.find(p => selectedPointIds.includes(p.id));
+                let startReferencePointForRotation;
+
+                if (isEdgeTransformDrag) {
+                    startReferencePointForRotation = screenToData(actionStartPos);
+                } else if (referencePoint) {
+                    startReferencePointForRotation = initialDragPointStates.find(p => p.id === referencePoint.id);
+                } else if (initialDragPointStates.length > 0) {
+                    startReferencePointForRotation = initialDragPointStates.find(p => p.type === POINT_TYPE_REGULAR) || initialDragPointStates[0];
+                } else {
+                    startReferencePointForRotation = center;
+                }
+
+                if (center && startReferencePointForRotation) {
+                    const initialVector = { x: startReferencePointForRotation.x - center.x, y: startReferencePointForRotation.y - center.y };
+                    actionContext.initialRotationStartAngle = Math.atan2(initialVector.y, initialVector.x);
+                    currentAccumulatedRotation = 0;
+                }
+            }
+
+
         } else if (currentMouseButton === 0) {
             isPanningBackground = true;
             backgroundPanStartOffset = { x: viewTransform.offsetX, y: viewTransform.offsetY };
@@ -6091,11 +6094,14 @@ canvas.addEventListener('mousemove', (event) => {
     if (isDragConfirmed) {
         const isTransformingSelection = activeCenterId && selectedPointIds.length > 0;
         const mergeRadiusData = POINT_SELECT_RADIUS / viewTransform.scale;
-        
+
+        // The general ghost points for snapping outside of a drag should be handled by keydown/up.
+        // During a drag, `ghostPoints` or `ghostPointPosition` are set specifically by drag logic.
         if (!currentShiftPressed) {
-            ghostPointPosition = null;
-            ghostPoints = [];
+            ghostPoints = []; // Clear ghost points if shift is released during drag
+            ghostPointPosition = null; // Clear general ghost point
         }
+
 
         if (isPanningBackground) {
             const deltaX_css = mousePos.x - actionStartPos.x;
@@ -6106,45 +6112,33 @@ canvas.addEventListener('mousemove', (event) => {
             const mouseData = screenToData(mousePos);
             const startMouseData = screenToData(actionStartPos);
             let finalDelta = { x: mouseData.x - startMouseData.x, y: mouseData.y - startMouseData.y };
-            
+
             if (currentShiftPressed) {
                 const targetSnapPos = { x: initialDragPointStates[0].x + finalDelta.x, y: initialDragPointStates[0].y + finalDelta.y };
                 const snapResult = getDragSnapPosition(initialDragPointStates[0], targetSnapPos);
                 if (snapResult.snapped) {
                     finalDelta = { x: snapResult.point.x - initialDragPointStates[0].x, y: snapResult.point.y - initialDragPointStates[0].y };
+                    ghostPoints = [snapResult.point];
+                } else {
+                    ghostPoints = [];
                 }
-            }
-            
-            const newPos = { x: initialDragPointStates[0].x + finalDelta.x, y: initialDragPointStates[0].y + finalDelta.y };
-            let mergeTarget = null;
-            for (const p of allPoints) {
-                if (p.id !== initialDragPointStates[0].id && p.type === 'regular' && distance(newPos, p) < mergeRadiusData) {
-                    mergeTarget = p;
-                    break;
-                }
-            }
-            
-            if (!mergeTarget && distance(newPos, initialDragPointStates[0]) < mergeRadiusData) {
-                mergeTarget = initialDragPointStates[0];
-            }
-            
-            if (mergeTarget) {
-                dragPreviewPoints[0].x = mergeTarget.x;
-                dragPreviewPoints[0].y = mergeTarget.y;
-                ghostPoints = [mergeTarget];
             } else {
-                dragPreviewPoints[0].x = newPos.x;
-                dragPreviewPoints[0].y = newPos.y;
                 ghostPoints = [];
             }
+
+            const newPos = { x: initialDragPointStates[0].x + finalDelta.x, y: initialDragPointStates[0].y + finalDelta.y };
+            dragPreviewPoints[0].x = newPos.x;
+            dragPreviewPoints[0].y = newPos.y;
+
+
         } else if (isTransformingSelection || isEdgeTransformDrag) {
             const center = findPointById(activeCenterId);
             let startReferencePoint;
             if (isEdgeTransformDrag) {
                 startReferencePoint = screenToData(actionStartPos);
             } else {
-                const referencePoint = actionTargetPoint?.type === 'regular' ? actionTargetPoint : initialDragPointStates.find(p => selectedPointIds.includes(p.id));
-                startReferencePoint = initialDragPointStates.find(p => p.id === referencePoint.id);
+                const referencePointCandidate = actionTargetPoint?.type === 'regular' ? actionTargetPoint : initialDragPointStates.find(p => selectedPointIds.includes(p.id));
+                startReferencePoint = initialDragPointStates.find(p => p.id === referencePointCandidate?.id);
             }
 
             if (!center || !startReferencePoint) return;
@@ -6156,101 +6150,84 @@ canvas.addEventListener('mousemove', (event) => {
             snappedScaleValue = null;
             gridToGridInfo = null;
             directionalScale = false;
-            finalMouseData = mouseData;
+            finalMouseData = mouseData; // Default to raw mouse position
 
-            if (currentShiftPressed && centerType === TRANSFORMATION_TYPE_DIRECTIONAL_SCALE) {
-                const snapResult = getDirectionalScalingSnap(center, mouseData, startReferencePoint);
-                
-                isSnapping = true;
-                rotation = snapResult.rotation;
-                scale = snapResult.scale;
-                directionalScale = snapResult.directionalScale;
-                finalMouseData = snapResult.pos;
-                snappedScaleValue = snapResult.pureScaleForDisplay;
-                gridToGridInfo = snapResult.gridToGridInfo;
-            } else if (currentShiftPressed) {
-                const snapResult = getTransformSnap(center, mouseData, startReferencePoint, centerType);
-                if (snapResult.snapped) {
+            if (currentShiftPressed) {
+                if (centerType === TRANSFORMATION_TYPE_DIRECTIONAL_SCALE) {
+                    const snapResult = getDirectionalScalingSnap(center, mouseData, startReferencePoint);
                     isSnapping = true;
-                    finalMouseData = snapResult.pos;
                     rotation = snapResult.rotation;
                     scale = snapResult.scale;
+                    directionalScale = snapResult.directionalScale;
+                    finalMouseData = snapResult.pos;
                     snappedScaleValue = snapResult.pureScaleForDisplay;
                     gridToGridInfo = snapResult.gridToGridInfo;
-                    directionalScale = snapResult.directionalScale;
+                } else {
+                    const snapResult = getTransformSnap(center, mouseData, startReferencePoint, centerType);
+                    if (snapResult.snapped) {
+                        isSnapping = true;
+                        finalMouseData = snapResult.pos;
+                        rotation = snapResult.rotation;
+                        scale = snapResult.scale;
+                        snappedScaleValue = snapResult.pureScaleForDisplay;
+                        gridToGridInfo = snapResult.gridToGridInfo;
+                        directionalScale = snapResult.directionalScale;
+                    }
                 }
+                ghostPoints = [finalMouseData];
+            } else {
+                ghostPoints = [];
             }
-            
-            if (!isSnapping) {
-                const transformResult = calculateTransformFromMouse(center, mouseData, startReferencePoint, centerType);
-                rotation = transformResult.rotation;
-                scale = transformResult.scale;
-                directionalScale = transformResult.directionalScale;
+
+            const initialStartAngleForRotation = actionContext.initialRotationStartAngle !== undefined ? actionContext.initialRotationStartAngle : Math.atan2(startReferencePoint.y - center.y, startReferencePoint.x - center.x);
+            const transformResult = calculateTransformFromMouse(center, finalMouseData, startReferencePoint, centerType, currentAccumulatedRotation, initialStartAngleForRotation);
+
+            rotation = transformResult.rotation;
+            scale = transformResult.scale;
+            directionalScale = transformResult.directionalScale;
+
+            if (centerType === TRANSFORMATION_TYPE_ROTATION) {
+                currentAccumulatedRotation = rotation;
             }
 
             if (centerType === TRANSFORMATION_TYPE_ROTATION) scale = 1.0;
             if (centerType === TRANSFORMATION_TYPE_SCALE) rotation = 0.0;
+            if (centerType === TRANSFORMATION_TYPE_DIRECTIONAL_SCALE) rotation = 0.0;
+
 
             transformIndicatorData = { center, startPos: startReferencePoint, currentPos: finalMouseData, rotation, scale, isSnapping, snappedScaleValue, transformType: centerType, gridToGridInfo, directionalScale };
 
             const startVector = { x: startReferencePoint.x - center.x, y: startReferencePoint.y - center.y };
-            ghostPoints = [];
-            
-            // Transform all selected points, maintaining their relative positions
+
             initialDragPointStates.forEach(p_initial => {
                 if (!p_initial) return;
                 const p_preview = dragPreviewPoints.find(p => p && p.id === p_initial.id);
                 if (!p_preview) return;
 
-                // Apply the transformation to this point
                 const newPos = applyTransformToPoint(p_initial, center, rotation, scale, directionalScale, startVector);
 
-                // Check for merging with existing points
-                let mergeTarget = null;
-                for (const p of allPoints) {
-                    if (p.id !== p_initial.id && p.type === 'regular' && distance(newPos, p) < mergeRadiusData) {
-                        mergeTarget = p;
-                        break;
-                    }
-                }
-
-                // Check if we should snap back to the original position
-                if (!mergeTarget && distance(newPos, p_initial) < mergeRadiusData) {
-                    mergeTarget = p_initial;
-                }
-
-                if (mergeTarget) {
-                    p_preview.x = mergeTarget.x;
-                    p_preview.y = mergeTarget.y;
-                    if (!ghostPoints.find(gp => gp.x === mergeTarget.x && gp.y === mergeTarget.y)) {
-                        ghostPoints.push(mergeTarget);
-                    }
-                } else {
-                    p_preview.x = newPos.x;
-                    p_preview.y = newPos.y;
-                }
+                p_preview.x = newPos.x;
+                p_preview.y = newPos.y;
             });
-        } else if (dragPreviewPoints.length > 0) {
+        } else if (dragPreviewPoints.length > 0) { // Regular translation drag
             const mouseData = screenToData(mousePos);
             const startMouseData = screenToData(actionStartPos);
             let finalDelta = { x: mouseData.x - startMouseData.x, y: mouseData.y - startMouseData.y };
-            
-            if (copyCount <= 1) {
-                let snapPos = null;
-                
+
+            if (copyCount <= 1) { // Single translation or transform application
                 if (currentShiftPressed && actionTargetPoint && actionTargetPoint.type === 'regular') {
                     const dragOrigin = initialDragPointStates.find(p => p && p.id === actionTargetPoint.id);
                     if (dragOrigin) {
-                        const targetMousePos = { x: mousePos.x + (actionStartPos.x - dataToScreen(dragOrigin).x), y: mousePos.y + (actionStartPos.y - dataToScreen(dragOrigin).y) };
-                        const snappedData = getSnappedPosition(dragOrigin, targetMousePos, currentShiftPressed);
+                        const snappedData = getSnappedPosition(dragOrigin, mousePos, currentShiftPressed);
                         finalDelta = { x: snappedData.x - dragOrigin.x, y: snappedData.y - dragOrigin.y };
-                        snapPos = { x: snappedData.x, y: snappedData.y };
-                        ghostPointPosition = snapPos;
+                        ghostPointPosition = snappedData;
+                    } else {
+                        ghostPointPosition = null;
                     }
                 } else {
                     ghostPointPosition = null;
                 }
-                
+
                 ghostPoints = [];
                 initialDragPointStates.forEach(originalPointState => {
                     if (!originalPointState) return;
@@ -6260,167 +6237,19 @@ canvas.addEventListener('mousemove', (event) => {
                         previewPointToUpdate.y = originalPointState.y + finalDelta.y;
                     }
                 });
-            } else {
+            } else { // Copy operation with multiple copies
                 ghostPoints = [];
                 initialDragPointStates.forEach(originalPointState => {
                     if (!originalPointState) return;
                     const previewPointToUpdate = dragPreviewPoints.find(dp => dp && dp.id === originalPointState.id);
                     if (previewPointToUpdate) {
                         const newPos = { x: originalPointState.x + finalDelta.x, y: originalPointState.y + finalDelta.y };
-                        
-                        let mergeTarget = null;
-                        for (const p of allPoints) {
-                            if (p.id !== originalPointState.id && p.type === 'regular' && distance(newPos, p) < mergeRadiusData) {
-                                mergeTarget = p;
-                                break;
-                            }
-                        }
-
-                        if (!mergeTarget && distance(newPos, originalPointState) < mergeRadiusData) {
-                            mergeTarget = originalPointState;
-                        }
-
-                        if (mergeTarget) {
-                            previewPointToUpdate.x = mergeTarget.x;
-                            previewPointToUpdate.y = mergeTarget.y;
-                            if (!ghostPoints.find(gp => gp.x === mergeTarget.x && gp.y === mergeTarget.y)) {
-                                ghostPoints.push(mergeTarget);
-                            }
-                        } else {
-                            previewPointToUpdate.x = newPos.x;
-                            previewPointToUpdate.y = newPos.y;
-                        }
+                        previewPointToUpdate.x = newPos.x;
+                        previewPointToUpdate.y = newPos.y;
                     }
                 });
             }
         }
-    }
-});
-
-canvas.addEventListener('mousedown', (event) => {
-    const targetElement = event.target;
-    if (targetElement && targetElement.closest('.katex')) {
-        const parentDiv = targetElement.closest('div[id^="symmetry-n-label-"]');
-        if (parentDiv) {
-            const symmetryObjectId = parentDiv.id.replace('symmetry-n-label-', '');
-            const symmetryObject = findPointById(symmetryObjectId);
-            if (symmetryObject) {
-                saveStateForUndo();
-                const currentN = symmetryObject.n;
-                const currentIndex = SYMMETRY_COPY_COUNTS.indexOf(currentN);
-                let nextIndex;
-                if (currentIndex === -1) {
-                    nextIndex = 0;
-                } else {
-                    nextIndex = (currentIndex + 1) % SYMMETRY_COPY_COUNTS.length;
-                }
-                symmetryObject.n = SYMMETRY_COPY_COUNTS[nextIndex];
-            }
-            event.stopPropagation();
-            return;
-        }
-    }
-
-    mousePos = getMousePosOnCanvas(event, canvas);
-    isDraggingCenter = false;
-
-    if (handleCanvasUIClick(mousePos)) {
-        return;
-    }
-
-    if (isDrawingMode && event.button === 2) {
-        isDrawingMode = false;
-        previewLineStartPointId = null;
-        frozenReference_A_rad = null;
-        frozenReference_A_baseRad = null;
-        frozenReference_D_du = null;
-        frozenReference_D_g2g = null;
-        frozenReference_Origin_Data = null;
-        return;
-    }
-
-    if (isPlacingTransform || isPlacingSymmetry) {
-        if (event.button === 0) {
-            saveStateForUndo();
-            const type = isPlacingTransform ? placingTransformType : placingSymmetryType;
-            const finalPlacePos = placingSnapPos || mousePos;
-            const dataPos = screenToData(finalPlacePos);
-            const newObject = {
-                id: generateUniqueId(),
-                x: dataPos.x,
-                y: dataPos.y,
-                type: type,
-                color: getColors().uiIcon,
-                n: 2
-            };
-            allPoints.push(newObject);
-            handleCenterSelection(newObject.id, false, false);
-        } else if (event.button === 2) {
-            isPlacingTransform = false;
-            placingTransformType = null;
-            isPlacingSymmetry = false;
-            placingSymmetryType = null;
-            placingSnapPos = null;
-        }
-        return;
-    }
-
-    const clickedPoint = findClickedPoint(mousePos);
-    let clickedEdge = !clickedPoint && findClickedEdge(mousePos);
-
-    if (clickedPoint || clickedEdge) {
-        isActionInProgress = true;
-        isDragConfirmed = false;
-        isPanningBackground = false;
-        isRectangleSelecting = false;
-        initialDragPointStates = [];
-        dragPreviewPoints = [];
-        currentMouseButton = event.button;
-        actionStartPos = mousePos;
-        rectangleSelectStartPos = actionStartPos;
-        actionContext = { targetPoint: clickedPoint, targetEdge: clickedEdge, target: clickedPoint || clickedEdge, shiftKey: event.shiftKey, ctrlKey: event.ctrlKey || event.metaKey };
-
-        if (clickedPoint) {
-            if (clickedPoint.type !== 'regular') {
-                isDraggingCenter = true;
-                handleCenterSelection(clickedPoint.id, event.shiftKey, event.ctrlKey || event.metaKey);
-            }
-        }
-
-        if (event.altKey && clickedPoint && clickedPoint.type === 'regular') {
-            saveStateForUndo();
-            performEscapeAction();
-            isDrawingMode = true;
-            previewLineStartPointId = clickedPoint.id;
-            isActionInProgress = false;
-        } else if (event.altKey && clickedEdge) {
-            saveStateForUndo();
-            performEscapeAction();
-            const p1 = findPointById(clickedEdge.id1);
-            const p2 = findPointById(clickedEdge.id2);
-            if (p1 && p2) {
-                const closest = getClosestPointOnLineSegment(screenToData(actionStartPos), p1, p2);
-                const newPoint = { id: generateUniqueId(), x: closest.x, y: closest.y, type: 'regular', color: currentColor };
-                allPoints.push(newPoint);
-                allEdges = allEdges.filter(e => getEdgeId(e) !== getEdgeId(clickedEdge));
-                allEdges.push({ id1: p1.id, id2: newPoint.id });
-                allEdges.push({ id1: newPoint.id, id2: p2.id });
-                isDrawingMode = true;
-                previewLineStartPointId = newPoint.id;
-                isActionInProgress = false;
-            }
-        }
-    } else {
-        isActionInProgress = true;
-        isDragConfirmed = false;
-        isPanningBackground = false;
-        isRectangleSelecting = false;
-        initialDragPointStates = [];
-        dragPreviewPoints = [];
-        currentMouseButton = event.button;
-        actionStartPos = mousePos;
-        rectangleSelectStartPos = actionStartPos;
-        actionContext = { targetPoint: null, targetEdge: null, target: 'canvas', shiftKey: event.shiftKey, ctrlKey: event.ctrlKey || event.metaKey };
     }
 });
 
@@ -6481,7 +6310,7 @@ canvas.addEventListener('mouseup', (event) => {
                 if (mergeTarget) {
                     const pointToDeleteId = pointToUpdate.id;
                     const pointToKeepId = mergeTarget.id;
-                    
+
                     const edgesToRewire = allEdges.filter(edge => edge.id1 === pointToDeleteId || edge.id2 === pointToDeleteId);
                     const newEdges = [];
                     for (const edge of edgesToRewire) {
@@ -6493,15 +6322,15 @@ canvas.addEventListener('mouseup', (event) => {
                             }
                         }
                     }
-                    
+
                     allEdges = allEdges.filter(edge => edge.id1 !== pointToDeleteId && edge.id2 !== pointToDeleteId);
                     allPoints = allPoints.filter(p => p.id !== pointToDeleteId);
-                    
+
                     selectedPointIds = selectedPointIds.filter(id => id !== pointToDeleteId);
                     if (!selectedPointIds.includes(pointToKeepId)) {
                         selectedPointIds.push(pointToKeepId);
                     }
-                    
+
                     allEdges.push(...newEdges);
                     return pointToKeepId;
                 } else {
@@ -6550,22 +6379,16 @@ canvas.addEventListener('mouseup', (event) => {
                         let newPointsForThisCopy;
 
                         if (transformIndicatorData) {
-                            const { center, rotation, scale, currentPos } = transformIndicatorData;
+                            const { center, rotation, scale, directionalScale, startPos } = transformIndicatorData;
                             const effectiveRotation = rotation * i;
                             const effectiveScale = Math.pow(Math.abs(scale), i);
                             const effectiveScaleSign = scale < 0 ? Math.pow(-1, i) : 1;
                             const finalEffectiveScale = effectiveScale * effectiveScaleSign;
-                            
+                            const startVector = { x: startPos.x - center.x, y: startPos.y - center.y };
+
                             newPointsForThisCopy = pointsToCopyFrom.map(p => {
-                                const initialVec = { x: p.x - center.x, y: p.y - center.y };
-                                const scaledVec = { x: initialVec.x * Math.abs(finalEffectiveScale), y: initialVec.y * Math.abs(finalEffectiveScale) };
-                                let finalRotation = effectiveRotation;
-                                if (finalEffectiveScale < 0) {
-                                    finalRotation += Math.PI;
-                                }
-                                const rotatedX = scaledVec.x * Math.cos(finalRotation) - scaledVec.y * Math.sin(finalRotation);
-                                const rotatedY = scaledVec.x * Math.sin(finalRotation) + scaledVec.y * Math.cos(finalRotation);
-                                return { ...p, id: generateUniqueId(), x: center.x + rotatedX, y: center.y + rotatedY };
+                                const newPos = applyTransformToPoint(p, center, effectiveRotation, finalEffectiveScale, directionalScale, startVector);
+                                return { ...p, id: generateUniqueId(), x: newPos.x, y: newPos.y };
                             });
                         } else {
                             const deltaX = dragPreviewPoints.find(dp => dp.type === 'regular').x - pointsToCopyFrom[0].x;
@@ -6579,10 +6402,10 @@ canvas.addEventListener('mouseup', (event) => {
 
                         const newIdMap = new Map();
                         const actualNewPoints = [];
-                        
+
                         newPointsForThisCopy.forEach((newPoint, index) => {
                             const originalPoint = pointsToCopyFrom[index];
-                            
+
                             let mergeTarget = null;
                             for (const p of allPoints) {
                                 if (p.type === 'regular' && distance(newPoint, p) < mergeRadiusData) {
@@ -6590,7 +6413,7 @@ canvas.addEventListener('mouseup', (event) => {
                                     break;
                                 }
                             }
-                            
+
                             if (mergeTarget) {
                                 newIdMap.set(originalPoint.id, mergeTarget.id);
                             } else {
@@ -6599,14 +6422,14 @@ canvas.addEventListener('mouseup', (event) => {
                                 newIdMap.set(originalPoint.id, newPoint.id);
                             }
                         });
-                        
+
                         incidentEdges.forEach(edge => {
                             const newId1 = newIdMap.get(edge.id1);
                             const newId2 = newIdMap.get(edge.id2);
-                            
+
                             if (newId1 && newId2 && newId1 !== newId2) {
-                                const edgeExists = allEdges.some(e => 
-                                    (e.id1 === newId1 && e.id2 === newId2) || 
+                                const edgeExists = allEdges.some(e =>
+                                    (e.id1 === newId1 && e.id2 === newId2) ||
                                     (e.id1 === newId2 && e.id2 === newId1)
                                 );
                                 if (!edgeExists) {
@@ -6615,7 +6438,7 @@ canvas.addEventListener('mouseup', (event) => {
                             }
                         });
                     }
-                    
+
                     selectedPointIds = [];
                     selectedEdgeIds = [];
                     selectedCenterIds = [];
@@ -6771,6 +6594,7 @@ canvas.addEventListener('mouseup', (event) => {
                     saveStateForUndo();
                     selectedPointIds = [];
                     selectedEdgeIds = [];
+                    selectedCenterIds = [];
                     isDrawingMode = false;
                     previewLineStartPointId = null;
                     const startCoords = ghostPointPosition ? ghostPointPosition : screenToData(mousePos);
@@ -6801,17 +6625,169 @@ canvas.addEventListener('mouseup', (event) => {
     if (!currentShiftPressed) {
         ghostPointPosition = null;
     }
+    currentAccumulatedRotation = 0; // Reset accumulated rotation after the drag ends
+});
+
+canvas.addEventListener('mousedown', (event) => {
+    const targetElement = event.target;
+    if (targetElement && targetElement.closest('.katex')) {
+        const parentDiv = targetElement.closest('div[id^="symmetry-n-label-"]');
+        if (parentDiv) {
+            const symmetryObjectId = parentDiv.id.replace('symmetry-n-label-', '');
+            const symmetryObject = findPointById(symmetryObjectId);
+            if (symmetryObject) {
+                saveStateForUndo();
+                const currentN = symmetryObject.n;
+                const currentIndex = SYMMETRY_COPY_COUNTS.indexOf(currentN);
+                let nextIndex;
+                if (currentIndex === -1) {
+                    nextIndex = 0;
+                } else {
+                    nextIndex = (currentIndex + 1) % SYMMETRY_COPY_COUNTS.length;
+                }
+                symmetryObject.n = SYMMETRY_COPY_COUNTS[nextIndex];
+            }
+            event.stopPropagation();
+            return;
+        }
+    }
+
+    mousePos = getMousePosOnCanvas(event, canvas);
+    isDraggingCenter = false;
+
+    if (handleCanvasUIClick(mousePos)) {
+        return;
+    }
+
+    if (isDrawingMode && event.button === 2) {
+        isDrawingMode = false;
+        previewLineStartPointId = null;
+        frozenReference_A_rad = null;
+        frozenReference_A_baseRad = null;
+        frozenReference_D_du = null;
+        frozenReference_D_g2g = null;
+        frozenReference_Origin_Data = null;
+        return;
+    }
+
+    if (isPlacingTransform || isPlacingSymmetry) {
+        if (event.button === 0) {
+            saveStateForUndo();
+            const type = isPlacingTransform ? placingTransformType : placingSymmetryType;
+            const finalPlacePos = placingSnapPos || mousePos;
+            const dataPos = screenToData(finalPlacePos);
+            const newObject = {
+                id: generateUniqueId(),
+                x: dataPos.x,
+                y: dataPos.y,
+                type: type,
+                color: getColors().uiIcon,
+                n: 2
+            };
+            allPoints.push(newObject);
+            handleCenterSelection(newObject.id, false, false);
+        } else if (event.button === 2) {
+            isPlacingTransform = false;
+            placingTransformType = null;
+            isPlacingSymmetry = false;
+            placingSymmetryType = null;
+            placingSnapPos = null;
+        }
+        return;
+    }
+
+    const clickedPoint = findClickedPoint(mousePos);
+    let clickedEdge = !clickedPoint && findClickedEdge(mousePos);
+
+    if (clickedPoint || clickedEdge) {
+        isActionInProgress = true;
+        isDragConfirmed = false;
+        isPanningBackground = false;
+        isRectangleSelecting = false;
+        initialDragPointStates = [];
+        dragPreviewPoints = [];
+        currentMouseButton = event.button;
+        actionStartPos = mousePos;
+        rectangleSelectStartPos = actionStartPos;
+        actionContext = { targetPoint: clickedPoint, targetEdge: clickedEdge, target: clickedPoint || clickedEdge, shiftKey: event.shiftKey, ctrlKey: event.ctrlKey || event.metaKey };
+
+        if (clickedPoint) {
+            if (clickedPoint.type !== 'regular') {
+                isDraggingCenter = true;
+                handleCenterSelection(clickedPoint.id, event.shiftKey, event.ctrlKey || event.metaKey);
+            }
+        }
+
+        if (event.altKey && clickedPoint && clickedPoint.type === 'regular') {
+            saveStateForUndo();
+            performEscapeAction();
+            isDrawingMode = true;
+            previewLineStartPointId = clickedPoint.id;
+            isActionInProgress = false;
+        } else if (event.altKey && clickedEdge) {
+            saveStateForUndo();
+            performEscapeAction();
+            const p1 = findPointById(clickedEdge.id1);
+            const p2 = findPointById(clickedEdge.id2);
+            if (p1 && p2) {
+                const closest = getClosestPointOnLineSegment(screenToData(actionStartPos), p1, p2);
+                const newPoint = { id: generateUniqueId(), x: closest.x, y: closest.y, type: 'regular', color: currentColor };
+                allPoints.push(newPoint);
+                allEdges = allEdges.filter(e => getEdgeId(e) !== getEdgeId(clickedEdge));
+                allEdges.push({ id1: p1.id, id2: newPoint.id });
+                allEdges.push({ id1: newPoint.id, id2: p2.id });
+                isDrawingMode = true;
+                previewLineStartPointId = newPoint.id;
+                isActionInProgress = false;
+            }
+        }
+    } else {
+        isActionInProgress = true;
+        isDragConfirmed = false;
+        isPanningBackground = false;
+        isRectangleSelecting = false;
+        initialDragPointStates = [];
+        dragPreviewPoints = [];
+        currentMouseButton = event.button;
+        actionStartPos = mousePos;
+        rectangleSelectStartPos = actionStartPos;
+        actionContext = { targetPoint: null, targetEdge: null, target: 'canvas', shiftKey: event.shiftKey, ctrlKey: event.ctrlKey || event.metaKey };
+    }
 });
 
 window.addEventListener('keyup', (event) => {
     if (event.key === 'Shift') {
         currentShiftPressed = false;
+        // Turn off all visual snap indicators when Shift is released
         ghostPointPosition = null;
+        placingSnapPos = null;
+        ghostPoints = [];
     }
 });
 
 window.addEventListener('keydown', (event) => {
     const isCtrlOrCmd = event.ctrlKey || event.metaKey;
+
+    if (event.key === 'Shift' && !currentShiftPressed) {
+        currentShiftPressed = true;
+        // Trigger snap indicators immediately on Shift press
+        const mouseDataPos = screenToData(mousePos);
+        if (isPlacingTransform) {
+            const potentialSnapPos = getBestSnapPosition(mouseDataPos);
+            if (potentialSnapPos) {
+                placingSnapPos = dataToScreen(potentialSnapPos);
+                ghostPointPosition = potentialSnapPos;
+            }
+        } else if (isDrawingMode && previewLineStartPointId) {
+            const startPoint = findPointById(previewLineStartPointId);
+            if (startPoint) {
+                const snappedData = getSnappedPosition(startPoint, mousePos, currentShiftPressed);
+                ghostPointPosition = { x: snappedData.x, y: snappedData.y };
+            }
+        } else if (!isActionInProgress) { // General canvas interaction (not dragging/drawing)
+            ghostPointPosition = getBestSnapPosition(mouseDataPos);
+        }
+    }
 
     if (isActionInProgress && currentMouseButton === 0 && (actionContext?.targetPoint || actionContext?.targetEdge) && event.key >= '0' && event.key <= '9') {
         if (event.repeat) {
@@ -7128,43 +7104,11 @@ export function normalizeAngle(angleRad) {
     return angleRad;
 }
 
-export function calculateRotationAngle(startAngle, currentAngle, previousRotation = 0) {
-    // Calculate the raw difference
-    let rawDiff = currentAngle - startAngle;
-    
-    // Always choose the path that continues in the same direction as previous rotation
-    if (Math.abs(previousRotation) > 0.01) {
-        // We have a previous rotation - continue in the same direction
-        const wasPositive = previousRotation > 0;
-        
-        // Check if we need to add/subtract full rotations to maintain direction
-        while (wasPositive && rawDiff < previousRotation - Math.PI) {
-            rawDiff += 2 * Math.PI;
-        }
-        while (!wasPositive && rawDiff > previousRotation + Math.PI) {
-            rawDiff -= 2 * Math.PI;
-        }
-        
-        // Also handle if we're close to the previous angle but wrapped around
-        const diffFromPrevious = Math.abs(rawDiff - previousRotation);
-        const diffFromPreviousPlusTwoPi = Math.abs(rawDiff + 2 * Math.PI - previousRotation);
-        const diffFromPreviousMinusTwoPi = Math.abs(rawDiff - 2 * Math.PI - previousRotation);
-        
-        if (diffFromPreviousPlusTwoPi < diffFromPrevious && diffFromPreviousPlusTwoPi < diffFromPreviousMinusTwoPi) {
-            rawDiff += 2 * Math.PI;
-        } else if (diffFromPreviousMinusTwoPi < diffFromPrevious && diffFromPreviousMinusTwoPi < diffFromPreviousPlusTwoPi) {
-            rawDiff -= 2 * Math.PI;
-        }
-    } else {
-        // Initial rotation - just handle basic ±180° wrapping for the shorter path
-        if (rawDiff > Math.PI) {
-            rawDiff -= 2 * Math.PI;
-        } else if (rawDiff < -Math.PI) {
-            rawDiff += 2 * Math.PI;
-        }
-    }
-    
-    return rawDiff;
+export function calculateRotationAngle(initialStartAngle, currentMouseAngle, totalAccumulatedRotationFromStart = 0) {
+    let rawDeltaAngle = currentMouseAngle - initialStartAngle;
+    let numRevolutions = Math.round((totalAccumulatedRotationFromStart - rawDeltaAngle) / (2 * Math.PI));
+    let continuousDeltaAngle = rawDeltaAngle + numRevolutions * (2 * Math.PI);
+    return continuousDeltaAngle;
 }
 
 export function normalizeAngleToPi(angleRad) {
