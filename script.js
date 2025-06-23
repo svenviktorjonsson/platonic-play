@@ -2686,25 +2686,32 @@ canvas.addEventListener('mousemove', (event) => {
     currentShiftPressed = event.shiftKey;
     placingSnapPos = null;
     ghostPointPosition = null;
-
+    
     const copyCount = parseInt(copyCountInput || '1', 10);
 
-    if (isPlacingTransform && currentShiftPressed) {
+    if (currentShiftPressed) {
         const mouseDataPos = screenToData(mousePos);
-        const potentialSnapPos = getBestSnapPosition(mouseDataPos);
-        if (potentialSnapPos) {
-            placingSnapPos = dataToScreen(potentialSnapPos);
-            ghostPointPosition = potentialSnapPos;
+        let potentialSnapPos = null;
+
+        if (isPlacingTransform) {
+            potentialSnapPos = getBestSnapPosition(mouseDataPos);
+            if (potentialSnapPos) {
+                placingSnapPos = dataToScreen(potentialSnapPos);
+                ghostPointPosition = potentialSnapPos;
+            }
+        } else if (isDrawingMode && previewLineStartPointId) {
+            const startPoint = findPointById(previewLineStartPointId);
+            if (startPoint) {
+                const snappedData = getSnappedPosition(startPoint, mousePos, currentShiftPressed);
+                potentialSnapPos = { x: snappedData.x, y: snappedData.y };
+                ghostPointPosition = potentialSnapPos;
+            }
+        } else if (!isActionInProgress) {
+            potentialSnapPos = getBestSnapPosition(mouseDataPos);
+            if (potentialSnapPos) {
+                ghostPointPosition = potentialSnapPos;
+            }
         }
-    } else if (isDrawingMode && currentShiftPressed && previewLineStartPointId) {
-        const startPoint = findPointById(previewLineStartPointId);
-        if (startPoint) {
-            const snappedData = getSnappedPosition(startPoint, mousePos, currentShiftPressed);
-            ghostPointPosition = { x: snappedData.x, y: snappedData.y };
-        }
-    } else if (currentShiftPressed && !isActionInProgress && !isDrawingMode && !isPlacingSymmetry) {
-        const mouseDataPos = screenToData(mousePos);
-        ghostPointPosition = getBestSnapPosition(mouseDataPos);
     }
 
     if (!isActionInProgress) {
@@ -2714,7 +2721,6 @@ canvas.addEventListener('mousemove', (event) => {
     if (!isDragConfirmed && distance(mousePos, actionStartPos) > DRAG_THRESHOLD) {
         isDragConfirmed = true;
         isEdgeTransformDrag = false;
-        transformIndicatorData = null;
 
         if (currentMouseButton === 2) {
             isRectangleSelecting = true;
@@ -2722,13 +2728,18 @@ canvas.addEventListener('mousemove', (event) => {
         }
 
         const { targetPoint, targetEdge } = actionContext;
-        const { shiftKey, ctrlKey } = actionContext;
 
         if (isDraggingCenter) {
-            initialDragPointStates = JSON.parse(JSON.stringify([targetPoint]));
-            dragPreviewPoints = JSON.parse(JSON.stringify([targetPoint]));
-            canvas.style.cursor = 'grabbing';
+            const pointToDrag = targetPoint;
+            if (pointToDrag) {
+                initialDragPointStates = JSON.parse(JSON.stringify([pointToDrag]));
+                dragPreviewPoints = JSON.parse(JSON.stringify([pointToDrag]));
+                canvas.style.cursor = 'grabbing';
+            }
+            return;
         } else if (targetEdge) {
+            if (activeCenterId) isEdgeTransformDrag = true;
+
             const pointIdsToAffect = new Set(selectedPointIds);
             selectedEdgeIds.forEach(edgeId => {
                 const edge = allEdges.find(e => getEdgeId(e) === edgeId);
@@ -2739,27 +2750,41 @@ canvas.addEventListener('mousemove', (event) => {
             });
             pointIdsToAffect.add(targetEdge.id1);
             pointIdsToAffect.add(targetEdge.id2);
-            initialDragPointStates = Array.from(pointIdsToAffect).map(id => findPointById(id)).filter(Boolean);
-            dragPreviewPoints = JSON.parse(JSON.stringify(initialDragPointStates));
-            isEdgeTransformDrag = true;
-            canvas.style.cursor = 'grabbing';
-        } else if (targetPoint && targetPoint.type === POINT_TYPE_REGULAR) {
+
+            const pointsToDrag = Array.from(pointIdsToAffect).map(id => findPointById(id)).filter(Boolean);
+
+            if (pointsToDrag.length > 0) {
+                initialDragPointStates = JSON.parse(JSON.stringify(pointsToDrag));
+                dragPreviewPoints = JSON.parse(JSON.stringify(pointsToDrag));
+                canvas.style.cursor = 'grabbing';
+            }
+        } else if (actionContext.target !== 'canvas') {
             actionTargetPoint = targetPoint;
-
-            let pointsToDragOnConfirmedDrag = [];
-
-            if (selectedPointIds.includes(targetPoint.id)) {
-                pointsToDragOnConfirmedDrag = selectedPointIds.map(id => findPointById(id)).filter(Boolean);
-            } else {
-                pointsToDragOnConfirmedDrag = [targetPoint];
-                // The selection state should already be set by mousedown's applySelectionLogic
-                // based on shiftKey/ctrlKey. This block only determines WHAT to drag.
+            if (targetPoint?.type !== 'regular') {
+                if (targetPoint) handleCenterSelection(targetPoint.id, actionContext.shiftKey, actionContext.ctrlKey);
+            } else if (targetPoint && !selectedPointIds.includes(targetPoint.id)) {
+                applySelectionLogic([targetPoint.id], [], actionContext.shiftKey, actionContext.ctrlKey, false);
             }
 
-            initialDragPointStates = JSON.parse(JSON.stringify(pointsToDragOnConfirmedDrag));
-            dragPreviewPoints = JSON.parse(JSON.stringify(pointsToDragOnConfirmedDrag));
-            canvas.style.cursor = 'grabbing';
-        } else if (target === 'canvas') {
+            let pointsToDragIds = new Set([...selectedPointIds, ...selectedCenterIds]);
+            if (targetPoint && !pointsToDragIds.has(targetPoint.id)) {
+                pointsToDragIds = new Set([targetPoint.id]);
+                if (targetPoint.type === 'regular') {
+                    selectedPointIds = [targetPoint.id];
+                    selectedCenterIds = [];
+                } else {
+                    selectedPointIds = [];
+                    selectedCenterIds = [targetPoint.id];
+                }
+                activeCenterId = selectedCenterIds.at(-1) ?? null;
+            }
+            const pointsToDrag = Array.from(pointsToDragIds).map(id => findPointById(id)).filter(Boolean);
+            if (pointsToDrag.length > 0) {
+                initialDragPointStates = JSON.parse(JSON.stringify(pointsToDrag));
+                dragPreviewPoints = JSON.parse(JSON.stringify(pointsToDrag));
+                canvas.style.cursor = 'grabbing';
+            }
+        } else if (currentMouseButton === 0) {
             isPanningBackground = true;
             backgroundPanStartOffset = { x: viewTransform.offsetX, y: viewTransform.offsetY };
             canvas.style.cursor = 'move';
@@ -2767,17 +2792,12 @@ canvas.addEventListener('mousemove', (event) => {
     }
 
     if (isDragConfirmed) {
-        const mouseData = screenToData(mousePos);
-        const startMouseData = screenToData(actionStartPos);
-        let finalDelta = { x: mouseData.x - startMouseData.x, y: mouseData.y - startMouseData.y };
-
-        const isTransformingSelection = activeCenterId && (selectedPointIds.length > 0 || selectedEdgeIds.length > 0);
-        const center = findPointById(activeCenterId);
+        const isTransformingSelection = activeCenterId && selectedPointIds.length > 0;
         const mergeRadiusData = POINT_SELECT_RADIUS / viewTransform.scale;
-
-        ghostPoints = [];
+        
         if (!currentShiftPressed) {
             ghostPointPosition = null;
+            ghostPoints = [];
         }
 
         if (isPanningBackground) {
@@ -2786,149 +2806,192 @@ canvas.addEventListener('mousemove', (event) => {
             viewTransform.offsetX = backgroundPanStartOffset.x + (deltaX_css * dpr);
             viewTransform.offsetY = backgroundPanStartOffset.y - (deltaY_css * dpr);
         } else if (isDraggingCenter) {
-            let targetPosForCenter = { x: initialDragPointStates[0].x + finalDelta.x, y: initialDragPointStates[0].y + finalDelta.y };
-
+            const mouseData = screenToData(mousePos);
+            const startMouseData = screenToData(actionStartPos);
+            let finalDelta = { x: mouseData.x - startMouseData.x, y: mouseData.y - startMouseData.y };
+            
             if (currentShiftPressed) {
-                const snapResult = getDragSnapPosition(initialDragPointStates[0], targetPosForCenter);
+                const targetSnapPos = { x: initialDragPointStates[0].x + finalDelta.x, y: initialDragPointStates[0].y + finalDelta.y };
+                const snapResult = getDragSnapPosition(initialDragPointStates[0], targetSnapPos);
                 if (snapResult.snapped) {
-                    targetPosForCenter = snapResult.point;
-                    ghostPointPosition = targetPosForCenter;
+                    finalDelta = { x: snapResult.point.x - initialDragPointStates[0].x, y: snapResult.point.y - initialDragPointStates[0].y };
                 }
             }
-
-            dragPreviewPoints[0].x = targetPosForCenter.x;
-            dragPreviewPoints[0].y = targetPosForCenter.y;
+            
+            const newPos = { x: initialDragPointStates[0].x + finalDelta.x, y: initialDragPointStates[0].y + finalDelta.y };
+            let mergeTarget = null;
+            for (const p of allPoints) {
+                if (p.id !== initialDragPointStates[0].id && p.type === 'regular' && distance(newPos, p) < mergeRadiusData) {
+                    mergeTarget = p;
+                    break;
+                }
+            }
+            
+            if (!mergeTarget && distance(newPos, initialDragPointStates[0]) < mergeRadiusData) {
+                mergeTarget = initialDragPointStates[0];
+            }
+            
+            if (mergeTarget) {
+                dragPreviewPoints[0].x = mergeTarget.x;
+                dragPreviewPoints[0].y = mergeTarget.y;
+                ghostPoints = [mergeTarget];
+            } else {
+                dragPreviewPoints[0].x = newPos.x;
+                dragPreviewPoints[0].y = newPos.y;
+                ghostPoints = [];
+            }
         } else if (isTransformingSelection || isEdgeTransformDrag) {
-            if (!center) return;
-
+            const center = findPointById(activeCenterId);
             let startReferencePoint;
-            const pointsBeingAffected = new Set(initialDragPointStates.map(p => p.id));
             if (isEdgeTransformDrag) {
                 startReferencePoint = screenToData(actionStartPos);
-            } else if (actionTargetPoint && pointsBeingAffected.has(actionTargetPoint.id)) {
-                startReferencePoint = initialDragPointStates.find(p => p.id === actionTargetPoint.id);
-            } else if (selectedPointIds.length > 0) {
-                 startReferencePoint = initialDragPointStates.find(p => selectedPointIds.includes(p.id));
-            } else if (selectedCenterIds.length > 0) {
-                startReferencePoint = initialDragPointStates.find(p => selectedCenterIds.includes(p.id));
-            }
-
-            if (!startReferencePoint) return;
-
-            const currentAccumulatedRotation = transformIndicatorData?.rotation || 0;
-
-            let snapResult = { snapped: false, pos: mouseData };
-            if (currentShiftPressed) {
-                if (center.type === TRANSFORMATION_TYPE_DIRECTIONAL_SCALE) {
-                    snapResult = getDirectionalScalingSnap(center, mouseData, startReferencePoint);
-                } else {
-                    snapResult = getTransformSnap(center, mouseData, startReferencePoint, center.type, currentAccumulatedRotation);
-                }
-            }
-
-            const targetPosForTransform = snapResult.snapped ? snapResult.pos : mouseData;
-
-            const transformResult = calculateTransformFromMouse(center, targetPosForTransform, startReferencePoint, center.type, currentAccumulatedRotation);
-
-            let calculatedRotation = transformResult.rotation;
-            let calculatedScale = transformResult.scale;
-            let calculatedDirectionalScale = transformResult.directionalScale;
-
-            if (center.type === TRANSFORMATION_TYPE_ROTATION) calculatedScale = 1.0;
-            if (center.type === TRANSFORMATION_TYPE_SCALE) calculatedRotation = 0.0;
-
-            transformIndicatorData = {
-                center: center,
-                startPos: startReferencePoint,
-                currentPos: targetPosForTransform,
-                rotation: calculatedRotation,
-                scale: calculatedScale,
-                isSnapping: snapResult.snapped,
-                snappedScaleValue: snapResult.pureScaleForDisplay,
-                pureRotationForDisplay: snapResult.pureRotationForDisplay,
-                transformType: center.type,
-                gridToGridInfo: snapResult.gridToGridInfo,
-                directionalScale: calculatedDirectionalScale
-            };
-
-            const initialStartVectorForTransform = { x: startReferencePoint.x - center.x, y: startReferencePoint.y - center.y };
-
-            initialDragPointStates.forEach(p_initial => {
-                const p_preview = dragPreviewPoints.find(p => p && p.id === p_initial.id);
-                if (p_preview) {
-                    const newPos = applyTransformToPoint(
-                        p_initial, center, calculatedRotation, calculatedScale, calculatedDirectionalScale, initialStartVectorForTransform
-                    );
-
-                    let mergeTarget = null;
-                    if (p_initial.type === POINT_TYPE_REGULAR) {
-                        for (const p of allPoints) {
-                            if (p.id !== p_initial.id && p.type === POINT_TYPE_REGULAR && distance(newPos, p) < mergeRadiusData) {
-                                mergeTarget = p;
-                                break;
-                            }
-                        }
-                        if (!mergeTarget && distance(newPos, p_initial) < mergeRadiusData) {
-                            mergeTarget = p_initial;
-                        }
-                    }
-
-                    if (mergeTarget) {
-                        p_preview.x = mergeTarget.x;
-                        p_preview.y = mergeTarget.y;
-                        if (!ghostPoints.some(gp => gp.x === mergeTarget.x && gp.y === mergeTarget.y)) {
-                            ghostPoints.push(mergeTarget);
-                        }
-                    } else {
-                        p_preview.x = newPos.x;
-                        p_preview.y = newPos.y;
-                    }
-                }
-            });
-
-        } else if (dragPreviewPoints.length > 0) {
-            let targetPosForDrag = { x: initialDragPointStates[0].x + finalDelta.x, y: initialDragPointStates[0].y + finalDelta.y };
-
-            if (copyCount <= 1) {
-                if (currentShiftPressed) {
-                    const snapResult = getDragSnapPosition(initialDragPointStates[0], targetPosForDrag);
-                    if (snapResult.snapped) {
-                        targetPosForDrag = snapResult.point;
-                        ghostPointPosition = targetPosForDrag;
-                    }
-                }
             } else {
-                ghostPointPosition = null;
+                const referencePoint = actionTargetPoint?.type === 'regular' ? actionTargetPoint : initialDragPointStates.find(p => selectedPointIds.includes(p.id));
+                startReferencePoint = initialDragPointStates.find(p => p.id === referencePoint.id);
             }
 
-            const effectiveTranslationDeltaX = targetPosForDrag.x - initialDragPointStates[0].x;
-            const effectiveTranslationDeltaY = targetPosForDrag.y - initialDragPointStates[0].y;
+            if (!center || !startReferencePoint) return;
 
-            initialDragPointStates.forEach(originalPointState => {
-                if (!originalPointState) return;
-                const previewPointToUpdate = dragPreviewPoints.find(dp => dp && dp.id === originalPointState.id);
-                if (previewPointToUpdate) {
-                    previewPointToUpdate.x = originalPointState.x + effectiveTranslationDeltaX;
-                    previewPointToUpdate.y = originalPointState.y + effectiveTranslationDeltaY;
+            const mouseData = screenToData(mousePos);
+            const centerType = center.type;
+            let rotation, scale, finalMouseData, isSnapping, snappedScaleValue, gridToGridInfo, directionalScale;
+            isSnapping = false;
+            snappedScaleValue = null;
+            gridToGridInfo = null;
+            directionalScale = false;
+            finalMouseData = mouseData;
+
+            if (currentShiftPressed && centerType === TRANSFORMATION_TYPE_DIRECTIONAL_SCALE) {
+                const snapResult = getDirectionalScalingSnap(center, mouseData, startReferencePoint);
+                
+                isSnapping = true;
+                rotation = snapResult.rotation;
+                scale = snapResult.scale;
+                directionalScale = snapResult.directionalScale;
+                finalMouseData = snapResult.pos;
+                snappedScaleValue = snapResult.pureScaleForDisplay;
+                gridToGridInfo = snapResult.gridToGridInfo;
+            } else if (currentShiftPressed) {
+                const snapResult = getTransformSnap(center, mouseData, startReferencePoint, centerType);
+                if (snapResult.snapped) {
+                    isSnapping = true;
+                    finalMouseData = snapResult.pos;
+                    rotation = snapResult.rotation;
+                    scale = snapResult.scale;
+                    snappedScaleValue = snapResult.pureScaleForDisplay;
+                    gridToGridInfo = snapResult.gridToGridInfo;
+                    directionalScale = snapResult.directionalScale;
+                }
+            }
+            
+            if (!isSnapping) {
+                const transformResult = calculateTransformFromMouse(center, mouseData, startReferencePoint, centerType);
+                rotation = transformResult.rotation;
+                scale = transformResult.scale;
+                directionalScale = transformResult.directionalScale;
+            }
+
+            if (centerType === TRANSFORMATION_TYPE_ROTATION) scale = 1.0;
+            if (centerType === TRANSFORMATION_TYPE_SCALE) rotation = 0.0;
+
+            transformIndicatorData = { center, startPos: startReferencePoint, currentPos: finalMouseData, rotation, scale, isSnapping, snappedScaleValue, transformType: centerType, gridToGridInfo, directionalScale };
+
+            const startVector = { x: startReferencePoint.x - center.x, y: startReferencePoint.y - center.y };
+            ghostPoints = [];
+            
+            // Transform all selected points, maintaining their relative positions
+            initialDragPointStates.forEach(p_initial => {
+                if (!p_initial) return;
+                const p_preview = dragPreviewPoints.find(p => p && p.id === p_initial.id);
+                if (!p_preview) return;
+
+                // Apply the transformation to this point
+                const newPos = applyTransformToPoint(p_initial, center, rotation, scale, directionalScale, startVector);
+
+                // Check for merging with existing points
+                let mergeTarget = null;
+                for (const p of allPoints) {
+                    if (p.id !== p_initial.id && p.type === 'regular' && distance(newPos, p) < mergeRadiusData) {
+                        mergeTarget = p;
+                        break;
+                    }
+                }
+
+                // Check if we should snap back to the original position
+                if (!mergeTarget && distance(newPos, p_initial) < mergeRadiusData) {
+                    mergeTarget = p_initial;
+                }
+
+                if (mergeTarget) {
+                    p_preview.x = mergeTarget.x;
+                    p_preview.y = mergeTarget.y;
+                    if (!ghostPoints.find(gp => gp.x === mergeTarget.x && gp.y === mergeTarget.y)) {
+                        ghostPoints.push(mergeTarget);
+                    }
+                } else {
+                    p_preview.x = newPos.x;
+                    p_preview.y = newPos.y;
                 }
             });
-
+        } else if (dragPreviewPoints.length > 0) {
+            const mouseData = screenToData(mousePos);
+            const startMouseData = screenToData(actionStartPos);
+            let finalDelta = { x: mouseData.x - startMouseData.x, y: mouseData.y - startMouseData.y };
+            
             if (copyCount <= 1) {
-                dragPreviewPoints.forEach(dp => {
-                    if (dp && dp.type === POINT_TYPE_REGULAR) {
+                let snapPos = null;
+                
+                if (currentShiftPressed && actionTargetPoint && actionTargetPoint.type === 'regular') {
+                    const dragOrigin = initialDragPointStates.find(p => p && p.id === actionTargetPoint.id);
+                    if (dragOrigin) {
+                        const targetMousePos = { x: mousePos.x + (actionStartPos.x - dataToScreen(dragOrigin).x), y: mousePos.y + (actionStartPos.y - dataToScreen(dragOrigin).y) };
+                        const snappedData = getSnappedPosition(dragOrigin, targetMousePos, currentShiftPressed);
+                        finalDelta = { x: snappedData.x - dragOrigin.x, y: snappedData.y - dragOrigin.y };
+                        snapPos = { x: snappedData.x, y: snappedData.y };
+                        ghostPointPosition = snapPos;
+                    }
+                } else {
+                    ghostPointPosition = null;
+                }
+                
+                ghostPoints = [];
+                initialDragPointStates.forEach(originalPointState => {
+                    if (!originalPointState) return;
+                    const previewPointToUpdate = dragPreviewPoints.find(dp => dp && dp.id === originalPointState.id);
+                    if (previewPointToUpdate) {
+                        previewPointToUpdate.x = originalPointState.x + finalDelta.x;
+                        previewPointToUpdate.y = originalPointState.y + finalDelta.y;
+                    }
+                });
+            } else {
+                ghostPoints = [];
+                initialDragPointStates.forEach(originalPointState => {
+                    if (!originalPointState) return;
+                    const previewPointToUpdate = dragPreviewPoints.find(dp => dp && dp.id === originalPointState.id);
+                    if (previewPointToUpdate) {
+                        const newPos = { x: originalPointState.x + finalDelta.x, y: originalPointState.y + finalDelta.y };
+                        
                         let mergeTarget = null;
                         for (const p of allPoints) {
-                            if (p.id !== dp.id && p.type === POINT_TYPE_REGULAR && distance(dp, p) < mergeRadiusData) {
+                            if (p.id !== originalPointState.id && p.type === 'regular' && distance(newPos, p) < mergeRadiusData) {
                                 mergeTarget = p;
                                 break;
                             }
                         }
+
+                        if (!mergeTarget && distance(newPos, originalPointState) < mergeRadiusData) {
+                            mergeTarget = originalPointState;
+                        }
+
                         if (mergeTarget) {
-                            dp.x = mergeTarget.x;
-                            dp.y = mergeTarget.y;
-                            if (!ghostPoints.some(gp => gp.x === mergeTarget.x && gp.y === mergeTarget.y)) {
+                            previewPointToUpdate.x = mergeTarget.x;
+                            previewPointToUpdate.y = mergeTarget.y;
+                            if (!ghostPoints.find(gp => gp.x === mergeTarget.x && gp.y === mergeTarget.y)) {
                                 ghostPoints.push(mergeTarget);
                             }
+                        } else {
+                            previewPointToUpdate.x = newPos.x;
+                            previewPointToUpdate.y = newPos.y;
                         }
                     }
                 });
