@@ -2004,7 +2004,6 @@ export function drawReferenceElementsGeometry(ctx, context, dataToScreen, screen
     ctx.restore();
 }
 
-// renderer.js
 export function prepareSnapInfoTexts(ctx, htmlOverlay, startPointData, targetDataPos, snappedOutput, { showDistances, showAngles, currentShiftPressed, distanceSigFigs, angleSigFigs, angleDisplayMode, viewTransform, frozenReference_D_du, gridDisplayMode, frozenReference_A_rad, colors }, dataToScreen, drawingContext, updateHtmlLabel) {
   if ((!showAngles && !showDistances) || snappedOutput.distance < GEOMETRY_CALCULATION_EPSILON) {
     return;
@@ -2816,7 +2815,9 @@ function drawUITransformationSymbols(ctx, icon, colors) {
 }
 
 export function drawCanvasUI(ctx, htmlOverlay, state, updateHtmlLabel) {
-    const { dpr, canvasUI, isToolbarExpanded, isColorPaletteExpanded, isTransformPanelExpanded, isDisplayPanelExpanded, isPlacingTransform, placingTransformType, placingSnapPos, mousePos, selectedSwatchIndex, recentColors, activeThemeName, colors } = state;
+    const { dpr, canvasUI, isToolbarExpanded, isColorPaletteExpanded, isTransformPanelExpanded, isDisplayPanelExpanded,
+        isPlacingTransform, placingTransformType, placingSnapPos, mousePos, selectedColorIndices,
+        recentColors, activeThemeName, colors } = state;
 
     ctx.save();
     ctx.resetTransform();
@@ -2872,6 +2873,93 @@ export function drawCanvasUI(ctx, htmlOverlay, state, updateHtmlLabel) {
     }
 
     if (isColorPaletteExpanded) {
+        const applyBtn = canvasUI.applyColorsButton;
+        if (applyBtn) {
+            ctx.strokeStyle = colors.uiDefault;
+            ctx.lineWidth = UI_BUTTON_BORDER_WIDTH;
+            ctx.strokeRect(applyBtn.x, applyBtn.y, applyBtn.width, applyBtn.height);
+            
+            const centerX = applyBtn.x + applyBtn.width / 2;
+            const centerY = applyBtn.y + applyBtn.height / 2;
+            const bucketSize = applyBtn.width * 0.6;
+            
+            ctx.fillStyle = colors.uiDefault;
+            ctx.strokeStyle = colors.uiDefault;
+            ctx.lineWidth = 2;
+            
+            ctx.beginPath();
+            ctx.moveTo(centerX - bucketSize/3, centerY + bucketSize/4);
+            ctx.lineTo(centerX + bucketSize/3, centerY + bucketSize/4);
+            ctx.lineTo(centerX + bucketSize/4, centerY - bucketSize/4);
+            ctx.lineTo(centerX - bucketSize/4, centerY - bucketSize/4);
+            ctx.closePath();
+            ctx.stroke();
+            
+            ctx.beginPath();
+            ctx.moveTo(centerX, centerY - bucketSize/4);
+            ctx.lineTo(centerX + bucketSize/6, centerY - bucketSize/2);
+            ctx.moveTo(centerX + bucketSize/6, centerY - bucketSize/2);
+            ctx.lineTo(centerX + bucketSize/3, centerY - bucketSize/3);
+            ctx.stroke();
+            
+            for (let i = 0; i < 3; i++) {
+                ctx.beginPath();
+                ctx.arc(centerX - bucketSize/6 + i * bucketSize/8, centerY - bucketSize/8, 1, 0, 2 * Math.PI);
+                ctx.fill();
+            }
+        }
+
+        const randomBtn = canvasUI.randomColorButton;
+        if (randomBtn) {
+            const isRandomSelected = selectedColorIndices.includes(-1);
+            ctx.strokeStyle = colors.uiDefault;
+            ctx.lineWidth = UI_BUTTON_BORDER_WIDTH;
+            ctx.strokeRect(randomBtn.x, randomBtn.y, randomBtn.width, randomBtn.height);
+            if (isRandomSelected) {
+                ctx.strokeStyle = colors.activeCenterGlow;
+                ctx.lineWidth = UI_SWATCH_SELECTED_BORDER_WIDTH;
+                ctx.strokeRect(randomBtn.x - 1, randomBtn.y - 1, randomBtn.width + 2, randomBtn.height + 2);
+            }
+            
+            const centerX = randomBtn.x + randomBtn.width / 2;
+            const centerY = randomBtn.y + randomBtn.height / 2;
+            const wheelRadius = randomBtn.width * 0.35;
+            
+            const segments = 8;
+            for (let i = 0; i < segments; i++) {
+                const angle1 = (i / segments) * 2 * Math.PI;
+                const angle2 = ((i + 1) / segments) * 2 * Math.PI;
+                const hue = (i / segments) * 360;
+                const color = `hsl(${hue}, 70%, 60%)`;
+                
+                ctx.fillStyle = color;
+                ctx.beginPath();
+                ctx.moveTo(centerX, centerY);
+                ctx.arc(centerX, centerY, wheelRadius, angle1, angle2);
+                ctx.closePath();
+                ctx.fill();
+            }
+            
+            ctx.fillStyle = colors.background;
+            ctx.beginPath();
+            ctx.arc(centerX, centerY, wheelRadius * 0.4, 0, 2 * Math.PI);
+            ctx.fill();
+            
+            if (isRandomSelected) {
+                const randomIndex = selectedColorIndices.indexOf(-1);
+                const orderNumber = randomIndex + 1;
+                updateHtmlLabel({ 
+                    id: 'random-color-order', 
+                    content: orderNumber.toString(), 
+                    x: randomBtn.x + randomBtn.width / 2, 
+                    y: randomBtn.y - 10, 
+                    color: colors.uiTextSelected, 
+                    fontSize: 12, 
+                    options: { textAlign: 'center', textBaseline: 'bottom' } 
+                });
+            }
+        }
+
         const removeBtn = canvasUI.removeColorButton;
         if (removeBtn) {
             ctx.strokeStyle = colors.uiDefault;
@@ -2882,15 +2970,31 @@ export function drawCanvasUI(ctx, htmlOverlay, state, updateHtmlLabel) {
             ctx.lineTo(removeBtn.x + removeBtn.width - UI_BUTTON_ICON_PADDING, removeBtn.y + removeBtn.height / 2);
             ctx.stroke();
         }
+
         canvasUI.colorSwatches.forEach((swatch, index) => {
             ctx.fillStyle = swatch.color;
             ctx.fillRect(swatch.x, swatch.y, swatch.width, swatch.height);
-            if (index === selectedSwatchIndex) {
+            
+            const isSelected = selectedColorIndices.includes(swatch.index);
+            if (isSelected) {
                 ctx.strokeStyle = colors.activeCenterGlow;
                 ctx.lineWidth = UI_SWATCH_SELECTED_BORDER_WIDTH;
                 ctx.strokeRect(swatch.x - 1, swatch.y - 1, swatch.width + 2, swatch.height + 2);
+                
+                const selectedIndex = selectedColorIndices.indexOf(swatch.index);
+                const orderNumber = selectedIndex + 1;
+                updateHtmlLabel({ 
+                    id: `swatch-order-${swatch.index}`, 
+                    content: orderNumber.toString(), 
+                    x: swatch.x + swatch.width / 2, 
+                    y: swatch.y - 10, 
+                    color: colors.uiTextSelected, 
+                    fontSize: 12, 
+                    options: { textAlign: 'center', textBaseline: 'bottom' } 
+                });
             }
         });
+
         const addBtn = canvasUI.addColorButton;
         if (addBtn) {
             ctx.strokeStyle = colors.uiDefault;
