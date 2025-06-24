@@ -36,6 +36,12 @@ import {
     GRID_SNAP_THRESHOLD_FACTOR,
     BISECTOR_LINE_EXTENSION_FACTOR,
 
+    // --- FEEDBACK LABELS & TEXT ---
+    FEEDBACK_LABEL_FONT_SIZE,
+    FEEDBACK_DISTANCE_LABEL_OFFSET_SCREEN,
+    MAX_POINTS_FOR_ANGLES,
+    MAX_EDGES_FOR_LABELS,
+
     // --- DEFAULTS ---
     DEFAULT_CALIBRATION_VIEW_SCALE,
     DEFAULT_REFERENCE_DISTANCE,
@@ -119,7 +125,9 @@ import {drawPoint,
         prepareSnapInfoTexts,
         prepareReferenceElementsTexts,
         drawReferenceElementsGeometry,
-        drawTranslationFeedback
+        drawTranslationFeedback,
+        drawSelectedEdgeDistances,
+        drawSelectedEdgeAngles
         } from './renderer.js';
 
 
@@ -232,7 +240,6 @@ let lastAngularGridState = {
     alpha2: 0,
 };
 let labelsToKeepThisFrame = new Set();
-
 let activeThemeName = 'dark';
 let currentColor = getColors().point;
 let selectedColorIndices = [];
@@ -2536,13 +2543,13 @@ function redrawAll() {
 
 
     const isTransforming = transformIndicatorData || (activeCenterId && findPointById(activeCenterId)?.type?.startsWith('transformation_'));
-    const isRegularTranslation = isDragConfirmed && copyCount <= 1 && !isTransforming;
 
     const stateForFeedback = { lastGridState, showDistances, showAngles, distanceSigFigs, angleDisplayMode, angleSigFigs, currentShiftPressed, viewTransform, colors };
 
     if (isDragConfirmed) {
-        // Condition for drawing transform indicators moved above to always draw
-        if (!isTransforming) { // Only draw drag feedback if NOT transforming
+        const isTransforming = transformIndicatorData || (activeCenterId && findPointById(activeCenterId)?.type?.startsWith('transformation_'));
+        
+        if (!isTransforming) {
             const hybridPointStates = allPoints.map(p => {
                 const draggedVersion = dragPreviewPoints.find(dp => dp.id === p.id);
                 return draggedVersion || p;
@@ -2555,7 +2562,7 @@ function redrawAll() {
             if (isDraggingAllPointsInGraph && currentShiftPressed && actionContext && actionContext.targetPoint) {
                 const dragOrigin = initialDragPointStates.find(p => p && p.id === actionContext.targetPoint.id);
                 if (dragOrigin) {
-                    const snappedData = getSnappedPosition(dragOrigin, mousePos, currentShiftPressed); // Pass raw mousePos
+                    const snappedData = getSnappedPosition(dragOrigin, mousePos, currentShiftPressed);
                     const translationDrawingContext = {
                         offsetAngleRad: 0,
                         currentSegmentReferenceD: DEFAULT_REFERENCE_DISTANCE,
@@ -2580,16 +2587,28 @@ function redrawAll() {
                     drawTranslationFeedback(ctx, htmlOverlay, translationFeedbackState, dataToScreen, updateHtmlLabel);
                 }
             } else if (actionContext && actionContext.targetPoint) {
-                drawDragFeedback(ctx, htmlOverlay, actionContext.targetPoint.id, hybridPointStates, stateForFeedback, dataToScreen, findNeighbors, getEdgeId, currentShiftPressed, null, updateHtmlLabel);
+                drawDragFeedback(ctx, htmlOverlay, actionContext.targetPoint.id, hybridPointStates, stateForFeedback, dataToScreen, findNeighbors, getEdgeId, currentShiftPressed, null, updateHtmlLabel, selectedPointIds, true);
             } else if (actionContext && actionContext.targetEdge) {
-                const draggedEdgeId = getEdgeId(actionContext.targetEdge);
-                drawDragFeedback(ctx, htmlOverlay, actionContext.targetEdge.id1, hybridPointStates, stateForFeedback, dataToScreen, findNeighbors, getEdgeId, currentShiftPressed, null, updateHtmlLabel);
-                drawDragFeedback(ctx, htmlOverlay, actionContext.targetEdge.id2, hybridPointStates, stateForFeedback, dataToScreen, findNeighbors, getEdgeId, currentShiftPressed, draggedEdgeId, updateHtmlLabel);
+                drawSelectedEdgeDistances(ctx, htmlOverlay, selectedEdgeIds, allEdges, { showDistances, distanceSigFigs, colors }, findPointById, getEdgeId, dataToScreen, updateHtmlLabel, hybridPointStates);
             }
         }
     } else if ((showDistances || showAngles) && !isTransforming && !isDrawingMode && !isCopyPreviewActive && !isPlacingTransform) {
-        if (selectedPointIds.length === 1 && selectedEdgeIds.length === 0) {
-            drawDragFeedback(ctx, htmlOverlay, selectedPointIds[0], allPoints, { ...stateForFeedback, currentShiftPressed: false }, dataToScreen, findNeighbors, getEdgeId, false, null, updateHtmlLabel);
+        
+        if (selectedPointIds.length > 0 && selectedPointIds.length <= MAX_POINTS_FOR_ANGLES) {
+            selectedPointIds.forEach(pointId => {
+                const wasPointDragged = initialDragPointStates.length > 0 && initialDragPointStates.some(p => p.id === pointId && p.type === 'regular');
+                const feedbackStateForPoint = { 
+                    ...stateForFeedback, 
+                    showDistances: wasPointDragged ? showDistances : false,
+                    currentShiftPressed: false 
+                };
+                drawDragFeedback(ctx, htmlOverlay, pointId, allPoints, feedbackStateForPoint, dataToScreen, findNeighbors, getEdgeId, false, null, updateHtmlLabel, selectedPointIds, false);
+            });
+        }
+        
+        if (selectedEdgeIds.length > 0 && selectedEdgeIds.length <= MAX_EDGES_FOR_LABELS) {
+            drawSelectedEdgeDistances(ctx, htmlOverlay, selectedEdgeIds, allEdges, { showDistances, distanceSigFigs, colors }, findPointById, getEdgeId, dataToScreen, updateHtmlLabel);
+            drawSelectedEdgeAngles(ctx, htmlOverlay, selectedEdgeIds, allEdges, { showAngles, angleSigFigs, angleDisplayMode, currentShiftPressed, distanceSigFigs, viewTransform, lastGridState, colors }, findPointById, getEdgeId, dataToScreen, findNeighbors, updateHtmlLabel);
         }
     }
 
@@ -2820,6 +2839,7 @@ function performEscapeAction() {
     }
 
     selectedPointIds = [];
+    selectedPointIds = [];
     selectedEdgeIds = [];
     selectedCenterIds = [];
     activeCenterId = null;
@@ -2830,6 +2850,7 @@ function performEscapeAction() {
     isDraggingCenter = false;
     isPanningBackground = false;
     dragPreviewPoints = [];
+    initialDragPointStates = [];
     actionTargetPoint = null;
     currentMouseButton = -1;
     clickData = { pointId: null, count: 0, timestamp: 0 };
@@ -3110,7 +3131,6 @@ function handleMouseDown(event) {
 
             let mergeTarget = null;
             for (const existingPoint of allPoints) {
-                // Check for same type and proximity
                 if (existingPoint.type === type && distance(dataPos, existingPoint) < mergeRadiusData) {
                     mergeTarget = existingPoint;
                     break;
@@ -3118,10 +3138,8 @@ function handleMouseDown(event) {
             }
 
             if (mergeTarget) {
-                // An object of the same type exists. Select it instead of creating a new one.
                 handleCenterSelection(mergeTarget.id, false, false);
             } else {
-                // No object exists, so create a new one.
                 const newObject = {
                     id: generateUniqueId(),
                     x: dataPos.x,
@@ -3135,7 +3153,6 @@ function handleMouseDown(event) {
             }
         }
         
-        // In all cases (place, merge, or cancel), exit the placement mode.
         isPlacingTransform = false;
         placingTransformType = null;
         placingSnapPos = null;
@@ -3157,6 +3174,16 @@ function handleMouseDown(event) {
         actionStartPos = mousePos;
         rectangleSelectStartPos = actionStartPos;
         actionContext = { targetPoint: clickedPoint, targetEdge: clickedEdge, target: clickedPoint || clickedEdge, shiftKey: event.shiftKey, ctrlKey: event.ctrlKey || event.metaKey };
+
+        if (clickedEdge && !event.shiftKey && !event.ctrlKey && !event.metaKey) {
+            const edgeId = getEdgeId(clickedEdge);
+            if (!selectedEdgeIds.includes(edgeId)) {
+                selectedPointIds = [];
+                selectedEdgeIds = [edgeId];
+                selectedCenterIds = [];
+                activeCenterId = null;
+            }
+        }
 
         if (clickedPoint) {
             if (clickedPoint.type !== 'regular') {
@@ -3650,6 +3677,21 @@ canvas.addEventListener("mouseup", (event) => {
                 }
             }
             
+            // NEW: Only change selection if we dragged an edge that wasn't already selected
+            if (actionContext && actionContext.targetEdge && !shiftKey && !ctrlKey) {
+                const edgeId = getEdgeId(actionContext.targetEdge);
+                const wasAlreadySelected = selectedEdgeIds.includes(edgeId);
+                
+                if (!wasAlreadySelected) {
+                    // Only clear other selections if the edge wasn't already selected
+                    selectedEdgeIds = [edgeId];
+                    selectedPointIds = [];
+                    selectedCenterIds = [];
+                    activeCenterId = null;
+                }
+                // If it was already selected, keep all existing selections
+            }
+            
             if (copyCount <= 1) {
                 dragPreviewPoints.forEach(dp => {
                     if (dp) {
@@ -3867,7 +3909,23 @@ canvas.addEventListener("mouseup", (event) => {
                     clickData.timestamp = now;
                     switch (clickData.count) {
                         case 1:
-                            if (targetType === 'point') { applySelectionLogic([targetId], [], shiftKey, ctrlKey, false); } else if (targetType === 'edge') { applySelectionLogic([], [targetId], shiftKey, ctrlKey, false); } else if (targetType === 'center') { if (!ctrlKey) { handleCenterSelection(targetId, shiftKey, ctrlKey); } }
+                            if (targetType === 'point') { 
+                                applySelectionLogic([targetId], [], shiftKey, ctrlKey, false); 
+                            } else if (targetType === 'edge') { 
+                                // NEW: Handle edge selection on single click
+                                if (!shiftKey && !ctrlKey) {
+                                    selectedPointIds = [];
+                                    selectedEdgeIds = [targetId];
+                                    selectedCenterIds = [];
+                                    activeCenterId = null;
+                                } else {
+                                    applySelectionLogic([], [targetId], shiftKey, ctrlKey, false);
+                                }
+                            } else if (targetType === 'center') { 
+                                if (!ctrlKey) { 
+                                    handleCenterSelection(targetId, shiftKey, ctrlKey); 
+                                } 
+                            }
                             break;
                         case 2:
                             if (targetType === 'point') { const neighbors = findNeighbors(clickData.targetId); applySelectionLogic([clickData.targetId, ...neighbors], [], false, false); } else if (targetType === 'edge') { const edge = allEdges.find(e => getEdgeId(e) === clickData.targetId); if (edge) { const validNeighborEdges = [...findNeighborEdges(edge.id1), ...findNeighborEdges(edge.id2)].filter(e => findPointById(e.id1) && findPointById(e.id2)); applySelectionLogic([], Array.from(new Set(validNeighborEdges.map(e => getEdgeId(e)))), false, false); } } else if (targetType === 'center') { const center = findPointById(clickData.targetId); if (center) { const relatedPoints = allPoints.filter(p => p.type === 'regular' && distance(p, center) < (POINT_SELECT_RADIUS * 10 / viewTransform.scale)).map(p => p.id); const relatedEdges = allEdges.filter(e => relatedPoints.includes(e.id1) && relatedPoints.includes(e.id2)).map(e => getEdgeId(e)); applySelectionLogic(relatedPoints, relatedEdges, shiftKey, ctrlKey, false); } }

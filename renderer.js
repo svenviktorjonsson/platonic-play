@@ -1591,14 +1591,20 @@ export function drawAllEdges(ctx, { allEdges, selectedEdgeIds, isDragConfirmed, 
 
         let p1_render = { ...p1_orig };
         let p2_render = { ...p2_orig };
-        let isBeingDragged = false;
+        let shouldBeDashed = false;
 
         if (isDragConfirmed && dragPreviewPoints.length > 0) {
             const p1Preview = dragPreviewPoints.find(dp => dp.id === p1_orig.id);
             const p2Preview = dragPreviewPoints.find(dp => dp.id === p2_orig.id);
+            
+            // Only dash if one endpoint is being dragged but not the other
+            // (i.e., the edge is changing length/angle)
+            const p1BeingDragged = !!p1Preview;
+            const p2BeingDragged = !!p2Preview;
+            shouldBeDashed = p1BeingDragged !== p2BeingDragged; // XOR - only one is being dragged
+            
             if (p1Preview) { p1_render.x = p1Preview.x; p1_render.y = p1Preview.y; }
             if (p2Preview) { p2_render.x = p2Preview.x; p2_render.y = p2Preview.y; }
-            if (p1Preview || p2Preview) isBeingDragged = true;
         }
 
         const p1Screen = dataToScreen(p1_render);
@@ -1621,7 +1627,7 @@ export function drawAllEdges(ctx, { allEdges, selectedEdgeIds, isDragConfirmed, 
             ctx.strokeStyle = gradient;
         }
 
-        ctx.setLineDash(isBeingDragged ? DASH_PATTERN : []);
+        ctx.setLineDash(shouldBeDashed ? DASH_PATTERN : []);
         ctx.lineWidth = LINE_WIDTH;
         ctx.stroke();
         ctx.setLineDash([]);
@@ -1641,7 +1647,7 @@ export function drawAllEdges(ctx, { allEdges, selectedEdgeIds, isDragConfirmed, 
     ctx.strokeStyle = colors.defaultStroke;
 }
 
-export function drawDragFeedback(ctx, htmlOverlay, targetPointId, currentPointStates, { lastGridState, showDistances, showAngles, distanceSigFigs, angleDisplayMode, angleSigFigs, currentShiftPressed, viewTransform, colors }, dataToScreen, findNeighbors, getEdgeId, isSnapping = false, excludedEdgeId = null, updateHtmlLabel = null) {
+export function drawDragFeedback(ctx, htmlOverlay, targetPointId, currentPointStates, { lastGridState, showDistances, showAngles, distanceSigFigs, angleDisplayMode, angleSigFigs, currentShiftPressed, viewTransform, colors }, dataToScreen, findNeighbors, getEdgeId, isSnapping = false, excludedEdgeId = null, updateHtmlLabel = null, selectedPointIds = [], isDragging = false) {
     const feedbackColor = isSnapping ? colors.feedbackSnapped : `rgba(${colors.feedbackDefault.join(',')}, 1.0)`;
 
     const livePoints = new Map(currentPointStates.map(p => [p.id, { ...p }]));
@@ -1671,60 +1677,64 @@ export function drawDragFeedback(ctx, htmlOverlay, targetPointId, currentPointSt
 
         const currentEdgeId = getEdgeId({ id1: vertex.id, id2: neighbor.id });
 
-        if (currentEdgeId !== excludedEdgeId) {
-            if (showDistances) {
-                let distText;
-                const areBothPointsOnGrid = gridInterval && isPointOnGrid(vertex, gridInterval) && isPointOnGrid(neighbor, gridInterval);
-                if (areBothPointsOnGrid) {
-                    const deltaX = vertex.x - neighbor.x;
-                    const deltaY = vertex.y - neighbor.y;
-                    const dx_grid = Math.round(deltaX / gridInterval);
-                    const dy_grid = Math.round(deltaY / gridInterval);
-                    const g2gSquaredSumForDisplay = dx_grid * dx_grid + dy_grid * dy_grid;
-                    if (g2gSquaredSumForDisplay === 0) {
-                        distText = '0';
-                    } else {
-                        const [coeff, radicand] = simplifySquareRoot(g2gSquaredSumForDisplay);
-                        const finalCoeff = gridInterval * coeff;
-                        const roundedFinalCoeff = parseFloat(finalCoeff.toFixed(10));
-                        distText = formatSimplifiedRoot(roundedFinalCoeff, radicand);
-                    }
+        // NEW: Only show distance if the neighbor is NOT selected AND we're not dragging this edge directly
+        const neighborIsSelected = selectedPointIds.includes(neighbor.id);
+        const isExcludedEdge = currentEdgeId === excludedEdgeId;
+        const shouldShowDistance = !neighborIsSelected && !isExcludedEdge && (!isDragging || !selectedPointIds.includes(vertex.id) || !neighborIsSelected);
+
+        if (shouldShowDistance && showDistances) {
+            let distText;
+            const areBothPointsOnGrid = gridInterval && isPointOnGrid(vertex, gridInterval) && isPointOnGrid(neighbor, gridInterval);
+            if (areBothPointsOnGrid) {
+                const deltaX = vertex.x - neighbor.x;
+                const deltaY = vertex.y - neighbor.y;
+                const dx_grid = Math.round(deltaX / gridInterval);
+                const dy_grid = Math.round(deltaY / gridInterval);
+                const g2gSquaredSumForDisplay = dx_grid * dx_grid + dy_grid * dy_grid;
+                if (g2gSquaredSumForDisplay === 0) {
+                    distText = '0';
                 } else {
-                    distText = formatNumber(dist, distanceSigFigs);
+                    const [coeff, radicand] = simplifySquareRoot(g2gSquaredSumForDisplay);
+                    const finalCoeff = gridInterval * coeff;
+                    const roundedFinalCoeff = parseFloat(finalCoeff.toFixed(10));
+                    distText = formatSimplifiedRoot(roundedFinalCoeff, radicand);
+                }
+            } else {
+                distText = formatNumber(dist, distanceSigFigs);
+            }
+
+            const neighborScreen = dataToScreen(neighbor);
+            const edgeAngleScreen = Math.atan2(neighborScreen.y - vertexScreen.y, neighborScreen.x - vertexScreen.x);
+
+            const midX = (vertexScreen.x + neighborScreen.x) / 2;
+            const midY = (vertexScreen.y + neighborScreen.y) / 2;
+
+            const labelId = `drag-dist-${vertex.id}-${neighbor.id}`;
+
+            if (Math.abs(Math.cos(edgeAngleScreen)) < VERTICAL_LINE_COS_THRESHOLD) {
+                const distanceTextX = midX + FEEDBACK_DISTANCE_LABEL_OFFSET_SCREEN;
+                const distanceTextY = midY;
+                updateHtmlLabel({ id: labelId, content: distText, x: distanceTextX, y: distanceTextY, color: feedbackColor, fontSize: FEEDBACK_LABEL_FONT_SIZE, options: { textAlign: 'center', textBaseline: 'middle', rotation: 90 } }, htmlOverlay);
+            } else {
+                let textPerpAngle = edgeAngleScreen - Math.PI / 2;
+                if (Math.sin(textPerpAngle) > 0) {
+                    textPerpAngle += Math.PI;
+                }
+                const distanceTextX = midX + Math.cos(textPerpAngle) * FEEDBACK_DISTANCE_LABEL_OFFSET_SCREEN;
+                const distanceTextY = midY + Math.sin(textPerpAngle) * FEEDBACK_DISTANCE_LABEL_OFFSET_SCREEN;
+
+                let rotationDeg = edgeAngleScreen * (180 / Math.PI);
+                if (rotationDeg > 90 || rotationDeg < -90) {
+                    rotationDeg += 180;
                 }
 
-                const neighborScreen = dataToScreen(neighbor);
-                const edgeAngleScreen = Math.atan2(neighborScreen.y - vertexScreen.y, neighborScreen.x - vertexScreen.x);
-
-                const midX = (vertexScreen.x + neighborScreen.x) / 2;
-                const midY = (vertexScreen.y + neighborScreen.y) / 2;
-
-                const labelId = `drag-dist-${vertex.id}-${neighbor.id}`;
-
-                if (Math.abs(Math.cos(edgeAngleScreen)) < VERTICAL_LINE_COS_THRESHOLD) {
-                    const distanceTextX = midX + FEEDBACK_DISTANCE_LABEL_OFFSET_SCREEN;
-                    const distanceTextY = midY;
-                    updateHtmlLabel({ id: labelId, content: distText, x: distanceTextX, y: distanceTextY, color: feedbackColor, fontSize: FEEDBACK_LABEL_FONT_SIZE, options: { textAlign: 'center', textBaseline: 'middle', rotation: 90 } }, htmlOverlay);
-                } else {
-                    let textPerpAngle = edgeAngleScreen - Math.PI / 2;
-                    if (Math.sin(textPerpAngle) > 0) {
-                        textPerpAngle += Math.PI;
-                    }
-                    const distanceTextX = midX + Math.cos(textPerpAngle) * FEEDBACK_DISTANCE_LABEL_OFFSET_SCREEN;
-                    const distanceTextY = midY + Math.sin(textPerpAngle) * FEEDBACK_DISTANCE_LABEL_OFFSET_SCREEN;
-
-                    let rotationDeg = edgeAngleScreen * (180 / Math.PI);
-                    if (rotationDeg > 90 || rotationDeg < -90) {
-                        rotationDeg += 180;
-                    }
-
-                    updateHtmlLabel({ id: labelId, content: distText, x: distanceTextX, y: distanceTextY, color: feedbackColor, fontSize: FEEDBACK_LABEL_FONT_SIZE, options: { textAlign: 'center', textBaseline: 'middle', rotation: rotationDeg } }, htmlOverlay);
-                }
+                updateHtmlLabel({ id: labelId, content: distText, x: distanceTextX, y: distanceTextY, color: feedbackColor, fontSize: FEEDBACK_LABEL_FONT_SIZE, options: { textAlign: 'center', textBaseline: 'middle', rotation: rotationDeg } }, htmlOverlay);
             }
         }
     });
 
-    if (showAngles && neighbors.length >= 2) {
+    // NEW: Only show angles if we're not dragging OR if the angle is actually changing
+    if (showAngles && neighbors.length >= 2 && (!isDragging || neighbors.some(n => !selectedPointIds.includes(n.id)))) {
         const sortedNeighbors = [...neighbors].sort((a, b) => {
             const angleA = Math.atan2(a.y - vertex.y, a.x - vertex.x);
             const angleB = Math.atan2(b.y - vertex.y, b.x - vertex.x);
@@ -1734,6 +1744,14 @@ export function drawDragFeedback(ctx, htmlOverlay, targetPointId, currentPointSt
         for (let i = 0; i < sortedNeighbors.length; i++) {
             const p1 = sortedNeighbors[i];
             const p2 = sortedNeighbors[(i + 1) % sortedNeighbors.length];
+            
+            // NEW: Only show angle if at least one of the lines forming the angle is changing
+            const p1IsSelected = selectedPointIds.includes(p1.id);
+            const p2IsSelected = selectedPointIds.includes(p2.id);
+            const angleIsChanging = !isDragging || !p1IsSelected || !p2IsSelected;
+            
+            if (!angleIsChanging) continue;
+            
             const v1 = { x: p1.x - vertex.x, y: p1.y - vertex.y };
             const v2 = { x: p2.x - vertex.x, y: p2.y - vertex.y };
             const angle1_data = Math.atan2(v1.y, v1.x);
@@ -3217,4 +3235,86 @@ export function drawCanvasUI(ctx, htmlOverlay, state, updateHtmlLabel) {
     }
 
     ctx.restore();
+}
+
+export function drawSelectedEdgeDistances(ctx, htmlOverlay, selectedEdgeIds, allEdges, { showDistances, distanceSigFigs, colors }, findPointById, getEdgeId, dataToScreen, updateHtmlLabel, currentPointStates = null) {
+    if (!showDistances || selectedEdgeIds.length === 0) return;
+    
+    selectedEdgeIds.forEach(edgeId => {
+        const edge = allEdges.find(e => getEdgeId(e) === edgeId);
+        if (edge) {
+            let p1 = findPointById(edge.id1);
+            let p2 = findPointById(edge.id2);
+            
+            if (currentPointStates) {
+                const p1State = currentPointStates.find(p => p.id === edge.id1);
+                const p2State = currentPointStates.find(p => p.id === edge.id2);
+                if (p1State) p1 = p1State;
+                if (p2State) p2 = p2State;
+            }
+            
+            if (p1 && p2 && p1.type === 'regular' && p2.type === 'regular') {
+                const edgeLength = distance(p1, p2);
+                const p1Screen = dataToScreen(p1);
+                const p2Screen = dataToScreen(p2);
+                const midX = (p1Screen.x + p2Screen.x) / 2;
+                const midY = (p1Screen.y + p2Screen.y) / 2;
+                const edgeAngleScreen = Math.atan2(p2Screen.y - p1Screen.y, p2Screen.x - p1Screen.x);
+                
+                let textPerpAngle = edgeAngleScreen - Math.PI / 2;
+                if (Math.sin(textPerpAngle) > 0) {
+                    textPerpAngle += Math.PI;
+                }
+                
+                const distanceTextX = midX + Math.cos(textPerpAngle) * FEEDBACK_DISTANCE_LABEL_OFFSET_SCREEN;
+                const distanceTextY = midY + Math.sin(textPerpAngle) * FEEDBACK_DISTANCE_LABEL_OFFSET_SCREEN;
+                
+                let rotationDeg = edgeAngleScreen * (180 / Math.PI);
+                if (rotationDeg > 90 || rotationDeg < -90) {
+                    rotationDeg += 180;
+                }
+                
+                const distanceText = formatNumber(edgeLength, distanceSigFigs);
+                updateHtmlLabel({ 
+                    id: `selected-edge-dist-${edgeId}`, 
+                    content: distanceText, 
+                    x: distanceTextX, 
+                    y: distanceTextY, 
+                    color: `rgba(${colors.feedbackDefault.join(',')}, 1.0)`, 
+                    fontSize: FEEDBACK_LABEL_FONT_SIZE, 
+                    options: { textAlign: 'center', textBaseline: 'middle', rotation: rotationDeg } 
+                });
+            }
+        }
+    });
+}
+
+export function drawSelectedEdgeAngles(ctx, htmlOverlay, selectedEdgeIds, allEdges, { showAngles, angleSigFigs, angleDisplayMode, currentShiftPressed, distanceSigFigs, viewTransform, lastGridState, colors }, findPointById, getEdgeId, dataToScreen, findNeighbors, updateHtmlLabel) {
+    if (!showAngles || selectedEdgeIds.length === 0) return;
+    
+    selectedEdgeIds.forEach(edgeId => {
+        const edge = allEdges.find(e => getEdgeId(e) === edgeId);
+        if (edge) {
+            const p1 = findPointById(edge.id1);
+            const p2 = findPointById(edge.id2);
+            if (p1 && p2 && p1.type === 'regular' && p2.type === 'regular') {
+                // Create proper state for drawDragFeedback
+                const feedbackState = {
+                    lastGridState,
+                    showDistances: false,
+                    showAngles: true,
+                    distanceSigFigs,
+                    angleDisplayMode,
+                    angleSigFigs,
+                    currentShiftPressed,
+                    viewTransform,
+                    colors
+                };
+                
+                // Draw angles at both endpoints of the selected edge
+                drawDragFeedback(ctx, htmlOverlay, p1.id, [p1, p2], feedbackState, dataToScreen, findNeighbors, getEdgeId, false, null, updateHtmlLabel);
+                drawDragFeedback(ctx, htmlOverlay, p2.id, [p1, p2], feedbackState, dataToScreen, findNeighbors, getEdgeId, false, null, updateHtmlLabel);
+            }
+        }
+    });
 }
