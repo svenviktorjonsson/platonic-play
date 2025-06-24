@@ -148,7 +148,7 @@ const canvasUI = {
 
 
 
-
+let hoveredPointId = null;
 let frozenReference_A_rad = null;
 let frozenReference_A_baseRad = null;
 let frozenReference_D_du = null;
@@ -156,6 +156,7 @@ let frozenReference_Origin_Data = null;
 let isMouseOverCanvas = false;
 let placingSnapPos = null;
 let isDisplayPanelExpanded = false;
+let isVisibilityPanelExpanded = false;
 let coordsDisplayMode = 'regular';    // Options: 'regular', 'complex', 'polar', 'none'
 let gridDisplayMode = 'lines';      // Options: 'lines', 'points', 'none'
 let angleDisplayMode = 'degrees';  // Options: 'degrees', 'radians', 'none'
@@ -1304,7 +1305,7 @@ function buildDisplayPanelUI() {
     const iconSize = DISPLAY_ICON_SIZE;
     const iconPadding = DISPLAY_ICON_PADDING;
 
-    const iconGroups = ['coords', 'grid', 'angles', 'distances'];
+    const iconGroups = ['coords', 'grid'];
 
     iconGroups.forEach((group, index) => {
         canvasUI.displayIcons.push({
@@ -1377,6 +1378,41 @@ function buildColorPaletteUI() {
         width: UI_SWATCH_SIZE,
         height: UI_SWATCH_SIZE,
     };
+
+    // Set default selection if none exists
+    if (selectedColorIndices.length === 0) {
+        const currentColorIndex = recentColors.indexOf(currentColor);
+        if (currentColorIndex !== -1) {
+            selectedColorIndices = [currentColorIndex];
+        } else {
+            // If current color isn't in recent colors, select the first color
+            if (recentColors.length > 0) {
+                selectedColorIndices = [0];
+            }
+        }
+    }
+}
+function buildVisibilityPanelUI() {
+    canvasUI.visibilityIcons = [];
+    if (!canvasUI.visibilityToolButton) return;
+
+    const panelX = UI_TOOLBAR_WIDTH + UI_BUTTON_PADDING;
+    const iconY = canvasUI.visibilityToolButton.y;
+    const iconSize = DISPLAY_ICON_SIZE;
+    const iconPadding = DISPLAY_ICON_PADDING;
+
+    const iconGroups = ['points', 'angles', 'distances'];
+
+    iconGroups.forEach((group, index) => {
+        canvasUI.visibilityIcons.push({
+            id: `visibility-icon-${group}`,
+            group: group,
+            x: panelX + index * (iconSize + iconPadding),
+            y: iconY,
+            width: iconSize,
+            height: iconSize
+        });
+    });
 }
 
 function buildMainToolbarUI() {
@@ -1417,14 +1453,72 @@ function buildMainToolbarUI() {
         height: TOOL_BUTTON_HEIGHT,
     };
 
-    canvasUI.themeToggleButton = {
-        id: "theme-toggle-button",
+    canvasUI.visibilityToolButton = {
+        id: "visibility-tool-button",
         type: "toolButton",
         x: UI_BUTTON_PADDING,
         y: canvasUI.displayToolButton.y + canvasUI.displayToolButton.height + UI_BUTTON_PADDING,
         width: UI_TOOLBAR_WIDTH - (2 * UI_BUTTON_PADDING),
         height: TOOL_BUTTON_HEIGHT,
     };
+
+    canvasUI.themeToggleButton = {
+        id: "theme-toggle-button",
+        type: "toolButton",
+        x: UI_BUTTON_PADDING,
+        y: canvasUI.visibilityToolButton.y + canvasUI.visibilityToolButton.height + UI_BUTTON_PADDING,
+        width: UI_TOOLBAR_WIDTH - (2 * UI_BUTTON_PADDING),
+        height: TOOL_BUTTON_HEIGHT,
+    };
+}
+
+function handleDisplayPanelClick(screenPos, shiftKey, ctrlKey) {
+    if (isDisplayPanelExpanded) {
+        for (const icon of canvasUI.displayIcons) {
+            if (screenPos.x >= icon.x && screenPos.x <= icon.x + icon.width &&
+                screenPos.y >= icon.y && screenPos.y <= icon.y + icon.height) {
+                switch (icon.group) {
+                    case 'coords':
+                        const coordsModes = [COORDS_DISPLAY_MODE_NONE, COORDS_DISPLAY_MODE_REGULAR, COORDS_DISPLAY_MODE_COMPLEX, COORDS_DISPLAY_MODE_POLAR];
+                        coordsDisplayMode = coordsModes[(coordsModes.indexOf(coordsDisplayMode) + 1) % coordsModes.length];
+                        break;
+                    case 'grid':
+                        const gridModes = [GRID_DISPLAY_MODE_LINES, GRID_DISPLAY_MODE_POINTS, GRID_DISPLAY_MODE_TRIANGULAR, GRID_DISPLAY_MODE_POLAR, GRID_DISPLAY_MODE_NONE];
+                        gridDisplayMode = gridModes[(gridModes.indexOf(gridDisplayMode) + 1) % gridModes.length];
+                        break;
+                }
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+function handleVisibilityPanelClick(screenPos, shiftKey, ctrlKey) {
+    if (isVisibilityPanelExpanded) {
+        for (const icon of canvasUI.visibilityIcons) {
+            if (screenPos.x >= icon.x && screenPos.x <= icon.x + icon.width &&
+                screenPos.y >= icon.y && screenPos.y <= icon.y + icon.height) {
+                switch (icon.group) {
+                    case 'points':
+                        pointsVisible = !pointsVisible;
+                        break;
+                    case 'angles':
+                        const angleModes = [ANGLE_DISPLAY_MODE_DEGREES, ANGLE_DISPLAY_MODE_RADIANS, ANGLE_DISPLAY_MODE_NONE];
+                        angleDisplayMode = angleModes[(angleModes.indexOf(angleDisplayMode) + 1) % angleModes.length];
+                        showAngles = angleDisplayMode !== ANGLE_DISPLAY_MODE_NONE;
+                        break;
+                    case 'distances':
+                        const distModes = [DISTANCE_DISPLAY_MODE_ON, DISTANCE_DISPLAY_MODE_NONE];
+                        distanceDisplayMode = distModes[(distModes.indexOf(distanceDisplayMode) + 1) % distModes.length];
+                        showDistances = distanceDisplayMode === DISTANCE_DISPLAY_MODE_ON;
+                        break;
+                }
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 function handleCanvasUIClick(screenPos, shiftKey = false, ctrlKey = false) {
@@ -1438,6 +1532,7 @@ function handleCanvasUIClick(screenPos, shiftKey = false, ctrlKey = false) {
             isColorPaletteExpanded = false;
             isTransformPanelExpanded = false;
             isDisplayPanelExpanded = false;
+            isVisibilityPanelExpanded = false;
             selectedColorIndices = [];
         }
         return true;
@@ -1447,13 +1542,7 @@ function handleCanvasUIClick(screenPos, shiftKey = false, ctrlKey = false) {
         const ctb = canvasUI.colorToolButton;
         if (ctb && screenPos.x >= ctb.x && screenPos.x <= ctb.x + ctb.width &&
             screenPos.y >= ctb.y && screenPos.y <= ctb.y + ctb.height) {
-            isColorPaletteExpanded = !isColorPaletteExpanded;
-            if (isColorPaletteExpanded) {
-                buildColorPaletteUI();
-                selectedColorIndices = [];
-            } else {
-                selectedColorIndices = [];
-            }
+            handleColorToolButtonClick();
             return true;
         }
 
@@ -1473,6 +1562,14 @@ function handleCanvasUIClick(screenPos, shiftKey = false, ctrlKey = false) {
             return true;
         }
 
+        const vtb = canvasUI.visibilityToolButton;
+        if (vtb && screenPos.x >= vtb.x && screenPos.x <= vtb.x + vtb.width &&
+            screenPos.y >= vtb.y && screenPos.y <= vtb.y + vtb.height) {
+            isVisibilityPanelExpanded = !isVisibilityPanelExpanded;
+            if (isVisibilityPanelExpanded) buildVisibilityPanelUI();
+            return true;
+        }
+
         const themeBtn = canvasUI.themeToggleButton;
         if (themeBtn && screenPos.x >= themeBtn.x && screenPos.x <= themeBtn.x + themeBtn.width &&
             screenPos.y >= themeBtn.y && screenPos.y <= themeBtn.y + themeBtn.height) {
@@ -1482,78 +1579,16 @@ function handleCanvasUIClick(screenPos, shiftKey = false, ctrlKey = false) {
     }
 
     if (isColorPaletteExpanded) {
-        const applyBtn = canvasUI.applyColorsButton;
-        if (applyBtn && screenPos.x >= applyBtn.x && screenPos.x <= applyBtn.x + applyBtn.width &&
-            screenPos.y >= applyBtn.y && screenPos.y <= applyBtn.y + applyBtn.height) {
-            applyColorsToSelection();
-            return true;
-        }
-
-        const randomBtn = canvasUI.randomColorButton;
-        if (randomBtn && screenPos.x >= randomBtn.x && screenPos.x <= randomBtn.x + randomBtn.width &&
-            screenPos.y >= randomBtn.y && screenPos.y <= randomBtn.y + randomBtn.height) {
-            if (ctrlKey) {
-                const index = selectedColorIndices.indexOf(-1);
-                if (index > -1) {
-                    selectedColorIndices.splice(index, 1);
-                } else {
-                    selectedColorIndices.push(-1);
-                }
-            } else if (shiftKey) {
-                if (!selectedColorIndices.includes(-1)) {
-                    selectedColorIndices.push(-1);
-                }
-            } else {
-                selectedColorIndices = [-1];
-            }
-            return true;
-        }
-
-        for (const swatch of canvasUI.colorSwatches) {
-            if (screenPos.x >= swatch.x && screenPos.x <= swatch.x + swatch.width &&
-                screenPos.y >= swatch.y && screenPos.y <= swatch.y + swatch.height) {
-                if (ctrlKey) {
-                    const index = selectedColorIndices.indexOf(swatch.index);
-                    if (index > -1) {
-                        selectedColorIndices.splice(index, 1);
-                    } else {
-                        selectedColorIndices.push(swatch.index);
-                    }
-                } else if (shiftKey) {
-                    if (!selectedColorIndices.includes(swatch.index)) {
-                        selectedColorIndices.push(swatch.index);
-                    }
-                } else {
-                    selectedColorIndices = [swatch.index];
-                    setCurrentColor(swatch.color);
-                }
-                return true;
-            }
-        }
-
-        const removeBtn = canvasUI.removeColorButton;
-        if (removeBtn && screenPos.x >= removeBtn.x && screenPos.x <= removeBtn.x + removeBtn.width &&
-            screenPos.y >= removeBtn.y && screenPos.y <= removeBtn.y + removeBtn.height) {
-            if (selectedColorIndices.length > 0) {
-                const indicesToRemove = selectedColorIndices.filter(index => index >= 0).sort((a, b) => b - a);
-                indicesToRemove.forEach(index => {
-                    recentColors.splice(index, 1);
-                });
-                selectedColorIndices = selectedColorIndices.filter(index => index === -1);
-                buildColorPaletteUI();
-            }
-            return true;
-        }
-
-        const addBtn = canvasUI.addColorButton;
-        if (addBtn && screenPos.x >= addBtn.x && screenPos.x <= addBtn.x + addBtn.width &&
-            screenPos.y >= addBtn.y && screenPos.y <= addBtn.y + addBtn.height) {
-            setTimeout(() => {
-                colorPicker.click();
-            }, 0);
+        if (handleColorPaletteClick(screenPos, shiftKey, ctrlKey)) {
             return true;
         }
     }
+
+    if (isColorPaletteExpanded) {
+    if (handleColorPaletteClick(screenPos, shiftKey, ctrlKey)) {
+        return true;
+    }
+}
 
     if (isTransformPanelExpanded) {
         for (const icon of canvasUI.transformIcons) {
@@ -1578,6 +1613,20 @@ function handleCanvasUIClick(screenPos, shiftKey = false, ctrlKey = false) {
                     case 'grid':
                         const gridModes = [GRID_DISPLAY_MODE_LINES, GRID_DISPLAY_MODE_POINTS, GRID_DISPLAY_MODE_TRIANGULAR, GRID_DISPLAY_MODE_POLAR, GRID_DISPLAY_MODE_NONE];
                         gridDisplayMode = gridModes[(gridModes.indexOf(gridDisplayMode) + 1) % gridModes.length];
+                        break;
+                }
+                return true;
+            }
+        }
+    }
+
+    if (isVisibilityPanelExpanded) {
+        for (const icon of canvasUI.visibilityIcons) {
+            if (screenPos.x >= icon.x && screenPos.x <= icon.x + icon.width &&
+                screenPos.y >= icon.y && screenPos.y <= icon.y + icon.height) {
+                switch (icon.group) {
+                    case 'points':
+                        pointsVisible = !pointsVisible;
                         break;
                     case 'angles':
                         const angleModes = [ANGLE_DISPLAY_MODE_DEGREES, ANGLE_DISPLAY_MODE_RADIANS, ANGLE_DISPLAY_MODE_NONE];
@@ -1619,10 +1668,32 @@ function handleThemeToggle() {
 }
 
 function addToRecentColors(color) {
-    if (recentColors.includes(color)) {
+    const existingIndex = recentColors.indexOf(color);
+    
+    if (existingIndex !== -1) {
+        // Color already exists, just select it
+        selectedColorIndices = [existingIndex];
         return;
     }
-    recentColors.push(color);
+    
+    // Add new color to the beginning
+    recentColors.unshift(color);
+    
+    // Remove excess colors (keep max 8)
+    if (recentColors.length > 8) {
+        recentColors.pop();
+    }
+    
+    // Update selected indices (shift existing indices by 1 since we added at beginning)
+    selectedColorIndices = selectedColorIndices.map(index => {
+        if (index >= 0) return index + 1;
+        return index; // Keep -1 (random) unchanged
+    });
+    
+    // Select the new color (now at index 0)
+    if (!selectedColorIndices.includes(0)) {
+        selectedColorIndices.unshift(0);
+    }
 
     if (isColorPaletteExpanded) {
         buildColorPaletteUI();
@@ -2185,6 +2256,60 @@ function setCurrentColor(newColor) {
     addToRecentColors(newColor);
 }
 
+function setupColorPickerHandler() {
+    colorPicker.addEventListener('change', (e) => {
+        const newColor = e.target.value;
+        setCurrentColor(newColor);
+        addToRecentColors(newColor);
+        
+        // Ensure the new color is selected
+        const newColorIndex = recentColors.indexOf(newColor);
+        if (newColorIndex !== -1) {
+            selectedColorIndices = [newColorIndex];
+        }
+        
+        if (isColorPaletteExpanded) {
+            buildColorPaletteUI();
+        }
+    });
+}
+
+function handleColorToolButtonClick() {
+    isColorPaletteExpanded = !isColorPaletteExpanded;
+    if (isColorPaletteExpanded) {
+        buildColorPaletteUI();
+        // Ensure current color is selected when opening palette
+        if (selectedColorIndices.length === 0) {
+            initializeColorPalette();
+        }
+    } else {
+        // Keep selection when closing
+        // selectedColorIndices = []; // Remove this line to maintain selection
+    }
+}
+
+function initializeApp() {
+    if (typeof window.katex === 'undefined') {
+        console.error("KaTeX library failed to load or initialize. Math rendering will be broken.");
+    }
+    initializeCanvasUI();
+    buildMainToolbarUI();
+    resizeCanvas();
+
+    viewTransform.scale = 70;
+    viewTransform.offsetX = canvas.width / 2;
+    viewTransform.offsetY = canvas.height / 2;
+    coordsDisplayMode = 'regular';
+
+    // Initialize color palette with default selection
+    initializeColorPalette();
+    setCurrentColor(currentColor);
+    setupColorPickerHandler();
+    
+    saveStateForUndo();
+    gameLoop();
+}
+
 function calculateTransformFromMouse(center, mouseData, startReferencePoint, centerType, currentAccumulatedRotation = 0) {
     const startVector = { x: startReferencePoint.x - center.x, y: startReferencePoint.y - center.y };
     const currentVector = { x: mouseData.x - center.x, y: mouseData.y - center.y };
@@ -2277,7 +2402,8 @@ function redrawAll() {
         }
 
         if (!isSelectedRegularPointInCopyPreview) {
-            drawPoint(ctx, pointToDraw, { selectedPointIds, selectedCenterIds, activeCenterId, currentColor, colors }, dataToScreen, updateHtmlLabel);
+            const isHovered = hoveredPointId === point.id;
+            drawPoint(ctx, pointToDraw, { selectedPointIds, selectedCenterIds, activeCenterId, currentColor, colors, pointsVisible, isHovered }, dataToScreen, updateHtmlLabel);
         }
     });
 
@@ -2290,7 +2416,7 @@ function redrawAll() {
             pointIdsToCopy.has(edge.id1) && pointIdsToCopy.has(edge.id2)
         );
 
-        pointsToCopyFrom.forEach(p => drawPoint(ctx, p, { selectedPointIds:[], selectedCenterIds:[], activeCenterId:null, currentColor, colors }, dataToScreen, ()=>{}))
+        pointsToCopyFrom.forEach(p => drawPoint(ctx, p, { selectedPointIds:[], selectedCenterIds:[], activeCenterId:null, currentColor, colors, pointsVisible}, dataToScreen, ()=>{}))
         ctx.setLineDash(DASH_PATTERN);
         incidentEdges.forEach(edge => {
             const p1 = allPoints.find(p => p.id === edge.id1);
@@ -2378,7 +2504,7 @@ function redrawAll() {
                 });
             });
 
-            previewPointsForThisCopy.forEach(point => drawPoint(ctx, point, { selectedPointIds:[], selectedCenterIds:[], activeCenterId:null, currentColor, colors }, dataToScreen, ()=>{}));
+            previewPointsForThisCopy.forEach(point => drawPoint(ctx, point, { selectedPointIds:[], selectedCenterIds:[], activeCenterId:null, currentColor, colors, pointsVisible}, dataToScreen, ()=>{}));
         }
         ctx.globalAlpha = 1.0;
         ctx.setLineDash([]);
@@ -2509,9 +2635,9 @@ function redrawAll() {
     updateMouseCoordinates(htmlOverlay, { coordsDisplayMode, isMouseOverCanvas, currentShiftPressed, ghostPointPosition, gridDisplayMode, lastGridState, angleDisplayMode, canvas, dpr, mousePos, colors}, screenToData, updateHtmlLabel);
 
     const stateForUI = {
-        dpr, canvasUI, isToolbarExpanded, isColorPaletteExpanded, isTransformPanelExpanded, isDisplayPanelExpanded,
+        dpr, canvasUI, isToolbarExpanded, isColorPaletteExpanded, isTransformPanelExpanded, isDisplayPanelExpanded, isVisibilityPanelExpanded,
         isPlacingTransform, placingTransformType, placingSnapPos, mousePos, selectedColorIndices,
-        recentColors, activeThemeName, colors, coordsDisplayMode, gridDisplayMode, angleDisplayMode, distanceDisplayMode
+        recentColors, activeThemeName, colors, pointsVisible, coordsDisplayMode, gridDisplayMode, angleDisplayMode, distanceDisplayMode
     };
     drawCanvasUI(ctx, htmlOverlay, stateForUI, updateHtmlLabel);
 
@@ -2547,6 +2673,107 @@ function isDraggingEntireConnectedComponent(startPointId, draggedPointIds) {
     }
     
     return componentPoints.size > 1;
+}
+
+function initializeColorPalette() {
+    // Ensure currentColor is in recentColors
+    if (!recentColors.includes(currentColor)) {
+        recentColors.unshift(currentColor); // Add to beginning
+        if (recentColors.length > 8) {
+            recentColors.pop(); // Remove last if too many
+        }
+    }
+    
+    // Set initial selection to current color
+    const currentColorIndex = recentColors.indexOf(currentColor);
+    if (currentColorIndex !== -1) {
+        selectedColorIndices = [currentColorIndex];
+    }
+}
+
+function handleColorPaletteClick(screenPos, shiftKey, ctrlKey) {
+    if (!isColorPaletteExpanded) return false;
+
+    const applyBtn = canvasUI.applyColorsButton;
+    if (applyBtn && screenPos.x >= applyBtn.x && screenPos.x <= applyBtn.x + applyBtn.width &&
+        screenPos.y >= applyBtn.y && screenPos.y <= applyBtn.y + applyBtn.height) {
+        applyColorsToSelection();
+        return true;
+    }
+
+    const randomBtn = canvasUI.randomColorButton;
+    if (randomBtn && screenPos.x >= randomBtn.x && screenPos.x <= randomBtn.x + randomBtn.width &&
+        screenPos.y >= randomBtn.y && screenPos.y <= randomBtn.y + randomBtn.height) {
+        if (ctrlKey) {
+            const index = selectedColorIndices.indexOf(-1);
+            if (index > -1) {
+                selectedColorIndices.splice(index, 1);
+            } else {
+                selectedColorIndices.push(-1);
+            }
+        } else if (shiftKey) {
+            if (!selectedColorIndices.includes(-1)) {
+                selectedColorIndices.push(-1);
+            }
+        } else {
+            selectedColorIndices = [-1];
+        }
+        return true;
+    }
+
+    for (const swatch of canvasUI.colorSwatches) {
+        if (screenPos.x >= swatch.x && screenPos.x <= swatch.x + swatch.width &&
+            screenPos.y >= swatch.y && screenPos.y <= swatch.y + swatch.height) {
+            if (ctrlKey) {
+                const index = selectedColorIndices.indexOf(swatch.index);
+                if (index > -1) {
+                    selectedColorIndices.splice(index, 1);
+                } else {
+                    selectedColorIndices.push(swatch.index);
+                }
+            } else if (shiftKey) {
+                if (!selectedColorIndices.includes(swatch.index)) {
+                    selectedColorIndices.push(swatch.index);
+                }
+            } else {
+                selectedColorIndices = [swatch.index];
+                setCurrentColor(swatch.color);
+            }
+            return true;
+        }
+    }
+
+    const removeBtn = canvasUI.removeColorButton;
+    if (removeBtn && screenPos.x >= removeBtn.x && screenPos.x <= removeBtn.x + removeBtn.width &&
+        screenPos.y >= removeBtn.y && screenPos.y <= removeBtn.y + removeBtn.height) {
+        if (selectedColorIndices.length > 0) {
+            const indicesToRemove = selectedColorIndices.filter(index => index >= 0).sort((a, b) => b - a);
+            indicesToRemove.forEach(index => {
+                recentColors.splice(index, 1);
+            });
+            selectedColorIndices = selectedColorIndices.filter(index => index === -1);
+            
+            // After removing colors, ensure we still have a selection if colors remain
+            if (recentColors.length > 0 && selectedColorIndices.length === 0) {
+                selectedColorIndices = [0]; // Select first remaining color
+                setCurrentColor(recentColors[0]);
+            }
+            
+            buildColorPaletteUI();
+        }
+        return true;
+    }
+
+    const addBtn = canvasUI.addColorButton;
+    if (addBtn && screenPos.x >= addBtn.x && screenPos.x <= addBtn.x + addBtn.width &&
+        screenPos.y >= addBtn.y && screenPos.y <= addBtn.y + addBtn.height) {
+        setTimeout(() => {
+            colorPicker.click();
+        }, 0);
+        return true;
+    }
+
+    return false;
 }
 
 function performEscapeAction() {
@@ -2942,17 +3169,7 @@ function handleMouseDown(event) {
 }
 
 
-colorPicker.addEventListener('change', (e) => {
-    const newColor = e.target.value;
-    setCurrentColor(newColor);
-    addToRecentColors(newColor);
-    if (isColorPaletteExpanded) {
-        buildColorPaletteUI();
-        const currentIndex = recentColors.indexOf(newColor);
-        selectedSwatchIndex = (currentIndex > -1) ? currentIndex : null;
-    }
-});
-
+setupColorPickerHandler();
 
 canvas.addEventListener('wheel', (event) => {
     event.preventDefault();
@@ -2975,6 +3192,20 @@ canvas.addEventListener('contextmenu', (event) => event.preventDefault());
 canvas.addEventListener('mousemove', (event) => {
     mousePos = getMousePosOnCanvas(event, canvas);
     currentShiftPressed = event.shiftKey;
+
+    hoveredPointId = null;
+    if (!isActionInProgress && !pointsVisible) {
+        const mouseDataPos = screenToData(mousePos);
+        const selectRadiusData = POINT_SELECT_RADIUS / viewTransform.scale;
+        
+        for (let i = allPoints.length - 1; i >= 0; i--) {
+            const point = allPoints[i];
+            if (point.type === POINT_TYPE_REGULAR && distance(mouseDataPos, point) < selectRadiusData) {
+                hoveredPointId = point.id;
+                break;
+            }
+        }
+    }
 
     if (currentShiftPressed && !isActionInProgress) {
         const mouseDataPos = screenToData(mousePos);
@@ -3813,21 +4044,5 @@ window.addEventListener('keydown', (event) => {
 window.addEventListener('resize', resizeCanvas);
 
 window.addEventListener('load', () => {
-    if (typeof window.katex === 'undefined') {
-        console.error("KaTeX library failed to load or initialize. Math rendering will be broken.");
-    }
-    initializeCanvasUI();
-    buildMainToolbarUI();
-    resizeCanvas();
-
-    viewTransform.scale = 70;
-    
-    viewTransform.offsetX = canvas.width / 2;
-    viewTransform.offsetY = canvas.height / 2;
-    
-    coordsDisplayMode = 'regular';
-
-    setCurrentColor(currentColor);
-    saveStateForUndo();
-    gameLoop();
+    initializeApp();
 });

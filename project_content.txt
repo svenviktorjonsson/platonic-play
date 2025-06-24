@@ -10,8 +10,6 @@ Relevant files and folders (excluding specified patterns):
 ├── renderer.js
 ├── script.js
 ├── style.css
-├── temp.js
-├── temp2.js
 ├── utils.js
 ├── write_content_to_file.py
 
@@ -1869,10 +1867,15 @@ function drawCenterSymbol(ctx, point, dataToScreen, colors) {
     }
 }
 
-export function drawPoint(ctx, point, { selectedPointIds, selectedCenterIds, activeCenterId, currentColor, colors }, dataToScreen, updateHtmlLabel) {
+export function drawPoint(ctx, point, { selectedPointIds, selectedCenterIds, activeCenterId, currentColor, colors, pointsVisible = true, isHovered = false }, dataToScreen, updateHtmlLabel) {
     let isSelected;
     if (point.type === POINT_TYPE_REGULAR) {
         isSelected = selectedPointIds.includes(point.id);
+        
+        // Skip drawing regular points if they're not visible, unless they're selected or hovered
+        if (!pointsVisible && !isSelected && !isHovered) {
+            return;
+        }
     } else {
         isSelected = selectedCenterIds.includes(point.id);
     }
@@ -3145,10 +3148,90 @@ function drawUITransformationSymbols(ctx, icon, colors) {
     ctx.restore();
 }
 
+export function drawVisibilityIcon(ctx, rect, colors) {
+    const centerX = rect.x + rect.width / 2;
+    const centerY = rect.y + rect.height / 2;
+    const eyeWidth = rect.width * 0.6;
+    const eyeHeight = rect.height * 0.3;
+    
+    ctx.save();
+    ctx.strokeStyle = colors.uiIcon;
+    ctx.fillStyle = colors.uiIcon;
+    ctx.lineWidth = UI_ICON_LINE_WIDTH_SMALL;
+    ctx.lineCap = 'round';
+    
+    // Draw eye outline (almond shape)
+    ctx.beginPath();
+    ctx.ellipse(centerX, centerY, eyeWidth / 2, eyeHeight / 2, 0, 0, 2 * Math.PI);
+    ctx.stroke();
+    
+    // Draw pupil
+    const pupilRadius = eyeHeight * 0.3;
+    ctx.beginPath();
+    ctx.arc(centerX, centerY, pupilRadius, 0, 2 * Math.PI);
+    ctx.fill();
+    
+    ctx.restore();
+}
+
+export function drawPointsVisibilityIcon(ctx, rect, isVisible, colors) {
+    const colorStrong = isVisible ? colors.uiIconSelected : colors.uiIconDefault;
+    const center = { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+    
+    ctx.save();
+    ctx.translate(center.x, center.y);
+    const scale = rect.width / UI_ICON_BASE_SIZE;
+    ctx.scale(scale, scale);
+    ctx.translate(-16, -16);
+    
+    ctx.strokeStyle = colorStrong;
+    ctx.fillStyle = colorStrong;
+    ctx.lineWidth = UI_ICON_LINE_WIDTH_SMALL;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    
+    // Draw the < symbol (angle bracket shape)
+    ctx.beginPath();
+    ctx.moveTo(22, 10);  // Top right point
+    ctx.lineTo(12, 16);  // Center left vertex
+    ctx.lineTo(22, 22);  // Bottom right point
+    ctx.stroke();
+    
+    if (isVisible) {
+        // Draw 3 big points at the vertices of the < symbol
+        const pointPositions = [
+            { x: 22, y: 10 },  // Top vertex
+            { x: 12, y: 16 },  // Left vertex (the angle point)
+            { x: 22, y: 22 }   // Bottom vertex
+        ];
+        
+        const bigPointRadius = UI_ICON_POINT_RADIUS * 2;
+        
+        pointPositions.forEach(pos => {
+            ctx.beginPath();
+            ctx.arc(pos.x, pos.y, bigPointRadius, 0, RADIANS_IN_CIRCLE);
+            ctx.fill();
+        });
+    }
+    // When not visible: just show the < lines without any points
+    
+    ctx.restore();
+}
+
+export function drawVisibilityPanelIcon(ctx, icon, state, htmlOverlay, updateHtmlLabel) {
+    const { pointsVisible, colors } = state;
+    
+    switch (icon.group) {
+        case 'points':
+            drawPointsVisibilityIcon(ctx, { x: icon.x, y: icon.y, width: icon.width, height: icon.height }, pointsVisible, colors);
+            break;
+    }
+}
+
 export function drawCanvasUI(ctx, htmlOverlay, state, updateHtmlLabel) {
-    const { dpr, canvasUI, isToolbarExpanded, isColorPaletteExpanded, isTransformPanelExpanded, isDisplayPanelExpanded,
+    const { dpr, canvasUI, isToolbarExpanded, isColorPaletteExpanded, isTransformPanelExpanded, isDisplayPanelExpanded, isVisibilityPanelExpanded,
         isPlacingTransform, placingTransformType, placingSnapPos, mousePos, selectedColorIndices,
-        recentColors, activeThemeName, colors } = state;
+        recentColors, activeThemeName, colors, pointsVisible} = state;
 
     ctx.save();
     ctx.resetTransform();
@@ -3195,6 +3278,11 @@ export function drawCanvasUI(ctx, htmlOverlay, state, updateHtmlLabel) {
                 ctx.arc(dtb.x + 6 + barWidth * (i / 2), y, UI_DISPLAY_ICON_KNOB_RADIUS, 0, RADIANS_IN_CIRCLE);
                 ctx.fill();
             }
+        }
+
+        const vtb = canvasUI.visibilityToolButton;
+        if (vtb) {
+            drawVisibilityIcon(ctx, vtb, colors);
         }
 
         const themeBtn = canvasUI.themeToggleButton;
@@ -3349,6 +3437,12 @@ export function drawCanvasUI(ctx, htmlOverlay, state, updateHtmlLabel) {
     if (isDisplayPanelExpanded) {
         canvasUI.displayIcons.forEach(icon => {
             drawDisplayIcon(ctx, icon, state, htmlOverlay, updateHtmlLabel);
+        });
+    }
+
+    if (isVisibilityPanelExpanded) {
+        canvasUI.visibilityIcons.forEach(icon => {
+            drawVisibilityPanelIcon(ctx, icon, state, htmlOverlay, updateHtmlLabel);
         });
     }
 
@@ -3515,7 +3609,7 @@ const canvasUI = {
 
 
 
-
+let hoveredPointId = null;
 let frozenReference_A_rad = null;
 let frozenReference_A_baseRad = null;
 let frozenReference_D_du = null;
@@ -3523,6 +3617,7 @@ let frozenReference_Origin_Data = null;
 let isMouseOverCanvas = false;
 let placingSnapPos = null;
 let isDisplayPanelExpanded = false;
+let isVisibilityPanelExpanded = false;
 let coordsDisplayMode = 'regular';    // Options: 'regular', 'complex', 'polar', 'none'
 let gridDisplayMode = 'lines';      // Options: 'lines', 'points', 'none'
 let angleDisplayMode = 'degrees';  // Options: 'degrees', 'radians', 'none'
@@ -4746,6 +4841,29 @@ function buildColorPaletteUI() {
     };
 }
 
+function buildVisibilityPanelUI() {
+    canvasUI.visibilityIcons = [];
+    if (!canvasUI.visibilityToolButton) return;
+
+    const panelX = UI_TOOLBAR_WIDTH + UI_BUTTON_PADDING;
+    const iconY = canvasUI.visibilityToolButton.y;
+    const iconSize = DISPLAY_ICON_SIZE;
+    const iconPadding = DISPLAY_ICON_PADDING;
+
+    const iconGroups = ['points'];
+
+    iconGroups.forEach((group, index) => {
+        canvasUI.visibilityIcons.push({
+            id: `visibility-icon-${group}`,
+            group: group,
+            x: panelX + index * (iconSize + iconPadding),
+            y: iconY,
+            width: iconSize,
+            height: iconSize
+        });
+    });
+}
+
 function buildMainToolbarUI() {
     const canvasHeight = canvas.height / dpr;
     canvasUI.mainToolbar = {
@@ -4784,11 +4902,20 @@ function buildMainToolbarUI() {
         height: TOOL_BUTTON_HEIGHT,
     };
 
+    canvasUI.visibilityToolButton = {
+        id: "visibility-tool-button",
+        type: "toolButton",
+        x: UI_BUTTON_PADDING,
+        y: canvasUI.displayToolButton.y + canvasUI.displayToolButton.height + UI_BUTTON_PADDING,
+        width: UI_TOOLBAR_WIDTH - (2 * UI_BUTTON_PADDING),
+        height: TOOL_BUTTON_HEIGHT,
+    };
+
     canvasUI.themeToggleButton = {
         id: "theme-toggle-button",
         type: "toolButton",
         x: UI_BUTTON_PADDING,
-        y: canvasUI.displayToolButton.y + canvasUI.displayToolButton.height + UI_BUTTON_PADDING,
+        y: canvasUI.visibilityToolButton.y + canvasUI.visibilityToolButton.height + UI_BUTTON_PADDING,
         width: UI_TOOLBAR_WIDTH - (2 * UI_BUTTON_PADDING),
         height: TOOL_BUTTON_HEIGHT,
     };
@@ -4837,6 +4964,14 @@ function handleCanvasUIClick(screenPos, shiftKey = false, ctrlKey = false) {
             screenPos.y >= dtb.y && screenPos.y <= dtb.y + dtb.height) {
             isDisplayPanelExpanded = !isDisplayPanelExpanded;
             if (isDisplayPanelExpanded) buildDisplayPanelUI();
+            return true;
+        }
+
+        const vtb = canvasUI.visibilityToolButton;
+        if (vtb && screenPos.x >= vtb.x && screenPos.x <= vtb.x + vtb.width &&
+            screenPos.y >= vtb.y && screenPos.y <= vtb.y + vtb.height) {
+            isVisibilityPanelExpanded = !isVisibilityPanelExpanded;
+            if (isVisibilityPanelExpanded) buildVisibilityPanelUI();
             return true;
         }
 
@@ -4955,6 +5090,20 @@ function handleCanvasUIClick(screenPos, shiftKey = false, ctrlKey = false) {
                         const distModes = [DISTANCE_DISPLAY_MODE_ON, DISTANCE_DISPLAY_MODE_NONE];
                         distanceDisplayMode = distModes[(distModes.indexOf(distanceDisplayMode) + 1) % distModes.length];
                         showDistances = distanceDisplayMode === DISTANCE_DISPLAY_MODE_ON;
+                        break;
+                }
+                return true;
+            }
+        }
+    }
+
+    if (isVisibilityPanelExpanded) {
+        for (const icon of canvasUI.visibilityIcons) {
+            if (screenPos.x >= icon.x && screenPos.x <= icon.x + icon.width &&
+                screenPos.y >= icon.y && screenPos.y <= icon.y + icon.height) {
+                switch (icon.group) {
+                    case 'points':
+                        pointsVisible = !pointsVisible;
                         break;
                 }
                 return true;
@@ -5644,7 +5793,8 @@ function redrawAll() {
         }
 
         if (!isSelectedRegularPointInCopyPreview) {
-            drawPoint(ctx, pointToDraw, { selectedPointIds, selectedCenterIds, activeCenterId, currentColor, colors }, dataToScreen, updateHtmlLabel);
+            const isHovered = hoveredPointId === point.id;
+            drawPoint(ctx, pointToDraw, { selectedPointIds, selectedCenterIds, activeCenterId, currentColor, colors, pointsVisible, isHovered }, dataToScreen, updateHtmlLabel);
         }
     });
 
@@ -5657,7 +5807,7 @@ function redrawAll() {
             pointIdsToCopy.has(edge.id1) && pointIdsToCopy.has(edge.id2)
         );
 
-        pointsToCopyFrom.forEach(p => drawPoint(ctx, p, { selectedPointIds:[], selectedCenterIds:[], activeCenterId:null, currentColor, colors }, dataToScreen, ()=>{}))
+        pointsToCopyFrom.forEach(p => drawPoint(ctx, p, { selectedPointIds:[], selectedCenterIds:[], activeCenterId:null, currentColor, colors, pointsVisible}, dataToScreen, ()=>{}))
         ctx.setLineDash(DASH_PATTERN);
         incidentEdges.forEach(edge => {
             const p1 = allPoints.find(p => p.id === edge.id1);
@@ -5745,7 +5895,7 @@ function redrawAll() {
                 });
             });
 
-            previewPointsForThisCopy.forEach(point => drawPoint(ctx, point, { selectedPointIds:[], selectedCenterIds:[], activeCenterId:null, currentColor, colors }, dataToScreen, ()=>{}));
+            previewPointsForThisCopy.forEach(point => drawPoint(ctx, point, { selectedPointIds:[], selectedCenterIds:[], activeCenterId:null, currentColor, colors, pointsVisible}, dataToScreen, ()=>{}));
         }
         ctx.globalAlpha = 1.0;
         ctx.setLineDash([]);
@@ -5876,9 +6026,9 @@ function redrawAll() {
     updateMouseCoordinates(htmlOverlay, { coordsDisplayMode, isMouseOverCanvas, currentShiftPressed, ghostPointPosition, gridDisplayMode, lastGridState, angleDisplayMode, canvas, dpr, mousePos, colors}, screenToData, updateHtmlLabel);
 
     const stateForUI = {
-        dpr, canvasUI, isToolbarExpanded, isColorPaletteExpanded, isTransformPanelExpanded, isDisplayPanelExpanded,
+        dpr, canvasUI, isToolbarExpanded, isColorPaletteExpanded, isTransformPanelExpanded, isDisplayPanelExpanded, isVisibilityPanelExpanded,
         isPlacingTransform, placingTransformType, placingSnapPos, mousePos, selectedColorIndices,
-        recentColors, activeThemeName, colors, coordsDisplayMode, gridDisplayMode, angleDisplayMode, distanceDisplayMode
+        recentColors, activeThemeName, colors, pointsVisible, coordsDisplayMode, gridDisplayMode, angleDisplayMode, distanceDisplayMode
     };
     drawCanvasUI(ctx, htmlOverlay, stateForUI, updateHtmlLabel);
 
@@ -6342,6 +6492,20 @@ canvas.addEventListener('contextmenu', (event) => event.preventDefault());
 canvas.addEventListener('mousemove', (event) => {
     mousePos = getMousePosOnCanvas(event, canvas);
     currentShiftPressed = event.shiftKey;
+
+    hoveredPointId = null;
+    if (!isActionInProgress && !pointsVisible) {
+        const mouseDataPos = screenToData(mousePos);
+        const selectRadiusData = POINT_SELECT_RADIUS / viewTransform.scale;
+        
+        for (let i = allPoints.length - 1; i >= 0; i--) {
+            const point = allPoints[i];
+            if (point.type === POINT_TYPE_REGULAR && distance(mouseDataPos, point) < selectRadiusData) {
+                hoveredPointId = point.id;
+                break;
+            }
+        }
+    }
 
     if (currentShiftPressed && !isActionInProgress) {
         const mouseDataPos = screenToData(mousePos);
@@ -7264,14 +7428,6 @@ canvas {
     padding: 0;
     /* We are no longer positioning it far off-screen */
 }
-
-=== temp.js ===
---- CONTENT EXCLUDED (listed in exclude_files) ---
-
-
-=== temp2.js ===
---- CONTENT EXCLUDED (listed in exclude_files) ---
-
 
 === utils.js ===
 import {

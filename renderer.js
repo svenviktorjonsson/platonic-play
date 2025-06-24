@@ -1522,26 +1522,15 @@ export function drawAngleArc(ctx, centerScreen, dataStartAngleRad, dataEndAngleR
     ctx.restore();
 }
 
-function drawCenterSymbol(ctx, point, dataToScreen, colors) {
-    const screenPos = dataToScreen(point); const radius = CENTER_POINT_VISUAL_RADIUS;
-    ctx.strokeStyle = colors.defaultStroke;
-    ctx.setLineDash([]); ctx.lineWidth = LINE_WIDTH;
-    if (point.type === 'center_rotate_scale') {
-        ctx.beginPath(); ctx.arc(screenPos.x, screenPos.y, radius, 0, 2 * Math.PI); ctx.stroke();
-        ctx.beginPath(); ctx.moveTo(screenPos.x - radius, screenPos.y); ctx.lineTo(screenPos.x + radius, screenPos.y); ctx.stroke();
-        ctx.beginPath(); ctx.moveTo(screenPos.x, screenPos.y - radius); ctx.lineTo(screenPos.x, screenPos.y + radius); ctx.stroke();
-    } else if (point.type === 'center_rotate_only') {
-        ctx.beginPath(); ctx.arc(screenPos.x, screenPos.y, radius, 0, 2 * Math.PI); ctx.stroke();
-    } else if (point.type === 'center_scale_only') {
-        ctx.beginPath(); ctx.moveTo(screenPos.x - radius, screenPos.y); ctx.lineTo(screenPos.x + radius, screenPos.y); ctx.stroke();
-        ctx.beginPath(); ctx.moveTo(screenPos.x, screenPos.y - radius); ctx.lineTo(screenPos.x, screenPos.y + radius); ctx.stroke();
-    }
-}
-
-export function drawPoint(ctx, point, { selectedPointIds, selectedCenterIds, activeCenterId, currentColor, colors }, dataToScreen, updateHtmlLabel) {
+export function drawPoint(ctx, point, { selectedPointIds, selectedCenterIds, activeCenterId, currentColor, colors, pointsVisible = true, isHovered = false }, dataToScreen, updateHtmlLabel) {
     let isSelected;
     if (point.type === POINT_TYPE_REGULAR) {
         isSelected = selectedPointIds.includes(point.id);
+        
+        // Skip drawing regular points if they're not visible, unless they're selected or hovered
+        if (!pointsVisible && !isSelected && !isHovered) {
+            return;
+        }
     } else {
         isSelected = selectedCenterIds.includes(point.id);
     }
@@ -2773,51 +2762,237 @@ function drawUITransformationSymbols(ctx, icon, colors) {
 
     switch (icon.type) {
         case TRANSFORMATION_TYPE_ROTATION: {
-            for (let i = 0; i < 3; i++) {
-                const angle = i * (Math.PI / 3);
-                ctx.save();
-                ctx.rotate(angle);
-                ctx.beginPath();
-                ctx.moveTo(-radius, 0);
-                ctx.lineTo(radius, 0);
-                ctx.stroke();
-                ctx.restore();
-            }
+            const arcAngle = -Math.PI / 4;
+            
+            // ctx.beginPath();
+            // ctx.moveTo(-radius, 0);
+            // ctx.lineTo(radius, 0);
+            // ctx.stroke();
+            
+            // Arc from 0° to 90° (clockwise because Y-axis is flipped)
+            ctx.beginPath();
+            ctx.arc(0, 0, radius,  arcAngle,-arcAngle);
+            ctx.stroke();
+            
+            // Arc from 180° to 270° (clockwise because Y-axis is flipped)
+            ctx.beginPath();
+            ctx.arc(0, 0, radius, Math.PI+arcAngle, Math.PI-arcAngle);
+            ctx.stroke();
+            
+            const arrowSize = radius * 0.2;
+            
+            // Arrow at 90° pointing left
+            const arrow1X = radius * Math.cos(arcAngle);
+            const arrow1Y = radius * Math.sin(arcAngle);
+            
+            ctx.save();
+            ctx.translate(arrow1X, arrow1Y);
+            ctx.rotate(arcAngle-Math.PI/2); // Point left
+            ctx.beginPath();
+            ctx.moveTo(0, 0);
+            ctx.lineTo(-arrowSize, -arrowSize * 0.5);
+            ctx.moveTo(0, 0);
+            ctx.lineTo(-arrowSize, arrowSize * 0.5);
+            ctx.stroke();
+            ctx.restore();
+            
+            // Arrow at 270° pointing right
+            const arrow2X = radius * Math.cos(Math.PI + arcAngle);
+            const arrow2Y = radius * Math.sin(Math.PI + arcAngle);
+            
+            ctx.save();
+            ctx.translate(arrow2X, arrow2Y);
+            ctx.rotate(arcAngle+Math.PI/2); // Point right
+            ctx.beginPath();
+            ctx.moveTo(0, 0);
+            ctx.lineTo(-arrowSize, -arrowSize * 0.5);
+            ctx.moveTo(0, 0);
+            ctx.lineTo(-arrowSize, arrowSize * 0.5);
+            ctx.stroke();
+            ctx.restore();
             break;
         }
 
         case TRANSFORMATION_TYPE_SCALE: {
-            const radii = [0.33, 0.66, 1.0];
-            radii.forEach(r => {
+            const lineLength = radius * 0.8;
+            const arrowSize = radius * 0.25;
+            
+            ctx.beginPath();
+            ctx.moveTo(-lineLength, 0);
+            ctx.lineTo(lineLength, 0);
+            ctx.moveTo(0, -lineLength);
+            ctx.lineTo(0, lineLength);
+            ctx.stroke();
+            
+            const arrowPositions = [
+                { x: lineLength, y: 0, dirX: 1, dirY: 0 },
+                { x: -lineLength, y: 0, dirX: -1, dirY: 0 },
+                { x: 0, y: -lineLength, dirX: 0, dirY: -1 },
+                { x: 0, y: lineLength, dirX: 0, dirY: 1 }
+            ];
+            
+            arrowPositions.forEach(pos => {
                 ctx.beginPath();
-                ctx.arc(0, 0, radius * r, 0, 2 * Math.PI);
+                ctx.moveTo(pos.x, pos.y);
+                ctx.lineTo(pos.x - pos.dirX * arrowSize + pos.dirY * arrowSize * 0.5, 
+                          pos.y - pos.dirY * arrowSize - pos.dirX * arrowSize * 0.5);
+                ctx.moveTo(pos.x, pos.y);
+                ctx.lineTo(pos.x - pos.dirX * arrowSize - pos.dirY * arrowSize * 0.5, 
+                          pos.y - pos.dirY * arrowSize + pos.dirX * arrowSize * 0.5);
                 ctx.stroke();
             });
             break;
         }
 
         case TRANSFORMATION_TYPE_DIRECTIONAL_SCALE: {
-            const lineSpacing = radius * 0.25;
-            const lineHeight = radius * 1.6;
-            for (let i = -1.5; i <= 1.5; i++) {
-                ctx.beginPath();
-                ctx.moveTo(i * lineSpacing, -lineHeight / 2);
-                ctx.lineTo(i * lineSpacing, lineHeight / 2);
-                ctx.stroke();
-            }
+            const lineLength = radius * 0.8;
+            const arrowSize = radius * 0.25;
+            
             ctx.beginPath();
-            ctx.arc(0, 0, radius * 0.15, 0, 2 * Math.PI);
-            ctx.fill();
+            ctx.moveTo(-lineLength / Math.sqrt(2), -lineLength / Math.sqrt(2));
+            ctx.lineTo(lineLength / Math.sqrt(2), lineLength / Math.sqrt(2));
+            ctx.moveTo(lineLength / Math.sqrt(2), -lineLength / Math.sqrt(2));
+            ctx.lineTo(-lineLength / Math.sqrt(2), lineLength / Math.sqrt(2));
+            ctx.stroke();
+            
+            const arrowPositions = [
+                { 
+                    x: lineLength / Math.sqrt(2), 
+                    y: -lineLength / Math.sqrt(2), 
+                    dirX: 1/Math.sqrt(2), 
+                    dirY: -1/Math.sqrt(2)
+                },
+                { 
+                    x: -lineLength / Math.sqrt(2), 
+                    y: lineLength / Math.sqrt(2), 
+                    dirX: -1/Math.sqrt(2), 
+                    dirY: 1/Math.sqrt(2)
+                }
+            ];
+            
+            arrowPositions.forEach(pos => {
+                ctx.beginPath();
+                ctx.moveTo(pos.x, pos.y);
+                ctx.lineTo(pos.x - pos.dirX * arrowSize + pos.dirY * arrowSize * 0.5, 
+                          pos.y - pos.dirY * arrowSize - pos.dirX * arrowSize * 0.5);
+                ctx.moveTo(pos.x, pos.y);
+                ctx.lineTo(pos.x - pos.dirX * arrowSize - pos.dirY * arrowSize * 0.5, 
+                          pos.y - pos.dirY * arrowSize + pos.dirX * arrowSize * 0.5);
+                ctx.stroke();
+            });
             break;
         }
     }
     ctx.restore();
 }
 
+export function drawVisibilityIcon(ctx, rect, colors) {
+    const centerX = rect.x + rect.width / 2;
+    const centerY = rect.y + rect.height / 2;
+    const eyeWidth = rect.width * 0.6;
+    const eyeHeight = rect.height * 0.3;
+    
+    ctx.save();
+    ctx.strokeStyle = colors.uiIcon;
+    ctx.fillStyle = colors.uiIcon;
+    ctx.lineWidth = UI_ICON_LINE_WIDTH_SMALL;
+    ctx.lineCap = 'round';
+    
+    // Draw eye outline (almond shape)
+    ctx.beginPath();
+    ctx.ellipse(centerX, centerY, eyeWidth / 2, eyeHeight / 2, 0, 0, 2 * Math.PI);
+    ctx.stroke();
+    
+    // Draw pupil
+    const pupilRadius = eyeHeight * 0.3;
+    ctx.beginPath();
+    ctx.arc(centerX, centerY, pupilRadius, 0, 2 * Math.PI);
+    ctx.fill();
+    
+    ctx.restore();
+}
+
+export function drawPointsVisibilityIcon(ctx, rect, isVisible, colors) {
+    const colorStrong = isVisible ? colors.uiIconSelected : colors.uiIconDefault;
+    const center = { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+    
+    ctx.save();
+    ctx.translate(center.x, center.y);
+    const scale = rect.width / UI_ICON_BASE_SIZE;
+    ctx.scale(scale, scale);
+    ctx.translate(-16, -16);
+    
+    ctx.strokeStyle = colorStrong;
+    ctx.fillStyle = colorStrong;
+    ctx.lineWidth = UI_ICON_LINE_WIDTH_SMALL;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    
+    // Draw the < symbol (angle bracket shape) - always fully opaque
+    ctx.beginPath();
+    ctx.moveTo(22, 10);  // Top right point
+    ctx.lineTo(12, 16);  // Center left vertex
+    ctx.lineTo(22, 22);  // Bottom right point
+    ctx.stroke();
+    
+    if (isVisible) {
+        // Draw 3 big solid points at the vertices of the < symbol
+        const pointPositions = [
+            { x: 22, y: 10 },  // Top vertex
+            { x: 12, y: 16 },  // Left vertex (the angle point)
+            { x: 22, y: 22 }   // Bottom vertex
+        ];
+        
+        const bigPointRadius = UI_ICON_POINT_RADIUS * 2;
+        
+        pointPositions.forEach(pos => {
+            ctx.beginPath();
+            ctx.arc(pos.x, pos.y, bigPointRadius, 0, RADIANS_IN_CIRCLE);
+            ctx.fill();
+        });
+    } else {
+        // Draw 3 dashed circles at the vertices of the < symbol with thinner lines
+        const pointPositions = [
+            { x: 22, y: 10 },  // Top vertex
+            { x: 12, y: 16 },  // Left vertex (the angle point)
+            { x: 22, y: 22 }   // Bottom vertex
+        ];
+        
+        const bigPointRadius = UI_ICON_POINT_RADIUS * 2;
+        
+        ctx.lineWidth = UI_ICON_LINE_WIDTH_SMALL * 0.7; // Thinner lines for dashed circles
+        ctx.setLineDash(UI_ICON_DASH_PATTERN);
+        pointPositions.forEach(pos => {
+            ctx.beginPath();
+            ctx.arc(pos.x, pos.y, bigPointRadius, 0, RADIANS_IN_CIRCLE);
+            ctx.stroke();
+        });
+        ctx.setLineDash([]); // Reset dash pattern
+    }
+    
+    ctx.restore();
+}
+
+export function drawVisibilityPanelIcon(ctx, icon, state, htmlOverlay, updateHtmlLabel) {
+    const { pointsVisible, angleDisplayMode, distanceDisplayMode, colors } = state;
+    
+    switch (icon.group) {
+        case 'points':
+            drawPointsVisibilityIcon(ctx, { x: icon.x, y: icon.y, width: icon.width, height: icon.height }, pointsVisible, colors);
+            break;
+        case 'angles':
+            drawAngleIcon(ctx, { x: icon.x, y: icon.y, width: icon.width, height: icon.height }, angleDisplayMode, angleDisplayMode !== ANGLE_DISPLAY_MODE_NONE, htmlOverlay, updateHtmlLabel, colors);
+            break;
+        case 'distances':
+            drawDistanceIcon(ctx, { x: icon.x, y: icon.y, width: icon.width, height: icon.height }, distanceDisplayMode, distanceDisplayMode === DISTANCE_DISPLAY_MODE_ON, htmlOverlay, updateHtmlLabel, colors);
+            break;
+    }
+}
+
 export function drawCanvasUI(ctx, htmlOverlay, state, updateHtmlLabel) {
-    const { dpr, canvasUI, isToolbarExpanded, isColorPaletteExpanded, isTransformPanelExpanded, isDisplayPanelExpanded,
+    const { dpr, canvasUI, isToolbarExpanded, isColorPaletteExpanded, isTransformPanelExpanded, isDisplayPanelExpanded, isVisibilityPanelExpanded,
         isPlacingTransform, placingTransformType, placingSnapPos, mousePos, selectedColorIndices,
-        recentColors, activeThemeName, colors } = state;
+        recentColors, activeThemeName, colors, pointsVisible} = state;
 
     ctx.save();
     ctx.resetTransform();
@@ -2864,6 +3039,11 @@ export function drawCanvasUI(ctx, htmlOverlay, state, updateHtmlLabel) {
                 ctx.arc(dtb.x + 6 + barWidth * (i / 2), y, UI_DISPLAY_ICON_KNOB_RADIUS, 0, RADIANS_IN_CIRCLE);
                 ctx.fill();
             }
+        }
+
+        const vtb = canvasUI.visibilityToolButton;
+        if (vtb) {
+            drawVisibilityIcon(ctx, vtb, colors);
         }
 
         const themeBtn = canvasUI.themeToggleButton;
@@ -3018,6 +3198,12 @@ export function drawCanvasUI(ctx, htmlOverlay, state, updateHtmlLabel) {
     if (isDisplayPanelExpanded) {
         canvasUI.displayIcons.forEach(icon => {
             drawDisplayIcon(ctx, icon, state, htmlOverlay, updateHtmlLabel);
+        });
+    }
+
+    if (isVisibilityPanelExpanded) {
+        canvasUI.visibilityIcons.forEach(icon => {
+            drawVisibilityPanelIcon(ctx, icon, state, htmlOverlay, updateHtmlLabel);
         });
     }
 
