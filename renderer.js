@@ -2779,7 +2779,7 @@ function drawUITransformationSymbols(ctx, icon, colors) {
             ctx.arc(0, 0, radius, Math.PI+arcAngle, Math.PI-arcAngle);
             ctx.stroke();
             
-            const arrowSize = radius * 0.2;
+            const arrowSize = radius * 0.25;
             
             // Arrow at 90° pointing left
             const arrow1X = radius * Math.cos(arcAngle);
