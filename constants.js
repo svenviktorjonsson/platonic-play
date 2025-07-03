@@ -174,7 +174,7 @@ export const SELECTION_GLOW_ALPHA = 0.8;
 export const SELECTION_GLOW_RADIUS_OFFSET = 3;
 export const SELECTION_GLOW_LINE_WIDTH = 2;
 export const EDGE_SELECTION_GLOW_WIDTH_OFFSET = 4;
-export const MAX_POINTS_FOR_ANGLES = 3;
+export const MAX_POINTS_FOR_ANGLES = 1;
 export const MAX_EDGES_FOR_LABELS = 3;
 
 // --- GRID CALCULATIONS ---

@@ -12,6 +12,7 @@ import {
     ON_SEGMENT_STRICT_T_MIN,
     ON_SEGMENT_STRICT_T_MAX,
     ANGLE_SNAP_THRESHOLD_RAD,
+    TRIANGULAR_GRID_Y_STEP_FACTOR,
 } from './constants.js';
 
 export function formatNumber(value, sigFigs) {
@@ -68,21 +69,64 @@ export function generateAngleSnapFractions(maxDenominator, maxResultingMultipleO
     return Array.from(fractionsSet).sort((a, b) => a - b);
 }
 
-export function getNearestGridPoints(mouseDataPos, gridInterval) {
-    if (!gridInterval || gridInterval <= 0) return [];
-    
-    // Find the grid cell that contains the mouse position
-    const gridX = Math.floor(mouseDataPos.x / gridInterval) * gridInterval;
-    const gridY = Math.floor(mouseDataPos.y / gridInterval) * gridInterval;
-    
-    // Return the 4 corners of this grid cell
-    return [
-        { x: gridX, y: gridY, isGridPoint: true },
-        { x: gridX + gridInterval, y: gridY, isGridPoint: true },
-        { x: gridX, y: gridY + gridInterval, isGridPoint: true },
-        { x: gridX + gridInterval, y: gridY + gridInterval, isGridPoint: true }
-    ];
+export function getGridSnapCandidates(mouseDataPos, gridDisplayMode, gridInterval, angularGridState, getMultipleRect = false) {
+    const candidates = [];
+    if (gridDisplayMode === 'none' || !gridInterval || gridInterval <= 0) {
+        return candidates;
+    }
+
+    if (gridDisplayMode === 'polar') {
+        const mouseAngleDeg = (Math.atan2(mouseDataPos.y, mouseDataPos.x) * 180 / Math.PI + 360) % 360;
+        const mouseRadius = Math.hypot(mouseDataPos.x, mouseDataPos.y);
+        const snappedRadius = Math.round(mouseRadius / gridInterval) * gridInterval;
+
+        angularGridState.forEach(level => {
+            if (level.alpha > 0.01 && level.angle > 0) {
+                const angularInterval = level.angle;
+                const snappedAngleDeg = Math.round(mouseAngleDeg / angularInterval) * angularInterval;
+                const snappedAngleRad = snappedAngleDeg * Math.PI / 180;
+                candidates.push({ x: snappedRadius * Math.cos(snappedAngleRad), y: snappedRadius * Math.sin(snappedAngleRad), isGridPoint: true });
+            }
+        });
+    } else if (gridDisplayMode === 'triangular') {
+        const y_step = gridInterval * TRIANGULAR_GRID_Y_STEP_FACTOR;
+        const i_f = (mouseDataPos.x / gridInterval) - (mouseDataPos.y / (gridInterval * Math.sqrt(3)));
+        const j_f = mouseDataPos.y / y_step;
+
+        let i_r = Math.round(i_f);
+        let j_r = Math.round(j_f);
+        let k_r = Math.round(-i_f - j_f);
+
+        const i_diff = Math.abs(i_r - i_f);
+        const j_diff = Math.abs(j_r - j_f);
+        const k_diff = Math.abs(k_r - (-i_f - j_f));
+
+        if (i_diff > j_diff && i_diff > k_diff) {
+            i_r = -j_r - k_r;
+        } else if (j_diff > k_diff) {
+            j_r = -i_r - k_r;
+        }
+
+        const snappedX = i_r * gridInterval + j_r * gridInterval / 2;
+        const snappedY = j_r * y_step;
+        candidates.push({ x: snappedX, y: snappedY, isGridPoint: true });
+    } else { // 'lines' or 'points'
+        if (getMultipleRect) {
+            const gridX = Math.floor(mouseDataPos.x / gridInterval) * gridInterval;
+            const gridY = Math.floor(mouseDataPos.y / gridInterval) * gridInterval;
+            candidates.push(
+                { x: gridX, y: gridY, isGridPoint: true },
+                { x: gridX + gridInterval, y: gridY, isGridPoint: true },
+                { x: gridX, y: gridY + gridInterval, isGridPoint: true },
+                { x: gridX + gridInterval, y: gridY + gridInterval, isGridPoint: true }
+            );
+        } else {
+            candidates.push({ x: Math.round(mouseDataPos.x / gridInterval) * gridInterval, y: Math.round(mouseDataPos.y / gridInterval) * gridInterval, isGridPoint: true });
+        }
+    }
+    return candidates;
 }
+
 
 export function solveForPoint(N1, N2, d1, alpha) {
     const d_n = distance(N1, N2);
@@ -134,9 +178,15 @@ export function normalizeAngle(angleRad) {
 }
 
 export function calculateRotationAngle(initialStartAngle, currentMouseAngle, totalAccumulatedRotationFromStart = 0) {
+    // Calculate the raw delta
     let rawDeltaAngle = currentMouseAngle - initialStartAngle;
+    
+    // Find the number of full revolutions that maintains continuity
     let numRevolutions = Math.round((totalAccumulatedRotationFromStart - rawDeltaAngle) / (2 * Math.PI));
+    
+    // Apply the revolutions to maintain continuity - this ensures we never flip at ±180°
     let continuousDeltaAngle = rawDeltaAngle + numRevolutions * (2 * Math.PI);
+    
     return continuousDeltaAngle;
 }
 
@@ -174,6 +224,23 @@ export function getLineCircleIntersection(line, circle) {
         { x: p1.x + t1 * d.x, y: p1.y + t1 * d.y },
         { x: p1.x + t2 * d.x, y: p1.y + t2 * d.y }
     ];
+}
+
+export function getClosestPointOnLine(p, a, b) {
+    const abx = b.x - a.x;
+    const aby = b.y - a.y;
+    const acx = p.x - a.x;
+    const acy = p.y - a.y;
+    const lenSqAB = abx * abx + aby * aby;
+
+    if (lenSqAB === 0) {
+        return { point: { x: a.x, y: a.y }, distance: distance(p, a) };
+    }
+    let t = (acx * abx + acy * aby) / lenSqAB;
+    const closestX = a.x + t * abx;
+    const closestY = a.y + t * aby;
+    const dist = distance(p, { x: closestX, y: closestY });
+    return { point: { x: closestX, y: closestY }, distance: dist };
 }
 
 export function getLineLineIntersection(line1, line2) {
@@ -510,4 +577,43 @@ export function formatSnapFactor(factor, symbol) {
         return `${sign}\\frac{${num}}{${den}}${newSymbol}`;
     }
     return `${fractionStr}${newSymbol}`;
+}
+
+export function applyTransformToPoint(point, center, rotation, scale, directionalScale, startVector) {
+    const pointVector = { x: point.x - center.x, y: point.y - center.y };
+
+    if (directionalScale) {
+        const startDist = Math.hypot(startVector.x, startVector.y);
+        if (startDist > GEOMETRY_CALCULATION_EPSILON) {
+            const startNormalized = { x: startVector.x / startDist, y: startVector.y / startDist };
+
+            const parallelComponent = (pointVector.x * startNormalized.x + pointVector.y * startNormalized.y);
+            const perpVector = {
+                x: pointVector.x - parallelComponent * startNormalized.x,
+                y: pointVector.y - parallelComponent * startNormalized.y
+            };
+
+            const scaledParallelComponent = parallelComponent * scale;
+
+            const newVector = {
+                x: scaledParallelComponent * startNormalized.x + perpVector.x,
+                y: scaledParallelComponent * startNormalized.y + perpVector.y
+            };
+
+            return { x: center.x + newVector.x, y: center.y + newVector.y };
+        }
+        return { x: point.x, y: point.y };
+    } else {
+        let transformedVector = { ...pointVector };
+
+        transformedVector.x *= scale;
+        transformedVector.y *= scale;
+
+        const x = transformedVector.x;
+        const y = transformedVector.y;
+        transformedVector.x = x * Math.cos(rotation) - y * Math.sin(rotation);
+        transformedVector.y = x * Math.sin(rotation) + y * Math.cos(rotation);
+
+        return { x: center.x + transformedVector.x, y: center.y + transformedVector.y };
+    }
 }
