@@ -631,19 +631,32 @@ export function drawMergePreviews(ctx, { allPoints, dragPreviewPoints, viewTrans
 
     const copies = [];
     if (pointsToTransform.length > 0) {
-        const deltaX = dragPreviewPoints[0].x - initialDragPointStates[0].x;
-        const deltaY = dragPreviewPoints[0].y - initialDragPointStates[0].y;
-
-        multipliers.forEach(k => {
-            const effectiveDeltaX = deltaX * k;
-            const effectiveDeltaY = deltaY * k;
-            const transformedPoints = pointsToTransform.map(p_orig => ({
-                ...p_orig,
-                x: p_orig.x + effectiveDeltaX,
-                y: p_orig.y + effectiveDeltaY,
-            }));
-            copies.push(transformedPoints);
-        });
+        if (transformIndicatorData) {
+            const { center, rotation, scale, directionalScale, startPos } = transformIndicatorData;
+            const startVector = { x: startPos.x - center.x, y: startPos.y - center.y };
+            multipliers.forEach(k => {
+                const effectiveRotation = rotation * k;
+                const effectiveScale = Math.pow(scale, k);
+                const transformedPoints = pointsToTransform.map(p_orig => {
+                    const newPos = applyTransformToPoint(p_orig, center, effectiveRotation, effectiveScale, directionalScale, startVector);
+                    return { ...p_orig, ...newPos };
+                });
+                copies.push(transformedPoints);
+            });
+        } else {
+            const deltaX = dragPreviewPoints[0].x - initialDragPointStates[0].x;
+            const deltaY = dragPreviewPoints[0].y - initialDragPointStates[0].y;
+            multipliers.forEach(k => {
+                const effectiveDeltaX = deltaX * k;
+                const effectiveDeltaY = deltaY * k;
+                const transformedPoints = pointsToTransform.map(p_orig => ({
+                    ...p_orig,
+                    x: p_orig.x + effectiveDeltaX,
+                    y: p_orig.y + effectiveDeltaY,
+                }));
+                copies.push(transformedPoints);
+            });
+        }
     }
 
     const drawIndicator = (p1, p2) => {
@@ -654,7 +667,7 @@ export function drawMergePreviews(ctx, { allPoints, dragPreviewPoints, viewTrans
             const key = `${Math.round(screenPos.x)},${Math.round(screenPos.y)}`;
             if (!drawnMergeIndicators.has(key)) {
                 ctx.beginPath();
-                ctx.arc(screenPos.x, screenPos.y, POINT_RADIUS, 0, RADIANS_IN_CIRCLE);
+                ctx.arc(screenPos.x, screenPos.y, POINT_RADIUS, 0, 2 * Math.PI);
                 ctx.fill();
                 drawnMergeIndicators.add(key);
             }

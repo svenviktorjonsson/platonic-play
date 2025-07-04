@@ -2323,593 +2323,403 @@ function getBestTranslationSnap(initialDragPointStates, rawDelta, copyCount) {
 }
 
 function getBestRotationSnap(center, initialPointStates, handlePoint, rawRotation) {
-    const snapThresholdData = (POINT_RADIUS * 2) / viewTransform.scale;
-    const staticPoints = allPoints.filter(p => p.type === 'regular' && !initialPointStates.some(ip => ip.id === p.id));
-    const pointsToTransform = initialPointStates.filter(p => p.type === 'regular');
     const copyCount = parseInt(copyCountInput || '1', 10);
 
-    let allPossibleSnaps = [];
+    if (currentShiftPressed || copyCount <= 1) {
+        let allPossibleSnaps = [];
 
-    if (Math.abs(rawRotation) < ANGLE_SNAP_THRESHOLD_RAD) {
-        allPossibleSnaps.push({
-            rotation: 0,
-            pos: applyTransformToPoint(handlePoint, center, 0, 1, false, null),
-            snapped: true,
-            snapType: 'zero',
-            mergeTarget: applyTransformToPoint(handlePoint, center, 0, 1, false, null),
-            distance: Math.abs(rawRotation),
-            priority: 1000
-        });
-    }
+        if (currentShiftPressed) {
+            for (const factor of NINETY_DEG_ANGLE_SNAP_FRACTIONS) {
+                const snapAngle = factor * Math.PI / 2;
+                if (Math.abs(rawRotation - snapAngle) < ANGLE_SNAP_THRESHOLD_RAD) {
+                    allPossibleSnaps.push({ rotation: snapAngle, priority: Math.abs(rawRotation - snapAngle) });
+                }
+                if (snapAngle !== 0 && Math.abs(rawRotation - (-snapAngle)) < ANGLE_SNAP_THRESHOLD_RAD) {
+                    allPossibleSnaps.push({ rotation: -snapAngle, priority: Math.abs(rawRotation - (-snapAngle)) });
+                }
+            }
+        }
 
-    const allCopyPositions = [];
-    
-    pointsToTransform.forEach(p => {
-        allCopyPositions.push({
-            point: p,
-            position: { x: p.x, y: p.y },
-            copyIndex: 0,
-            isOriginal: true
-        });
-    });
-    
-    for (let copyIndex = 1; copyIndex <= copyCount; copyIndex++) {
-        const copyRotation = rawRotation * copyIndex;
-        pointsToTransform.forEach(p => {
-            const transformedPos = applyTransformToPoint(p, center, copyRotation, 1, false, null);
-            allCopyPositions.push({
-                point: p,
-                position: transformedPos,
-                copyIndex: copyIndex,
-                isOriginal: false
+        if (allPossibleSnaps.length > 0) {
+            allPossibleSnaps.sort((a, b) => a.priority - b.priority);
+            const bestSnap = allPossibleSnaps[0];
+            const finalPos = applyTransformToPoint(handlePoint, center, bestSnap.rotation, 1, false, null);
+            return {
+                rotation: bestSnap.rotation,
+                pos: finalPos,
+                snapped: true,
+                snapType: 'fraction'
+            };
+        }
+
+        const finalPos = applyTransformToPoint(handlePoint, center, rawRotation, 1, false, null);
+        return { rotation: rawRotation, pos: finalPos, snapped: false, snapType: null };
+
+    } else {
+        const snapThresholdData = (POINT_RADIUS * 2) / viewTransform.scale;
+        const staticPoints = allPoints.filter(p => p.type === 'regular' && !initialPointStates.some(ip => ip.id === p.id));
+        const pointsToTransform = initialPointStates.filter(p => p.type === 'regular');
+        let allPossibleSnaps = [];
+
+        for (let i = 0; i < pointsToTransform.length; i++) {
+            for (let j = 0; j < pointsToTransform.length; j++) {
+                const p1_orig = pointsToTransform[i];
+                const p2_orig = pointsToTransform[j];
+
+                const v1 = { x: p1_orig.x - center.x, y: p1_orig.y - center.y };
+                const v2 = { x: p2_orig.x - center.x, y: p2_orig.y - center.y };
+                
+                const r1 = Math.hypot(v1.x, v1.y);
+                const r2 = Math.hypot(v2.x, v2.y);
+                
+                if (Math.abs(r1 - r2) < snapThresholdData) {
+                    const theta1_orig = Math.atan2(v1.y, v1.x);
+                    const theta2_orig = Math.atan2(v2.y, v2.x);
+                    
+                    for (let c1 = 0; c1 < copyCount; c1++) {
+                        for (let c2 = 0; c2 < copyCount; c2++) {
+                            if (p1_orig.id === p2_orig.id && c1 === c2) continue;
+                            if (c1 === c2) continue;
+
+                            const delta_c = c1 - c2;
+                            if (delta_c === 0) continue;
+
+                            let delta_theta = theta2_orig - theta1_orig;
+                            const target_delta_theta = rawRotation * delta_c;
+                            const k = Math.round((target_delta_theta - delta_theta) / (2 * Math.PI));
+                            delta_theta += k * (2 * Math.PI);
+
+                            const exact_rotation = delta_theta / delta_c;
+                            allPossibleSnaps.push({
+                                rotation: exact_rotation,
+                                priority: Math.abs(exact_rotation - rawRotation)
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        
+        pointsToTransform.forEach(p_orig => {
+            staticPoints.forEach(p_static => {
+                const v_orig = { x: p_orig.x - center.x, y: p_orig.y - center.y };
+                const v_static = { x: p_static.x - center.x, y: p_static.y - center.y };
+                const r_orig = Math.hypot(v_orig.x, v_orig.y);
+                const r_static = Math.hypot(v_static.x, v_static.y);
+
+                if (Math.abs(r_orig - r_static) < snapThresholdData) {
+                    const theta_orig = Math.atan2(v_orig.y, v_orig.x);
+                    const theta_static = Math.atan2(v_static.y, v_static.y);
+                    
+                    for (let c = 0; c < copyCount; c++) {
+                        if (c === 0) {
+                            if (Math.abs(normalizeAngleToPi(theta_static - theta_orig)) < GEOMETRY_CALCULATION_EPSILON) {
+                                allPossibleSnaps.push({ rotation: 0, priority: Math.abs(rawRotation) });
+                            }
+                            continue;
+                        }
+
+                        let delta_theta = theta_static - theta_orig;
+                        const target_delta_theta = rawRotation * c;
+                        const k = Math.round((target_delta_theta - delta_theta) / (2 * Math.PI));
+                        delta_theta += k * (2 * Math.PI);
+
+                        const exact_rotation = delta_theta / c;
+                        allPossibleSnaps.push({
+                            rotation: exact_rotation,
+                            priority: Math.abs(exact_rotation - rawRotation)
+                        });
+                    }
+                }
             });
         });
-    }
 
-    for (let i = 0; i < allCopyPositions.length; i++) {
-        for (let j = i + 1; j < allCopyPositions.length; j++) {
-            const pos1 = allCopyPositions[i];
-            const pos2 = allCopyPositions[j];
+        if (allPossibleSnaps.length > 0) {
+            allPossibleSnaps.sort((a, b) => a.priority - b.priority);
+            const bestSnap = allPossibleSnaps[0];
             
-            if (pos1.point.id === pos2.point.id) continue;
-            
-            const dist = distance(pos1.position, pos2.position);
-            if (dist < snapThresholdData) {
-                if (pos1.copyIndex > 0) {
-                    const requiredPos = pos2.position;
-                    const currentPos = applyTransformToPoint(pos1.point, center, rawRotation * pos1.copyIndex, 1, false, null);
-                    
-                    const currentVector = { x: currentPos.x - center.x, y: currentPos.y - center.y };
-                    const requiredVector = { x: requiredPos.x - center.x, y: requiredPos.y - center.y };
-                    
-                    const currentAngle = Math.atan2(currentVector.y, currentVector.x);
-                    const requiredAngle = Math.atan2(requiredVector.y, requiredVector.x);
-                    
-                    let angleDiff = requiredAngle - currentAngle;
-                    while (angleDiff > Math.PI) angleDiff -= 2 * Math.PI;
-                    while (angleDiff < -Math.PI) angleDiff += 2 * Math.PI;
-                    
-                    const correctedRotation = rawRotation + angleDiff / pos1.copyIndex;
-                    const correctedPos = applyTransformToPoint(handlePoint, center, correctedRotation, 1, false, null);
-                    
-                    allPossibleSnaps.push({
-                        rotation: correctedRotation,
-                        pos: correctedPos,
-                        snapped: true,
-                        snapType: 'merge',
-                        mergeTarget: pos2.position,
-                        mergingPosition: pos1.position,
-                        distance: dist,
-                        priority: dist,
-                        adjustedCopy: pos1.copyIndex,
-                        targetCopy: pos2.copyIndex
-                    });
-                }
-                
-                if (pos2.copyIndex > 0 && pos2.copyIndex !== pos1.copyIndex) {
-                    const requiredPos = pos1.position;
-                    const currentPos = applyTransformToPoint(pos2.point, center, rawRotation * pos2.copyIndex, 1, false, null);
-                    
-                    const currentVector = { x: currentPos.x - center.x, y: currentPos.y - center.y };
-                    const requiredVector = { x: requiredPos.x - center.x, y: requiredPos.y - center.y };
-                    
-                    const currentAngle = Math.atan2(currentVector.y, currentVector.x);
-                    const requiredAngle = Math.atan2(requiredVector.y, requiredVector.x);
-                    
-                    let angleDiff = requiredAngle - currentAngle;
-                    while (angleDiff > Math.PI) angleDiff -= 2 * Math.PI;
-                    while (angleDiff < -Math.PI) angleDiff += 2 * Math.PI;
-                    
-                    const correctedRotation = rawRotation + angleDiff / pos2.copyIndex;
-                    const correctedPos = applyTransformToPoint(handlePoint, center, correctedRotation, 1, false, null);
-                    
-                    allPossibleSnaps.push({
-                        rotation: correctedRotation,
-                        pos: correctedPos,
-                        snapped: true,
-                        snapType: 'merge',
-                        mergeTarget: pos1.position,
-                        mergingPosition: pos2.position,
-                        distance: dist,
-                        priority: dist,
-                        adjustedCopy: pos2.copyIndex,
-                        targetCopy: pos1.copyIndex
-                    });
-                }
+            if (bestSnap.priority < ANGLE_SNAP_THRESHOLD_RAD) {
+                const finalPos = applyTransformToPoint(handlePoint, center, bestSnap.rotation, 1, false, null);
+                return { 
+                    rotation: bestSnap.rotation, 
+                    pos: finalPos, 
+                    snapped: true, 
+                    snapType: 'merge' 
+                };
             }
         }
-    }
-    
-    allCopyPositions.forEach(copyPos => {
-        if (copyPos.copyIndex === 0) return;
         
-        staticPoints.forEach(staticPoint => {
-            const dist = distance(copyPos.position, staticPoint);
-            if (dist < snapThresholdData) {
-                const requiredPos = staticPoint;
-                const currentPos = copyPos.position;
-                
-                const currentVector = { x: currentPos.x - center.x, y: currentPos.y - center.y };
-                const requiredVector = { x: requiredPos.x - center.x, y: requiredPos.y - center.y };
-                
-                const currentAngle = Math.atan2(currentVector.y, currentVector.x);
-                const requiredAngle = Math.atan2(requiredVector.y, requiredVector.x);
-                
-                let angleDiff = requiredAngle - currentAngle;
-                while (angleDiff > Math.PI) angleDiff -= 2 * Math.PI;
-                while (angleDiff < -Math.PI) angleDiff += 2 * Math.PI;
-                
-                const correctedRotation = rawRotation + angleDiff / copyPos.copyIndex;
-                const correctedPos = applyTransformToPoint(handlePoint, center, correctedRotation, 1, false, null);
-                
-                allPossibleSnaps.push({
-                    rotation: correctedRotation,
-                    pos: correctedPos,
-                    snapped: true,
-                    snapType: 'merge',
-                    mergeTarget: staticPoint,
-                    mergingPosition: copyPos.position,
-                    distance: dist,
-                    priority: dist
-                });
-            }
-        });
-    });
-
-    if (currentShiftPressed) {
-        for (const factor of SNAP_FACTORS) {
-            if (Math.abs(rawRotation - factor) < ANGLE_SNAP_THRESHOLD_RAD) {
-                const finalPos = applyTransformToPoint(handlePoint, center, factor, 1, false, null);
-                allPossibleSnaps.push({
-                    rotation: factor,
-                    pos: finalPos,
-                    snapped: true,
-                    snapType: 'fraction',
-                    snappedScaleValue: factor,
-                    distance: Math.abs(rawRotation - factor),
-                    priority: Math.abs(rawRotation - factor)
-                });
-            }
-        }
+        const finalPos = applyTransformToPoint(handlePoint, center, rawRotation, 1, false, null);
+        return { rotation: rawRotation, pos: finalPos, snapped: false, snapType: null };
     }
-
-    if (allPossibleSnaps.length > 0) {
-        allPossibleSnaps.sort((a, b) => a.priority - b.priority);
-        return allPossibleSnaps[0];
-    }
-
-    const finalPos = applyTransformToPoint(handlePoint, center, rawRotation, 1, false, null);
-    return { 
-        rotation: rawRotation, 
-        pos: finalPos, 
-        snapped: false, 
-        snapType: null 
-    };
 }
 
 function getBestScaleSnap(center, initialPointStates, handlePoint, rawScale) {
-    const snapThresholdData = (POINT_RADIUS * 2) / viewTransform.scale;
-    const staticPoints = allPoints.filter(p => p.type === 'regular' && !initialPointStates.some(ip => ip.id === p.id));
-    const pointsToTransform = initialPointStates.filter(p => p.type === 'regular');
     const copyCount = parseInt(copyCountInput || '1', 10);
 
-    let allPossibleSnaps = [];
+    if (currentShiftPressed || copyCount <= 1) {
+        let allPossibleSnaps = [];
 
-    if (Math.abs(rawScale - 1.0) < 0.1) {
-        allPossibleSnaps.push({
-            scale: 1.0,
-            pos: applyTransformToPoint(handlePoint, center, 0, 1.0, false, null),
-            snapped: true,
-            snapType: 'zero',
-            mergeTarget: applyTransformToPoint(handlePoint, center, 0, 1.0, false, null),
-            distance: Math.abs(rawScale - 1.0),
-            priority: 1000
-        });
-    }
+        if (Math.abs(rawScale - 1.0) < 0.1) {
+            allPossibleSnaps.push({ scale: 1.0, priority: Math.abs(rawScale - 1.0) });
+        }
+        
+        if (currentShiftPressed) {
+            for (const factor of SNAP_FACTORS) {
+                if (Math.abs(rawScale - factor) < 0.1) {
+                    allPossibleSnaps.push({ scale: factor, priority: Math.abs(rawScale - factor) });
+                }
+            }
+        }
+        
+        if (allPossibleSnaps.length > 0) {
+            allPossibleSnaps.sort((a, b) => a.priority - b.priority);
+            const bestSnap = allPossibleSnaps[0];
+            const finalPos = applyTransformToPoint(handlePoint, center, 0, bestSnap.scale, false, null);
+            return {
+                scale: bestSnap.scale,
+                pos: finalPos,
+                snapped: true,
+                snapType: 'fraction',
+                snappedScaleValue: bestSnap.scale
+            };
+        }
+        
+        const finalPos = applyTransformToPoint(handlePoint, center, 0, rawScale, false, null);
+        return { scale: rawScale, pos: finalPos, snapped: false, snapType: null };
 
-    const allCopyPositions = [];
-    
-    pointsToTransform.forEach(p => {
-        allCopyPositions.push({
-            point: p,
-            position: { x: p.x, y: p.y },
-            copyIndex: 0,
-            isOriginal: true
-        });
-    });
-    
-    for (let copyIndex = 1; copyIndex <= copyCount; copyIndex++) {
-        const copyScale = Math.pow(rawScale, copyIndex);
-        pointsToTransform.forEach(p => {
-            const transformedPos = applyTransformToPoint(p, center, 0, copyScale, false, null);
-            allCopyPositions.push({
-                point: p,
-                position: transformedPos,
-                copyIndex: copyIndex,
-                isOriginal: false
-            });
-        });
-    }
+    } else {
+        const snapThresholdData = (POINT_RADIUS * 2) / viewTransform.scale;
+        const angleThreshold = snapThresholdData / 100;
+        const staticPoints = allPoints.filter(p => p.type === 'regular' && !initialPointStates.some(ip => ip.id === p.id));
+        const pointsToTransform = initialPointStates.filter(p => p.type === 'regular');
+        let allPossibleSnaps = [];
+        
+        for (let i = 0; i < pointsToTransform.length; i++) {
+            for (let j = 0; j < pointsToTransform.length; j++) {
+                const p1_orig = pointsToTransform[i];
+                const p2_orig = pointsToTransform[j];
 
-    for (let i = 0; i < allCopyPositions.length; i++) {
-        for (let j = i + 1; j < allCopyPositions.length; j++) {
-            const pos1 = allCopyPositions[i];
-            const pos2 = allCopyPositions[j];
-            
-            if (pos1.point.id === pos2.point.id) continue;
-            
-            const dist = distance(pos1.position, pos2.position);
-            if (dist < snapThresholdData) {
-                if (pos1.copyIndex > 0) {
-                    const requiredPos = pos2.position;
-                    const pointVector = { x: pos1.point.x - center.x, y: pos1.point.y - center.y };
-                    const requiredVector = { x: requiredPos.x - center.x, y: requiredPos.y - center.y };
-                    const pointDist = Math.hypot(pointVector.x, pointVector.y);
-                    const requiredDist = Math.hypot(requiredVector.x, requiredVector.y);
+                const v1 = { x: p1_orig.x - center.x, y: p1_orig.y - center.y };
+                const v2 = { x: p2_orig.x - center.x, y: p2_orig.y - center.y };
+                
+                const r1 = Math.hypot(v1.x, v1.y);
+                const r2 = Math.hypot(v2.x, v2.y);
+                
+                if (r1 < GEOMETRY_CALCULATION_EPSILON || r2 < GEOMETRY_CALCULATION_EPSILON) continue;
+                
+                const theta1 = Math.atan2(v1.y, v1.x);
+                const theta2 = Math.atan2(v2.y, v2.x);
 
-                    if (pointDist > GEOMETRY_CALCULATION_EPSILON) {
-                        const pointAngle = Math.atan2(pointVector.y, pointVector.x);
-                        const requiredAngle = Math.atan2(requiredVector.y, requiredVector.x);
-                        const angleDiff = Math.abs(normalizeAngleToPi(requiredAngle - pointAngle));
-
-                        if (angleDiff < ANGLE_SNAP_THRESHOLD_RAD || Math.abs(angleDiff - Math.PI) < ANGLE_SNAP_THRESHOLD_RAD) {
-                            const requiredScale = requiredDist / pointDist;
-                            const correctedScale = Math.pow(requiredScale, 1 / pos1.copyIndex);
-                            const correctedPos = applyTransformToPoint(handlePoint, center, 0, correctedScale, false, null);
-
+                if (Math.abs(normalizeAngleToPi(theta1 - theta2)) < angleThreshold) {
+                    for (let c1 = 0; c1 < copyCount; c1++) {
+                        for (let c2 = 0; c2 < copyCount; c2++) {
+                            if (p1_orig.id === p2_orig.id && c1 === c2) continue;
+                            if (c1 === c2) continue;
+                            
+                            const delta_c = c1 - c2;
+                            if (delta_c === 0) continue;
+                            
+                            const ratio = r2 / r1;
+                            if (ratio <= 0) continue;
+                            
+                            const exact_scale = Math.pow(ratio, 1 / delta_c);
                             allPossibleSnaps.push({
-                                scale: correctedScale,
-                                pos: correctedPos,
-                                snapped: true,
-                                snapType: 'merge',
-                                mergeTarget: pos2.position,
-                                mergingPosition: pos1.position,
-                                distance: dist,
-                                priority: dist,
-                                adjustedCopy: pos1.copyIndex,
-                                targetCopy: pos2.copyIndex
+                                scale: exact_scale,
+                                priority: Math.abs(exact_scale - rawScale)
                             });
                         }
                     }
                 }
             }
         }
-    }
+        
+        pointsToTransform.forEach(p_orig => {
+            staticPoints.forEach(p_static => {
+                const v_orig = { x: p_orig.x - center.x, y: p_orig.y - center.y };
+                const v_static = { x: p_static.x - center.x, y: p_static.y - center.y };
+                const r_orig = Math.hypot(v_orig.x, v_orig.y);
+                const r_static = Math.hypot(v_static.x, v_static.y);
+                
+                if (r_orig < GEOMETRY_CALCULATION_EPSILON || r_static < GEOMETRY_CALCULATION_EPSILON) return;
 
-    allCopyPositions.forEach(copyPos => {
-        if (copyPos.copyIndex === 0) return;
-        staticPoints.forEach(staticPoint => {
-            const dist = distance(copyPos.position, staticPoint);
-            if (dist < snapThresholdData) {
-                const requiredPos = staticPoint;
-                const pointVector = { x: copyPos.point.x - center.x, y: copyPos.point.y - center.y };
-                const requiredVector = { x: requiredPos.x - center.x, y: requiredPos.y - center.y };
-                const pointDist = Math.hypot(pointVector.x, pointVector.y);
-                const requiredDist = Math.hypot(requiredVector.x, requiredVector.y);
+                const theta_orig = Math.atan2(v_orig.y, v_orig.x);
+                const theta_static = Math.atan2(v_static.y, v_static.x);
 
-                if (pointDist > GEOMETRY_CALCULATION_EPSILON) {
-                    const pointAngle = Math.atan2(pointVector.y, pointVector.x);
-                    const requiredAngle = Math.atan2(requiredVector.y, requiredVector.x);
-                    const angleDiff = Math.abs(normalizeAngleToPi(requiredAngle - pointAngle));
+                if (Math.abs(normalizeAngleToPi(theta_orig - theta_static)) < angleThreshold) {
+                    for (let c = 0; c < copyCount; c++) {
+                        if (c === 0) {
+                            if (Math.abs(r_static - r_orig) < snapThresholdData) {
+                                allPossibleSnaps.push({ scale: 1.0, priority: Math.abs(rawScale - 1.0) });
+                            }
+                            continue;
+                        }
 
-                    if (angleDiff < ANGLE_SNAP_THRESHOLD_RAD || Math.abs(angleDiff - Math.PI) < ANGLE_SNAP_THRESHOLD_RAD) {
-                        const requiredScale = requiredDist / pointDist;
-                        const correctedScale = Math.pow(requiredScale, 1 / copyPos.copyIndex);
-                        const correctedPos = applyTransformToPoint(handlePoint, center, 0, correctedScale, false, null);
+                        const ratio = r_static / r_orig;
+                        if (ratio <= 0) continue;
 
+                        const exact_scale = Math.pow(ratio, 1 / c);
                         allPossibleSnaps.push({
-                            scale: correctedScale,
-                            pos: correctedPos,
-                            snapped: true,
-                            snapType: 'merge',
-                            mergeTarget: staticPoint,
-                            mergingPosition: copyPos.position,
-                            distance: dist,
-                            priority: dist
+                            scale: exact_scale,
+                            priority: Math.abs(exact_scale - rawScale)
                         });
                     }
                 }
-            }
+            });
         });
-    });
+        
+        if (allPossibleSnaps.length > 0) {
+            allPossibleSnaps.sort((a, b) => a.priority - b.priority);
+            const bestSnap = allPossibleSnaps[0];
 
-    if (currentShiftPressed) {
-        const scaleSnapFactors = [...SNAP_FACTORS.filter(f => f !== 0), ...SNAP_FACTORS.filter(f => f > 0).map(f => -f)];
-        for (const factor of scaleSnapFactors) {
-            if (Math.abs(rawScale - factor) < 0.1) {
-                const finalPos = applyTransformToPoint(handlePoint, center, 0, factor, false, null);
-                allPossibleSnaps.push({
-                    scale: factor,
+            if (bestSnap.priority < 0.1) {
+                const finalPos = applyTransformToPoint(handlePoint, center, 0, bestSnap.scale, false, null);
+                return {
+                    scale: bestSnap.scale,
                     pos: finalPos,
                     snapped: true,
-                    snapType: 'fraction',
-                    snappedScaleValue: factor,
-                    distance: Math.abs(rawScale - factor),
-                    priority: Math.abs(rawScale - factor)
-                });
+                    snapType: 'merge'
+                };
             }
         }
+        
+        const finalPos = applyTransformToPoint(handlePoint, center, 0, rawScale, false, null);
+        return { scale: rawScale, pos: finalPos, snapped: false, snapType: null };
     }
-
-    if (allPossibleSnaps.length > 0) {
-        allPossibleSnaps.sort((a, b) => a.priority - b.priority);
-        return allPossibleSnaps[0];
-    }
-
-    const finalPos = applyTransformToPoint(handlePoint, center, 0, rawScale, false, null);
-    return { 
-        scale: rawScale, 
-        pos: finalPos, 
-        snapped: false, 
-        snapType: null 
-    };
 }
 
 function getBestDirectionalScaleSnap(center, initialPointStates, handlePoint, rawScale, startVector) {
-    const snapThresholdData = (POINT_RADIUS * 2) / viewTransform.scale;
-    const staticPoints = allPoints.filter(p => p.type === 'regular' && !initialPointStates.some(ip => ip.id === p.id));
-    const pointsToTransform = initialPointStates.filter(p => p.type === 'regular');
     const copyCount = parseInt(copyCountInput || '1', 10);
-    const startDist = Math.hypot(startVector.x, startVector.y);
-    
-    if (startDist <= GEOMETRY_CALCULATION_EPSILON) {
+
+    if (currentShiftPressed || copyCount <= 1) {
+        let allPossibleSnaps = [];
+        if (Math.abs(rawScale - 1.0) < 0.1) {
+            allPossibleSnaps.push({ scale: 1.0, priority: Math.abs(rawScale - 1.0) });
+        }
+        if (Math.abs(rawScale) < 0.1) {
+            allPossibleSnaps.push({ scale: 0, priority: Math.abs(rawScale) });
+        }
+        if (currentShiftPressed) {
+            const scaleSnapFactors = SNAP_FACTORS.filter(f => f !== 0);
+            for (const factor of scaleSnapFactors) {
+                if (Math.abs(rawScale - factor) < 0.1) {
+                    allPossibleSnaps.push({ scale: factor, priority: Math.abs(rawScale - factor) });
+                }
+            }
+        }
+        if (allPossibleSnaps.length > 0) {
+            allPossibleSnaps.sort((a, b) => a.priority - b.priority);
+            const bestSnap = allPossibleSnaps[0];
+            const finalPos = applyTransformToPoint(handlePoint, center, 0, bestSnap.scale, true, startVector);
+            return {
+                scale: bestSnap.scale,
+                pos: finalPos,
+                snapped: true,
+                snapType: 'fraction',
+                snappedScaleValue: bestSnap.scale
+            };
+        }
         const finalPos = applyTransformToPoint(handlePoint, center, 0, rawScale, true, startVector);
-        return { 
-            scale: rawScale, 
-            pos: finalPos, 
-            snapped: false, 
-            snapType: null 
+        return { scale: rawScale, pos: finalPos, snapped: false, snapType: null };
+    } else {
+        const snapThresholdData = (POINT_RADIUS * 2) / viewTransform.scale;
+        const staticPoints = allPoints.filter(p => p.type === 'regular' && !initialPointStates.some(ip => ip.id === p.id));
+        const pointsToTransform = initialPointStates.filter(p => p.type === 'regular');
+        let allPossibleSnaps = [];
+        const axis_dist = Math.hypot(startVector.x, startVector.y);
+        if (axis_dist < GEOMETRY_CALCULATION_EPSILON) {
+            const finalPos = applyTransformToPoint(handlePoint, center, 0, rawScale, true, startVector);
+            return { scale: rawScale, pos: finalPos, snapped: false, snapType: null };
+        }
+        const axis_norm = { x: startVector.x / axis_dist, y: startVector.y / axis_dist };
+        const getProjectedComponents = (p) => {
+            const vec = { x: p.x - center.x, y: p.y - center.y };
+            const parallel_dist = vec.x * axis_norm.x + vec.y * axis_norm.y;
+            const perp_vec = { x: vec.x - parallel_dist * axis_norm.x, y: vec.y - parallel_dist * axis_norm.y };
+            return { parallel_dist, perp_vec };
         };
-    }
-    
-    const axisNormalized = { x: startVector.x / startDist, y: startVector.y / startDist };
-    let allPossibleSnaps = [];
 
-    // Check for snap to scale 1.0 (return to original positions)
-    if (Math.abs(rawScale - 1.0) < 0.1) {
-        allPossibleSnaps.push({
-            scale: 1.0,
-            pos: applyTransformToPoint(handlePoint, center, 0, 1.0, true, startVector),
-            snapped: true,
-            snapType: 'zero',
-            mergeTarget: applyTransformToPoint(handlePoint, center, 0, 1.0, true, startVector),
-            distance: Math.abs(rawScale - 1.0),
-            priority: 1000
-        });
-    }
-
-    // Generate all copy positions for all points with the current rawScale
-    const allCopyPositions = [];
-    
-    // Add original positions (copy 0)
-    pointsToTransform.forEach(p => {
-        allCopyPositions.push({
-            point: p,
-            position: { x: p.x, y: p.y },
-            copyIndex: 0,
-            isOriginal: true
-        });
-    });
-    
-    // Add transformed copy positions (copy 1, 2, 3...)
-    for (let copyIndex = 1; copyIndex <= copyCount; copyIndex++) {
-        const copyScale = Math.pow(rawScale, copyIndex);
-        pointsToTransform.forEach(p => {
-            const transformedPos = applyTransformToPoint(p, center, 0, copyScale, true, startVector);
-            allCopyPositions.push({
-                point: p,
-                position: transformedPos,
-                copyIndex: copyIndex,
-                isOriginal: false
+        for (let i = 0; i < pointsToTransform.length; i++) {
+            for (let j = 0; j < pointsToTransform.length; j++) {
+                const p1_orig = pointsToTransform[i];
+                const p2_orig = pointsToTransform[j];
+                const proj1 = getProjectedComponents(p1_orig);
+                const proj2 = getProjectedComponents(p2_orig);
+                if (distance(proj1.perp_vec, proj2.perp_vec) < snapThresholdData) {
+                    for (let c1 = 0; c1 < copyCount; c1++) {
+                        for (let c2 = 0; c2 < copyCount; c2++) {
+                            if (p1_orig.id === p2_orig.id && c1 === c2) continue;
+                            if (c1 === c2) continue;
+                            const delta_c = c1 - c2;
+                            if (delta_c === 0 || Math.abs(proj1.parallel_dist) < GEOMETRY_CALCULATION_EPSILON) continue;
+                            const ratio = proj2.parallel_dist / proj1.parallel_dist;
+                            if (ratio >= 0) {
+                                const pos_scale = Math.pow(ratio, 1 / delta_c);
+                                allPossibleSnaps.push({ scale: pos_scale, priority: Math.abs(pos_scale - rawScale) });
+                                if (delta_c % 2 === 0) {
+                                    const neg_scale = -pos_scale;
+                                    allPossibleSnaps.push({ scale: neg_scale, priority: Math.abs(neg_scale - rawScale) });
+                                }
+                            } else if (delta_c % 2 !== 0) {
+                                const neg_scale = -Math.pow(Math.abs(ratio), 1 / delta_c);
+                                allPossibleSnaps.push({ scale: neg_scale, priority: Math.abs(neg_scale - rawScale) });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        pointsToTransform.forEach(p_orig => {
+            const proj_orig = getProjectedComponents(p_orig);
+            staticPoints.forEach(p_static => {
+                const proj_static = getProjectedComponents(p_static);
+                if (distance(proj_orig.perp_vec, proj_static.perp_vec) < snapThresholdData) {
+                    if (Math.abs(proj_orig.parallel_dist) < GEOMETRY_CALCULATION_EPSILON) return;
+                    for (let c = 0; c < copyCount; c++) {
+                        if (c === 0) {
+                            if (Math.abs(proj_static.parallel_dist - proj_orig.parallel_dist) < snapThresholdData) {
+                                allPossibleSnaps.push({ scale: 1.0, priority: Math.abs(rawScale - 1.0) });
+                            }
+                            continue;
+                        }
+                        const ratio = proj_static.parallel_dist / proj_orig.parallel_dist;
+                        let exact_scale;
+                        if (ratio >= 0) exact_scale = Math.pow(ratio, 1/c);
+                        else if (c % 2 !== 0) exact_scale = -Math.pow(Math.abs(ratio), 1/c);
+                        else continue;
+                        allPossibleSnaps.push({ scale: exact_scale, priority: Math.abs(exact_scale - rawScale) });
+                    }
+                }
             });
         });
-    }
 
-    // Check ALL possible overlaps between ALL positions
-    for (let i = 0; i < allCopyPositions.length; i++) {
-        for (let j = i + 1; j < allCopyPositions.length; j++) {
-            const pos1 = allCopyPositions[i];
-            const pos2 = allCopyPositions[j];
-            
-            // Skip same point
-            if (pos1.point.id === pos2.point.id) continue;
-            
-            const dist = distance(pos1.position, pos2.position);
-            if (dist < snapThresholdData) {
-                // We can adjust any non-original copy to snap to any other position
-                // Try adjusting pos1's copy if it's not original
-                if (pos1.copyIndex > 0) {
-                    // Calculate what directional scale would make pos1 snap to pos2
-                    const requiredPos = pos2.position;
-                    
-                    // Calculate the projected distance along the scaling axis
-                    const pointVector = { x: pos1.point.x - center.x, y: pos1.point.y - center.y };
-                    const pointProjectedDist = pointVector.x * axisNormalized.x + pointVector.y * axisNormalized.y;
-                    
-                    const requiredVector = { x: requiredPos.x - center.x, y: requiredPos.y - center.y };
-                    const requiredProjectedDist = requiredVector.x * axisNormalized.x + requiredVector.y * axisNormalized.y;
-                    
-                    if (Math.abs(pointProjectedDist) > GEOMETRY_CALCULATION_EPSILON) {
-                        // Check if the perpendicular components match (point moves only along axis)
-                        const pointPerpVector = {
-                            x: pointVector.x - pointProjectedDist * axisNormalized.x,
-                            y: pointVector.y - pointProjectedDist * axisNormalized.y
-                        };
-                        const requiredPerpVector = {
-                            x: requiredVector.x - requiredProjectedDist * axisNormalized.x,
-                            y: requiredVector.y - requiredProjectedDist * axisNormalized.y
-                        };
-                        
-                        const perpDiff = distance(pointPerpVector, requiredPerpVector);
-                        
-                        // Only snap if perpendicular components are close (point moves along the scaling axis)
-                        if (perpDiff < snapThresholdData) {
-                            const requiredScale = requiredProjectedDist / pointProjectedDist;
-                            const correctedScale = Math.pow(requiredScale, 1 / pos1.copyIndex);
-                            const correctedPos = applyTransformToPoint(handlePoint, center, 0, correctedScale, true, startVector);
-                            
-                            allPossibleSnaps.push({
-                                scale: correctedScale,
-                                pos: correctedPos,
-                                snapped: true,
-                                snapType: 'merge',
-                                mergeTarget: pos2.position,
-                                mergingPosition: pos1.position,
-                                distance: dist,
-                                priority: dist,
-                                adjustedCopy: pos1.copyIndex,
-                                targetCopy: pos2.copyIndex
-                            });
-                        }
-                    }
-                }
-                
-                // Try adjusting pos2's copy if it's not original and different from pos1
-                if (pos2.copyIndex > 0 && pos2.copyIndex !== pos1.copyIndex) {
-                    const requiredPos = pos1.position;
-                    
-                    const pointVector = { x: pos2.point.x - center.x, y: pos2.point.y - center.y };
-                    const pointProjectedDist = pointVector.x * axisNormalized.x + pointVector.y * axisNormalized.y;
-                    
-                    const requiredVector = { x: requiredPos.x - center.x, y: requiredPos.y - center.y };
-                    const requiredProjectedDist = requiredVector.x * axisNormalized.x + requiredVector.y * axisNormalized.y;
-                    
-                    if (Math.abs(pointProjectedDist) > GEOMETRY_CALCULATION_EPSILON) {
-                        const pointPerpVector = {
-                            x: pointVector.x - pointProjectedDist * axisNormalized.x,
-                            y: pointVector.y - pointProjectedDist * axisNormalized.y
-                        };
-                        const requiredPerpVector = {
-                            x: requiredVector.x - requiredProjectedDist * axisNormalized.x,
-                            y: requiredVector.y - requiredProjectedDist * axisNormalized.y
-                        };
-                        
-                        const perpDiff = distance(pointPerpVector, requiredPerpVector);
-                        
-                        if (perpDiff < snapThresholdData) {
-                            const requiredScale = requiredProjectedDist / pointProjectedDist;
-                            const correctedScale = Math.pow(requiredScale, 1 / pos2.copyIndex);
-                            const correctedPos = applyTransformToPoint(handlePoint, center, 0, correctedScale, true, startVector);
-                            
-                            allPossibleSnaps.push({
-                                scale: correctedScale,
-                                pos: correctedPos,
-                                snapped: true,
-                                snapType: 'merge',
-                                mergeTarget: pos1.position,
-                                mergingPosition: pos2.position,
-                                distance: dist,
-                                priority: dist,
-                                adjustedCopy: pos2.copyIndex,
-                                targetCopy: pos1.copyIndex
-                            });
-                        }
-                    }
+        const collapsedPositions = pointsToTransform.map(p => ({ p, collapsed: {x: center.x + getProjectedComponents(p).perp_vec.x, y: center.y + getProjectedComponents(p).perp_vec.y} }));
+        for (const item of collapsedPositions) {
+            if (staticPoints.some(sp => distance(item.collapsed, sp) < snapThresholdData)) {
+                allPossibleSnaps.push({ scale: 0, priority: Math.abs(rawScale) });
+            }
+        }
+        for (let i = 0; i < collapsedPositions.length; i++) {
+            for (let j = i + 1; j < collapsedPositions.length; j++) {
+                if (distance(collapsedPositions[i].collapsed, collapsedPositions[j].collapsed) < snapThresholdData) {
+                    allPossibleSnaps.push({ scale: 0, priority: Math.abs(rawScale) });
                 }
             }
         }
-    }
-
-    // Check against static (external) points
-    allCopyPositions.forEach(copyPos => {
-        if (copyPos.copyIndex === 0) return; // Don't adjust original positions
         
-        staticPoints.forEach(staticPoint => {
-            const dist = distance(copyPos.position, staticPoint);
-            if (dist < snapThresholdData) {
-                const requiredPos = staticPoint;
-                
-                const pointVector = { x: copyPos.point.x - center.x, y: copyPos.point.y - center.y };
-                const pointProjectedDist = pointVector.x * axisNormalized.x + pointVector.y * axisNormalized.y;
-                
-                const requiredVector = { x: requiredPos.x - center.x, y: requiredPos.y - center.y };
-                const requiredProjectedDist = requiredVector.x * axisNormalized.x + requiredVector.y * axisNormalized.y;
-                
-                if (Math.abs(pointProjectedDist) > GEOMETRY_CALCULATION_EPSILON) {
-                    const pointPerpVector = {
-                        x: pointVector.x - pointProjectedDist * axisNormalized.x,
-                        y: pointVector.y - pointProjectedDist * axisNormalized.y
-                    };
-                    const requiredPerpVector = {
-                        x: requiredVector.x - requiredProjectedDist * axisNormalized.x,
-                        y: requiredVector.y - requiredProjectedDist * axisNormalized.y
-                    };
-                    
-                    const perpDiff = distance(pointPerpVector, requiredPerpVector);
-                    
-                    if (perpDiff < snapThresholdData) {
-                        const requiredScale = requiredProjectedDist / pointProjectedDist;
-                        const correctedScale = Math.pow(requiredScale, 1 / copyPos.copyIndex);
-                        const correctedPos = applyTransformToPoint(handlePoint, center, 0, correctedScale, true, startVector);
-                        
-                        allPossibleSnaps.push({
-                            scale: correctedScale,
-                            pos: correctedPos,
-                            snapped: true,
-                            snapType: 'merge',
-                            mergeTarget: staticPoint,
-                            mergingPosition: copyPos.position,
-                            distance: dist,
-                            priority: dist
-                        });
-                    }
-                }
-            }
-        });
-    });
-
-    // Check for fractional scale snapping only if shift is pressed
-    if (currentShiftPressed) {
-        const scaleSnapFactors = [...SNAP_FACTORS.filter(f => f !== 0), ...SNAP_FACTORS.filter(f => f > 0).map(f => -f)];
-        for (const factor of scaleSnapFactors) {
-            if (Math.abs(rawScale - factor) < 0.1) {
-                const finalPos = applyTransformToPoint(handlePoint, center, 0, factor, true, startVector);
-                allPossibleSnaps.push({
-                    scale: factor,
-                    pos: finalPos,
-                    snapped: true,
-                    snapType: 'fraction',
-                    snappedScaleValue: factor,
-                    distance: Math.abs(rawScale - factor),
-                    priority: Math.abs(rawScale - factor)
-                });
+        if (allPossibleSnaps.length > 0) {
+            allPossibleSnaps.sort((a, b) => a.priority - b.priority);
+            const bestSnap = allPossibleSnaps[0];
+            if (bestSnap.priority < 0.1) {
+                const finalPos = applyTransformToPoint(handlePoint, center, 0, bestSnap.scale, true, startVector);
+                return { scale: bestSnap.scale, pos: finalPos, snapped: true, snapType: 'merge' };
             }
         }
-    }
 
-    // Return the best snap
-    if (allPossibleSnaps.length > 0) {
-        allPossibleSnaps.sort((a, b) => a.priority - b.priority);
-        return allPossibleSnaps[0];
+        const finalPos = applyTransformToPoint(handlePoint, center, 0, rawScale, true, startVector);
+        return { scale: rawScale, pos: finalPos, snapped: false, snapType: null };
     }
-
-    const finalPos = applyTransformToPoint(handlePoint, center, 0, rawScale, true, startVector);
-    return { 
-        scale: rawScale, 
-        pos: finalPos, 
-        snapped: false, 
-        snapType: null 
-    };
 }
 
 function redrawAll() {
