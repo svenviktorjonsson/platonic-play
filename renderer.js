@@ -620,7 +620,7 @@ export function drawMergePreviews(ctx, { allPoints, dragPreviewPoints, viewTrans
         return;
     }
 
-    const mergeRadiusData = POINT_RADIUS / viewTransform.scale;
+    const indicatorMergeThreshold = GEOMETRY_CALCULATION_EPSILON;
     const drawnMergeIndicators = new Set();
     const draggedIds = new Set(initialDragPointStates.map(p => p.id));
     const pointsToTransform = initialDragPointStates.filter(p => p.type === 'regular');
@@ -661,7 +661,7 @@ export function drawMergePreviews(ctx, { allPoints, dragPreviewPoints, viewTrans
 
     const drawIndicator = (p1, p2) => {
         if (p1.id === p2.id) return;
-        if (distance(p1, p2) < mergeRadiusData) {
+        if (distance(p1, p2) < indicatorMergeThreshold) {
             const mergePos = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
             const screenPos = dataToScreen(mergePos);
             const key = `${Math.round(screenPos.x)},${Math.round(screenPos.y)}`;
@@ -3535,7 +3535,7 @@ export function drawSelectionRectangle(ctx, startPos, currentPos, colors) {
     ctx.restore();
 }
 
-export function drawDragFeedback(ctx, htmlOverlay, targetPointId, currentPointStates, { lastGridState, showDistances, showAngles, distanceSigFigs, angleDisplayMode, angleSigFigs, currentShiftPressed, viewTransform, colors }, dataToScreen, findNeighbors, getEdgeId, isSnapping = false, excludedEdgeId = null, updateHtmlLabel = null, selectedPointIds = [], isDragging = false, initialDragPointStates = []) {
+export function drawDragFeedback(ctx, htmlOverlay, targetPointId, currentPointStates, { lastGridState, showDistances, showAngles, distanceSigFigs, angleDisplayMode, angleSigFigs, currentShiftPressed, viewTransform, colors }, dataToScreen, findNeighbors, getEdgeId, isSnapping = false, excludedEdgeId = null, updateHtmlLabel = null, selectedPointIds = [], isDragging = false, initialDragPointStates = [], activeCenterId = null) {
     const feedbackColor = isSnapping ? colors.feedbackSnapped : `rgba(${colors.feedbackDefault.join(',')}, 1.0)`;
 
     const livePoints = new Map(currentPointStates.map(p => [p.id, { ...p }]));
@@ -3559,45 +3559,77 @@ export function drawDragFeedback(ctx, htmlOverlay, targetPointId, currentPointSt
     const allNeighborsAreDragged = neighbors.every(n => selectedPointIds.includes(n.id));
     const originalVertexState = initialDragPointStates.find(p => p.id === targetPointId);
 
-    if (showDistances && isDragging && currentShiftPressed && allNeighborsAreDragged && originalVertexState && distance(originalVertexState, vertex) > GEOMETRY_CALCULATION_EPSILON) {
-        let distText;
-        const dragStartedOnGrid = gridInterval && isPointOnGrid(originalVertexState, gridInterval);
-        const dragEndedOnGrid = gridInterval && isPointOnGrid(vertex, gridInterval);
-
-        if (dragStartedOnGrid && dragEndedOnGrid) {
-            const deltaX = vertex.x - originalVertexState.x;
-            const deltaY = vertex.y - originalVertexState.y;
-            const dx_grid = Math.round(deltaX / gridInterval);
-            const dy_grid = Math.round(deltaY / gridInterval);
-            const g2gSquaredSumForDisplay = dx_grid * dx_grid + dy_grid * dy_grid;
-            if (g2gSquaredSumForDisplay === 0) {
-                distText = '0';
-            } else {
-                const [coeff, radicand] = simplifySquareRoot(g2gSquaredSumForDisplay);
-                const finalCoeff = gridInterval * coeff;
-                const roundedFinalCoeff = parseFloat(finalCoeff.toFixed(10));
-                distText = formatSimplifiedRoot(roundedFinalCoeff, radicand);
-            }
-        } else {
-            distText = formatNumber(distance(originalVertexState, vertex), distanceSigFigs);
-        }
-        
+    if (!activeCenterId && isDragging && currentShiftPressed && allNeighborsAreDragged && originalVertexState && distance(originalVertexState, vertex) > GEOMETRY_CALCULATION_EPSILON) {
         const p1Screen = dataToScreen(originalVertexState);
         const p2Screen = vertexScreen;
-        const edgeAngleScreen = Math.atan2(p2Screen.y - p1Screen.y, p2Screen.x - p1Screen.x);
-        const midX = (p1Screen.x + p2Screen.x) / 2;
-        const midY = (p1Screen.y + p2Screen.y) / 2;
-        let textPerpAngle = edgeAngleScreen - Math.PI / 2;
-        if (Math.sin(textPerpAngle) > 0) {
-            textPerpAngle += Math.PI;
+        const dragVectorAngle = Math.atan2(p2Screen.y - p1Screen.y, p2Screen.x - p1Screen.x);
+
+        if (showDistances) {
+            let distText;
+            const dragStartedOnGrid = gridInterval && isPointOnGrid(originalVertexState, gridInterval);
+            const dragEndedOnGrid = gridInterval && isPointOnGrid(vertex, gridInterval);
+            if (dragStartedOnGrid && dragEndedOnGrid) {
+                const deltaX = vertex.x - originalVertexState.x;
+                const deltaY = vertex.y - originalVertexState.y;
+                const dx_grid = Math.round(deltaX / gridInterval);
+                const dy_grid = Math.round(deltaY / gridInterval);
+                const g2gSquaredSumForDisplay = dx_grid * dx_grid + dy_grid * dy_grid;
+                if (g2gSquaredSumForDisplay === 0) {
+                    distText = '0';
+                } else {
+                    const [coeff, radicand] = simplifySquareRoot(g2gSquaredSumForDisplay);
+                    const finalCoeff = gridInterval * coeff;
+                    const roundedFinalCoeff = parseFloat(finalCoeff.toFixed(10));
+                    distText = formatSimplifiedRoot(roundedFinalCoeff, radicand);
+                }
+            } else {
+                distText = formatNumber(distance(originalVertexState, vertex), distanceSigFigs);
+            }
+            const midX = (p1Screen.x + p2Screen.x) / 2;
+            const midY = (p1Screen.y + p2Screen.y) / 2;
+            let textPerpAngle = dragVectorAngle - Math.PI / 2;
+            if (Math.sin(textPerpAngle) > 0) {
+                textPerpAngle += Math.PI;
+            }
+            const distanceTextX = midX + Math.cos(textPerpAngle) * FEEDBACK_DISTANCE_LABEL_OFFSET_SCREEN;
+            const distanceTextY = midY + Math.sin(textPerpAngle) * FEEDBACK_DISTANCE_LABEL_OFFSET_SCREEN;
+            let rotationDeg = dragVectorAngle * (180 / Math.PI);
+            if (rotationDeg > 90 || rotationDeg < -90) {
+                rotationDeg += 180;
+            }
+            updateHtmlLabel({ id: `drag-dist-vector-${vertex.id}`, content: distText, x: distanceTextX, y: distanceTextY, color: feedbackColor, fontSize: FEEDBACK_LABEL_FONT_SIZE, options: { textAlign: 'center', textBaseline: 'middle', rotation: rotationDeg } }, htmlOverlay);
         }
-        const distanceTextX = midX + Math.cos(textPerpAngle) * FEEDBACK_DISTANCE_LABEL_OFFSET_SCREEN;
-        const distanceTextY = midY + Math.sin(textPerpAngle) * FEEDBACK_DISTANCE_LABEL_OFFSET_SCREEN;
-        let rotationDeg = edgeAngleScreen * (180 / Math.PI);
-        if (rotationDeg > 90 || rotationDeg < -90) {
-            rotationDeg += 180;
+
+        ctx.save();
+        ctx.setLineDash(DASH_PATTERN);
+        ctx.strokeStyle = feedbackColor;
+        ctx.lineWidth = FEEDBACK_LINE_VISUAL_WIDTH;
+        ctx.beginPath();
+        ctx.moveTo(p1Screen.x, p1Screen.y);
+        ctx.lineTo(p2Screen.x, p2Screen.y);
+        ctx.stroke();
+        ctx.restore();
+        
+        if (showAngles && Math.abs(dragVectorAngle) > GEOMETRY_CALCULATION_EPSILON) {
+            const dataAngle = Math.atan2(vertex.y - originalVertexState.y, vertex.x - originalVertexState.x);
+            drawAngleArc(ctx, p1Screen, 0, dataAngle, FEEDBACK_ARC_RADIUS_SCREEN, feedbackColor);
+            
+            let angleText;
+            if (angleDisplayMode === ANGLE_DISPLAY_MODE_DEGREES) {
+                angleText = `${formatNumber(dataAngle * (180 / Math.PI), angleSigFigs)}^{\\circ}`;
+            } else {
+                angleText = formatNumber(dataAngle, angleSigFigs);
+            }
+
+            if (angleText) {
+                const bisectorAngle = -dataAngle / 2.0;
+                const angleLabelScreenPos = {
+                    x: p1Screen.x + ANGLE_LABEL_RADIUS_SCREEN * Math.cos(bisectorAngle),
+                    y: p1Screen.y + ANGLE_LABEL_RADIUS_SCREEN * Math.sin(bisectorAngle)
+                };
+                updateHtmlLabel({ id: `drag-angle-vector-${vertex.id}`, content: angleText, x: angleLabelScreenPos.x, y: angleLabelScreenPos.y, color: feedbackColor, fontSize: FEEDBACK_LABEL_FONT_SIZE, options: { textAlign: 'center', textBaseline: 'middle' } }, htmlOverlay);
+            }
         }
-        updateHtmlLabel({ id: `drag-dist-vector-${vertex.id}`, content: distText, x: distanceTextX, y: distanceTextY, color: feedbackColor, fontSize: FEEDBACK_LABEL_FONT_SIZE, options: { textAlign: 'center', textBaseline: 'middle', rotation: rotationDeg } }, htmlOverlay);
     }
     
     if (showDistances) {
@@ -3684,7 +3716,7 @@ export function drawDragFeedback(ctx, htmlOverlay, targetPointId, currentPointSt
             const angle2_data = Math.atan2(v2.y, v2.x);
             let angleToDisplayRad = angle2_data - angle1_data;
             if (angleToDisplayRad < 0) {
-                angleToDisplayRad += RADIANS_IN_CIRCLE;
+                angleToDisplayRad += 2 * Math.PI;
             }
             if (angleToDisplayRad < GEOMETRY_CALCULATION_EPSILON) continue;
             
@@ -3699,13 +3731,13 @@ export function drawDragFeedback(ctx, htmlOverlay, targetPointId, currentPointSt
 
             let angleText;
             if (angleDisplayMode === ANGLE_DISPLAY_MODE_DEGREES) {
-                angleText = `${formatNumber(angleToDisplayRad * (DEGREES_IN_HALF_CIRCLE / Math.PI), angleSigFigs)}^{\\circ}`;
+                angleText = `${formatNumber(angleToDisplayRad * (180 / Math.PI), angleSigFigs)}^{\\circ}`;
             } else if (angleDisplayMode === ANGLE_DISPLAY_MODE_RADIANS) {
                 if (currentShiftPressed) {
-                    angleText = formatFraction(angleToDisplayRad / Math.PI, FRACTION_FORMAT_TOLERANCE, FRACTION_FORMAT_MAX_DENOMINATOR) + PI_SYMBOL_KATEX;
-                    if (angleText.startsWith(`1${PI_SYMBOL_KATEX}`)) angleText = PI_SYMBOL_KATEX;
-                    if (angleText.startsWith(`-1${PI_SYMBOL_KATEX}`)) angleText = `-${PI_SYMBOL_KATEX}`;
-                    if (angleText === `0${PI_SYMBOL_KATEX}`) angleText = "0";
+                    angleText = formatFraction(angleToDisplayRad / Math.PI, 0.015, 32) + "\\pi";
+                    if (angleText.startsWith(`1\\pi`)) angleText = "\\pi";
+                    if (angleText.startsWith(`-1\\pi`)) angleText = `-\\pi`;
+                    if (angleText === `0\\pi`) angleText = "0";
                 } else {
                     angleText = formatNumber(angleToDisplayRad, angleSigFigs);
                 }
