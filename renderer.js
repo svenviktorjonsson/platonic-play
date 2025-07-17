@@ -1633,11 +1633,8 @@ export function drawAllEdges(ctx, { allEdges, selectedEdgeIds, isDragConfirmed, 
 
         if (edge.colormapItem) {
             const gradient = ctx.createLinearGradient(p1Screen.x, p1Screen.y, p2Screen.x, p2Screen.y);
-            const offset = edge.colormapOffset || 0;
-            const startT = Math.max(0, Math.min(1, offset + edge.gradientStart));
-            const endT = Math.max(0, Math.min(1, offset + edge.gradientEnd));
-            const startColor = U.sampleColormap(edge.colormapItem, startT);
-            const endColor = U.sampleColormap(edge.colormapItem, endT);
+            const startColor = U.sampleColormap(edge.colormapItem, edge.gradientStart);
+            const endColor = U.sampleColormap(edge.colormapItem, edge.gradientEnd);
             gradient.addColorStop(0, startColor);
             gradient.addColorStop(1, endColor);
             ctx.strokeStyle = gradient;

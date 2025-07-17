@@ -263,7 +263,7 @@ function generateSnapFactors(maxDenominator, maxInteger) {
 export const SNAP_FACTORS = generateSnapFactors(MAX_SNAP_DENOMINATOR, MAX_SNAP_INTEGER);
 
 // --- ENUMS & LITERALS ---
-export const POINT_TYPE_REGULAR = 'regular';
+export const VERTEX_TYPE_REGULAR = 'regular';
 export const TRANSFORMATION_TYPE_ROTATION = ' transformation_rotation';
 export const TRANSFORMATION_TYPE_SCALE = ' transformation_scale';
 export const TRANSFORMATION_TYPE_DIRECTIONAL_SCALE = 'transformation_directional_scale';
@@ -1986,9 +1986,7 @@ export function drawAllEdges(ctx, { allEdges, selectedEdgeIds, isDragConfirmed, 
         ctx.moveTo(p1Screen.x, p1Screen.y);
         ctx.lineTo(p2Screen.x, p2Screen.y);
 
-        // Check if this edge has gradient information
-        if (edge.gradientStart !== undefined && edge.gradientEnd !== undefined && edge.colormapItem) {
-            // Create gradient from colormap
+        if (edge.colormapItem) {
             const gradient = ctx.createLinearGradient(p1Screen.x, p1Screen.y, p2Screen.x, p2Screen.y);
             const startColor = U.sampleColormap(edge.colormapItem, edge.gradientStart);
             const endColor = U.sampleColormap(edge.colormapItem, edge.gradientEnd);
@@ -3082,30 +3080,45 @@ export function drawVisibilityIcon(ctx, rect, colors) {
     ctx.restore();
 }
 
-function drawColorToolbarPreview(ctx, rect, { vertexColor, edgeColor, faceColor, verticesVisible, edgesVisible, facesVisible, colorAssignments, allColors }, colors) {
-    const vertexColorIndex = colorAssignments[C.COLOR_TARGET_VERTEX];
-    const vertexColorItem = vertexColorIndex !== -1 ? allColors[vertexColorIndex] : null;
-    
-    const edgeColorIndex = colorAssignments[C.COLOR_TARGET_EDGE];
-    const edgeColorItem = edgeColorIndex !== -1 ? allColors[edgeColorIndex] : null;
-    
+function drawColorToolbarPreview(ctx, rect, { verticesVisible, edgesVisible, facesVisible, colorAssignments, allColors }, colors) {
     const options = {
         vertexState: verticesVisible ? 'filled' : 'outline',
         edgeState: edgesVisible ? 'solid' : 'dashed',
-        faceState: facesVisible ? 'filled' : 'dotted',
-        vertexColor: vertexColor,
-        edgeColor: edgeColor,
-        faceColor: faceColor
+        faceState: facesVisible ? 'filled' : 'dotted'
     };
     
-    if (vertexColorItem && vertexColorItem.type === 'colormap') {
-        options.vertexColormapItem = vertexColorItem;
-        options.vertexColor = null;
+    const vertexColorIndex = colorAssignments[C.COLOR_TARGET_VERTEX];
+    if (vertexColorIndex !== -1) {
+        const vertexColorItem = allColors[vertexColorIndex];
+        if (vertexColorItem && vertexColorItem.type === 'colormap') {
+            options.vertexColormapItem = vertexColorItem;
+        } else if (vertexColorItem && vertexColorItem.type === 'color') {
+            options.vertexColor = vertexColorItem.value;
+        }
+    } else {
+        options.vertexColor = colors.vertex;
     }
     
-    if (edgeColorItem && edgeColorItem.type === 'colormap') {
-        options.edgeColormapItem = edgeColorItem;
-        options.edgeColor = null;
+    const edgeColorIndex = colorAssignments[C.COLOR_TARGET_EDGE];
+    if (edgeColorIndex !== -1) {
+        const edgeColorItem = allColors[edgeColorIndex];
+        if (edgeColorItem && edgeColorItem.type === 'colormap') {
+            options.edgeColormapItem = edgeColorItem;
+        } else if (edgeColorItem && edgeColorItem.type === 'color') {
+            options.edgeColor = edgeColorItem.value;
+        }
+    } else {
+        options.edgeColor = colors.edge;
+    }
+    
+    const faceColorIndex = colorAssignments[C.COLOR_TARGET_FACE];
+    if (faceColorIndex !== -1) {
+        const faceColorItem = allColors[faceColorIndex];
+        if (faceColorItem && faceColorItem.type === 'color') {
+            options.faceColor = faceColorItem.value;
+        }
+    } else {
+        options.faceColor = colors.face;
     }
     
     drawTriangleIcon(ctx, rect, options, colors);
@@ -3175,8 +3188,9 @@ function drawTriangleIcon(ctx, rect, options, colors, isActive = false) {
             
             if (options.edgeColormapItem && options.edgeColormapItem.type === 'colormap') {
                 const gradient = ctx.createLinearGradient(start.x, start.y, end.x, end.y);
-                const startT = edges.length > 1 ? edgeIndex / (edges.length - 1) : 0;
-                const endT = edges.length > 1 ? (edgeIndex + 1) / (edges.length - 1) : 1;
+                const edgeOffset = edges.length > 1 ? edgeIndex / (edges.length - 1) : 0.5;
+                const startT = Math.max(0, Math.min(1, edgeOffset));
+                const endT = Math.max(0, Math.min(1, edgeOffset + 0.3));
                 const startColor = U.sampleColormap(options.edgeColormapItem, startT);
                 const endColor = U.sampleColormap(options.edgeColormapItem, endT);
                 gradient.addColorStop(0, startColor);
@@ -3306,75 +3320,62 @@ function drawVisibilityPanel(ctx, htmlOverlay, state, updateHtmlLabel) {
 }
 
 function drawMainToolbar(ctx, htmlOverlay, state, updateHtmlLabel) {
-    const { canvasUI, colors, activeThemeName, colorAssignments, allColors, verticesVisible, edgesVisible, facesVisible } = state;
+   const { canvasUI, colors, activeThemeName, colorAssignments, allColors, verticesVisible, edgesVisible, facesVisible } = state;
 
-    const btn = canvasUI.toolbarButton;
-    ctx.strokeStyle = colors.uiDefault;
-    ctx.lineWidth = C.UI_MENU_ICON_LINE_WIDTH;
-    ctx.beginPath();
-    for (let i = 0; i < 3; i++) {
-        const lineY = btn.y + 5 + i * 10;
-        ctx.moveTo(btn.x + 4, lineY);
-        ctx.lineTo(btn.x + btn.width - 4, lineY);
-    }
-    ctx.stroke();
+   const btn = canvasUI.toolbarButton;
+   ctx.strokeStyle = colors.uiDefault;
+   ctx.lineWidth = C.UI_MENU_ICON_LINE_WIDTH;
+   ctx.beginPath();
+   for (let i = 0; i < 3; i++) {
+       const lineY = btn.y + 5 + i * 10;
+       ctx.moveTo(btn.x + 4, lineY);
+       ctx.lineTo(btn.x + btn.width - 4, lineY);
+   }
+   ctx.stroke();
 
-    const ctb = canvasUI.colorToolButton;
-    if (ctb) {
-        const getColor = (target) => {
-            if (!colorAssignments || !allColors) return colors.uiIcon;
-            const colorIndex = colorAssignments[target];
-            if (colorIndex === -1) return 'rgba(128, 128, 128, 1)';
-            const item = allColors[colorIndex];
-            if (!item) return colors.uiIcon;
-            if (item.type === 'color') return item.value;
-            return colors.uiIcon; 
-        };
+   const ctb = canvasUI.colorToolButton;
+   if (ctb) {
+       drawColorToolbarPreview(ctx, ctb, {
+           verticesVisible,
+           edgesVisible,
+           facesVisible,
+           colorAssignments,
+           allColors
+       }, colors);
+   }
 
-        drawColorToolbarPreview(ctx, ctb, {
-            vertexColor: getColor(C.COLOR_TARGET_VERTEX),
-            edgeColor: getColor(C.COLOR_TARGET_EDGE),
-            faceColor: getColor(C.COLOR_TARGET_FACE),
-            verticesVisible,
-            edgesVisible,
-            facesVisible,
-            colorAssignments,
-            allColors
-        }, colors);
-    }
+   const ttb = canvasUI.transformToolButton;
+   if (ttb) {
+       updateHtmlLabel({ id: 'transform-tool-label', content: C.UI_TRANSFORM_TOOL_LABEL_TEXT, x: ttb.x + ttb.width / 2, y: ttb.y + ttb.height / 2, color: colors.uiIcon, fontSize: C.UI_TRANSFORM_TOOL_LABEL_FONT_SIZE, options: { textAlign: 'center', textBaseline: 'middle' } }, htmlOverlay);
+   }
 
-    const ttb = canvasUI.transformToolButton;
-    if (ttb) {
-        updateHtmlLabel({ id: 'transform-tool-label', content: C.UI_TRANSFORM_TOOL_LABEL_TEXT, x: ttb.x + ttb.width / 2, y: ttb.y + ttb.height / 2, color: colors.uiIcon, fontSize: C.UI_TRANSFORM_TOOL_LABEL_FONT_SIZE, options: { textAlign: 'center', textBaseline: 'middle' } }, htmlOverlay);
-    }
+   const dtb = canvasUI.displayToolButton;
+   if (dtb) {
+       ctx.strokeStyle = colors.uiDefault;
+       ctx.fillStyle = colors.uiDefault;
+       ctx.lineWidth = C.UI_ICON_LINE_WIDTH;
+       const barWidth = dtb.width - C.UI_DISPLAY_ICON_BAR_WIDTH_PADDING;
+       for (let i = 0; i < 3; i++) {
+           const y = dtb.y + C.UI_DISPLAY_ICON_Y_OFFSET + i * C.UI_DISPLAY_ICON_Y_SPACING;
+           ctx.beginPath();
+           ctx.moveTo(dtb.x + 6, y);
+           ctx.lineTo(dtb.x + 6 + barWidth, y);
+           ctx.stroke();
+           ctx.beginPath();
+           ctx.arc(dtb.x + 6 + barWidth * (i / 2), y, C.UI_DISPLAY_ICON_KNOB_RADIUS, 0, 2 * Math.PI);
+           ctx.fill();
+       }
+   }
 
-    const dtb = canvasUI.displayToolButton;
-    if (dtb) {
-        ctx.strokeStyle = colors.uiDefault;
-        ctx.fillStyle = colors.uiDefault;
-        ctx.lineWidth = C.UI_ICON_LINE_WIDTH;
-        const barWidth = dtb.width - C.UI_DISPLAY_ICON_BAR_WIDTH_PADDING;
-        for (let i = 0; i < 3; i++) {
-            const y = dtb.y + C.UI_DISPLAY_ICON_Y_OFFSET + i * C.UI_DISPLAY_ICON_Y_SPACING;
-            ctx.beginPath();
-            ctx.moveTo(dtb.x + 6, y);
-            ctx.lineTo(dtb.x + 6 + barWidth, y);
-            ctx.stroke();
-            ctx.beginPath();
-            ctx.arc(dtb.x + 6 + barWidth * (i / 2), y, C.UI_DISPLAY_ICON_KNOB_RADIUS, 0, 2 * Math.PI);
-            ctx.fill();
-        }
-    }
+   const vtb = canvasUI.visibilityToolButton;
+   if (vtb) {
+       drawVisibilityIcon(ctx, vtb, colors);
+   }
 
-    const vtb = canvasUI.visibilityToolButton;
-    if (vtb) {
-        drawVisibilityIcon(ctx, vtb, colors);
-    }
-
-    const themeBtn = canvasUI.themeToggleButton;
-    if (themeBtn) {
-        drawThemeIcon(ctx, themeBtn, activeThemeName, colors);
-    }
+   const themeBtn = canvasUI.themeToggleButton;
+   if (themeBtn) {
+       drawThemeIcon(ctx, themeBtn, activeThemeName, colors);
+   }
 }
 
 function drawColorPalette(ctx, htmlOverlay, state, updateHtmlLabel) {
@@ -3507,28 +3508,32 @@ function drawColorPalette(ctx, htmlOverlay, state, updateHtmlLabel) {
 
     if (canvasUI.colorTargetIcons) {
         const getIconOptions = (target) => {
-    const colorIndex = colorAssignments[target];
-    const colorItem = (colorIndex === -1) ? null : allColors[colorIndex];
+            const colorIndex = colorAssignments[target];
+            const colorItem = (colorIndex === -1) ? null : allColors[colorIndex];
 
-    const swatchColor = (colorItem && colorItem.type === 'color') ? colorItem.value : null;
-    
-    const options = {};
-    if (target === C.COLOR_TARGET_VERTEX) {
-        options.vertexState = verticesVisible ? 'filled' : 'outline';
-        if (swatchColor) {
-            options.vertexColor = swatchColor;
-        } else if (colorItem && colorItem.type === 'colormap') {
-            options.colormapItem = colorItem;
-        }
-    } else if (target === C.COLOR_TARGET_EDGE) {
-        options.edgeState = edgesVisible ? 'solid' : 'dashed';
-        if (swatchColor) options.edgeColor = swatchColor;
-    } else if (target === C.COLOR_TARGET_FACE) {
-        options.faceState = facesVisible ? 'filled' : 'dotted';
-        if (swatchColor) options.faceColor = swatchColor;
-    }
-    return options;
-};
+            const options = {};
+            if (target === C.COLOR_TARGET_VERTEX) {
+                options.vertexState = verticesVisible ? 'filled' : 'outline';
+                if (colorItem && colorItem.type === 'color') {
+                    options.vertexColor = colorItem.value;
+                } else if (colorItem && colorItem.type === 'colormap') {
+                    options.vertexColormapItem = colorItem;
+                }
+            } else if (target === C.COLOR_TARGET_EDGE) {
+                options.edgeState = edgesVisible ? 'solid' : 'dashed';
+                if (colorItem && colorItem.type === 'color') {
+                    options.edgeColor = colorItem.value;
+                } else if (colorItem && colorItem.type === 'colormap') {
+                    options.edgeColormapItem = colorItem;
+                }
+            } else if (target === C.COLOR_TARGET_FACE) {
+                options.faceState = facesVisible ? 'filled' : 'dotted';
+                if (colorItem && colorItem.type === 'color') {
+                    options.faceColor = colorItem.value;
+                }
+            }
+            return options;
+        };
 
         const drawOrder = [C.COLOR_TARGET_FACE, C.COLOR_TARGET_EDGE, C.COLOR_TARGET_VERTEX];
         drawOrder.forEach(targetToDraw => {
@@ -4227,21 +4232,49 @@ function generateRandomColor() {
 
 function getColorForTarget(targetType, index = 0, total = 1) {
     const colorIndex = colorAssignments[targetType];
-    if (colorIndex === -1) { // -1 represents the "random" swatch
+    if (colorIndex === -1) {
         return generateRandomColor();
     }
     const item = allColors[colorIndex];
     if (item?.type === 'color') {
         return item.value;
     } else if (item?.type === 'colormap') {
-        // For edges, sample the colormap based on the edge's position in creation order
         const t = total > 1 ? index / (total - 1) : 0.5;
         return U.sampleColormap(item, t);
     }
-    // Fallback for colormaps or undefined items
-    return getColors().vertex; // A sensible default
+    return getColors().vertex;
 }
 
+function applyColormapToEdge(edge, index = 0, total = 1) {
+    const colorIndex = colorAssignments[C.COLOR_TARGET_EDGE];
+    if (colorIndex === -1) {
+        edge.color = generateRandomColor();
+        return;
+    }
+    
+    const colorItem = allColors[colorIndex];
+    if (colorItem && colorItem.type === 'colormap') {
+        const startT = total > 1 ? index / total : 0;
+        const endT = total > 1 ? (index + 1) / total : 1;
+        edge.gradientStart = startT;
+        edge.gradientEnd = endT;
+        edge.colormapItem = colorItem;
+        delete edge.colormapOffset;
+        delete edge.color;
+    } else if (colorItem && colorItem.type === 'color') {
+        edge.color = colorItem.value;
+        delete edge.gradientStart;
+        delete edge.gradientEnd;
+        delete edge.colormapItem;
+        delete edge.colormapOffset;
+    } else {
+        edge.color = getColors().edge;
+        delete edge.gradientStart;
+        delete edge.gradientEnd;
+        delete edge.colormapItem;
+        delete edge.colormapOffset;
+    }
+}
 
 function applyColorsToSelection() {
     saveStateForUndo();
@@ -4273,11 +4306,13 @@ function applyColorsToSelection() {
             selectedEdgeIds.forEach((edgeId, index) => {
                 const edge = allEdges.find(e => U.getEdgeId(e) === edgeId);
                 if (edge) {
-                    const startT = selectedEdgeIds.length > 1 ? index / (selectedEdgeIds.length - 1) : 0;
-                    const endT = selectedEdgeIds.length > 1 ? (index + 1) / selectedEdgeIds.length : 1;
+                    const totalEdges = selectedEdgeIds.length;
+                    const startT = totalEdges > 1 ? index / totalEdges : 0;
+                    const endT = totalEdges > 1 ? (index + 1) / totalEdges : 1;
                     edge.gradientStart = startT;
                     edge.gradientEnd = endT;
                     edge.colormapItem = colorItem;
+                    delete edge.colormapOffset;
                     delete edge.color;
                 }
             });
@@ -4289,6 +4324,7 @@ function applyColorsToSelection() {
                     delete edge.gradientStart;
                     delete edge.gradientEnd;
                     delete edge.colormapItem;
+                    delete edge.colormapOffset;
                 }
             });
         }
@@ -4942,91 +4978,90 @@ function buildDisplayPanelUI() {
 }
 
 function buildColorPaletteUI() {
-    canvasUI.colorSwatches = [];
-    canvasUI.colorTargetIcons = []; // Add this new property
-    const paletteY = canvasUI.colorToolButton.y;
+   canvasUI.colorSwatches = [];
+   canvasUI.colorTargetIcons = [];
+   const paletteY = canvasUI.colorToolButton.y;
 
-    let currentX = C.UI_TOOLBAR_WIDTH + C.UI_BUTTON_PADDING;
+   let currentX = C.UI_TOOLBAR_WIDTH + C.UI_BUTTON_PADDING;
 
-    canvasUI.applyColorsButton = {
-        id: "apply-colors-button",
-        type: "button",
-        x: currentX,
-        y: paletteY + C.COLOR_PALETTE_Y_OFFSET,
-        width: C.UI_SWATCH_SIZE,
-        height: C.UI_SWATCH_SIZE,
-    };
-    currentX += C.UI_SWATCH_SIZE + C.UI_BUTTON_PADDING;
+   canvasUI.applyColorsButton = {
+       id: "apply-colors-button",
+       type: "button",
+       x: currentX,
+       y: paletteY + C.COLOR_PALETTE_Y_OFFSET,
+       width: C.UI_SWATCH_SIZE,
+       height: C.UI_SWATCH_SIZE,
+   };
+   currentX += C.UI_SWATCH_SIZE + C.UI_BUTTON_PADDING;
 
-    canvasUI.randomColorButton = {
-        id: "random-color-button",
-        type: "button",
-        x: currentX,
-        y: paletteY + C.COLOR_PALETTE_Y_OFFSET,
-        width: C.UI_SWATCH_SIZE,
-        height: C.UI_SWATCH_SIZE,
-    };
-    currentX += C.UI_SWATCH_SIZE + C.UI_BUTTON_PADDING;
+   canvasUI.randomColorButton = {
+       id: "random-color-button",
+       type: "button",
+       x: currentX,
+       y: paletteY + C.COLOR_PALETTE_Y_OFFSET,
+       width: C.UI_SWATCH_SIZE,
+       height: C.UI_SWATCH_SIZE,
+   };
+   currentX += C.UI_SWATCH_SIZE + C.UI_BUTTON_PADDING;
 
-    canvasUI.removeColorButton = {
-        id: "remove-color-button",
-        type: "button",
-        x: currentX,
-        y: paletteY + C.COLOR_PALETTE_Y_OFFSET,
-        width: C.UI_SWATCH_SIZE,
-        height: C.UI_SWATCH_SIZE,
-    };
-    currentX += C.UI_SWATCH_SIZE + C.UI_BUTTON_PADDING;
+   canvasUI.removeColorButton = {
+       id: "remove-color-button",
+       type: "button",
+       x: currentX,
+       y: paletteY + C.COLOR_PALETTE_Y_OFFSET,
+       width: C.UI_SWATCH_SIZE,
+       height: C.UI_SWATCH_SIZE,
+   };
+   currentX += C.UI_SWATCH_SIZE + C.UI_BUTTON_PADDING;
 
-    allColors.forEach((item, index) => {
-        const swatchWidth = (item.type === 'colormap')
-            ? (C.UI_SWATCH_SIZE * 3) + (C.UI_BUTTON_PADDING * 2)
-            : C.UI_SWATCH_SIZE;
+   allColors.forEach((item, index) => {
+       const swatchWidth = (item.type === 'colormap')
+           ? (C.UI_SWATCH_SIZE * 3) + (C.UI_BUTTON_PADDING * 2)
+           : C.UI_SWATCH_SIZE;
 
-        canvasUI.colorSwatches.push({
-            id: `swatch-${index}`,
-            type: "colorSwatch",
-            x: currentX,
-            y: paletteY + C.COLOR_PALETTE_Y_OFFSET,
-            width: swatchWidth,
-            height: C.UI_SWATCH_SIZE,
-            index: index,
-            item: item
-        });
-        currentX += swatchWidth + C.UI_BUTTON_PADDING;
-    });
+       canvasUI.colorSwatches.push({
+           id: `swatch-${index}`,
+           type: "colorSwatch",
+           x: currentX,
+           y: paletteY + C.COLOR_PALETTE_Y_OFFSET,
+           width: swatchWidth,
+           height: C.UI_SWATCH_SIZE,
+           index: index,
+           item: item
+       });
+       currentX += swatchWidth + C.UI_BUTTON_PADDING;
+   });
 
-    const addButtonX = currentX;
-    canvasUI.addColorButton = {
-        id: "add-color-button",
-        type: "button",
-        x: addButtonX,
-        y: paletteY + C.COLOR_PALETTE_Y_OFFSET,
-        width: C.UI_SWATCH_SIZE,
-        height: C.UI_SWATCH_SIZE,
-    };
+   const addButtonX = currentX;
+   canvasUI.addColorButton = {
+       id: "add-color-button",
+       type: "button",
+       x: addButtonX,
+       y: paletteY + C.COLOR_PALETTE_Y_OFFSET,
+       width: C.UI_SWATCH_SIZE,
+       height: C.UI_SWATCH_SIZE,
+   };
 
-    // Define the color target icons and their positions
-    Object.entries(colorAssignments).forEach(([target, colorIndex]) => {
-        const iconSize = C.UI_SWATCH_SIZE * 0.75;
-        let swatch;
-        if (colorIndex === -1) {
-            swatch = canvasUI.randomColorButton;
-        } else {
-            swatch = canvasUI.colorSwatches.find(s => s.index === colorIndex);
-        }
+   Object.entries(colorAssignments).forEach(([target, colorIndex]) => {
+       const iconSize = C.UI_SWATCH_SIZE * 0.75;
+       let swatch;
+       if (colorIndex === -1) {
+           swatch = canvasUI.randomColorButton;
+       } else {
+           swatch = canvasUI.colorSwatches.find(s => s.index === colorIndex);
+       }
 
-        if (swatch) {
-            canvasUI.colorTargetIcons.push({
-                id: `target-icon-${target}`,
-                target: target,
-                x: swatch.x + (swatch.width - iconSize) / 2,
-                y: swatch.y - iconSize - 5,
-                width: iconSize,
-                height: iconSize
-            });
-        }
-    });
+       if (swatch) {
+           canvasUI.colorTargetIcons.push({
+               id: `target-icon-${target}`,
+               target: target,
+               x: swatch.x + (swatch.width - iconSize) / 2,
+               y: swatch.y - iconSize - 5,
+               width: iconSize,
+               height: iconSize
+           });
+       }
+   });
 }
 
 function buildVisibilityPanelUI() {
@@ -6750,12 +6785,12 @@ function updateDrawingSequenceEdgeColors() {
         );
         
         if (edge) {
-            const startT = totalEdges > 1 ? i / (totalEdges - 1) : 0;
-            const endT = totalEdges > 1 ? (i + 1) / (totalEdges - 1) : 1;
-            
+            const startT = i / totalEdges;
+            const endT = (i + 1) / totalEdges;
             edge.gradientStart = startT;
             edge.gradientEnd = endT;
             edge.colormapItem = colorItem;
+            delete edge.colormapOffset;
             delete edge.color;
         }
     }
@@ -6807,8 +6842,32 @@ function handleColorPaletteClick(screenPos, shiftKey, ctrlKey) {
                 isEditingColor = true;
                 editingColorIndex = swatch.index;
                 const colorToEdit = allColors[swatch.index];
-                const editorState = U.convertColorToColormapFormat(colorToEdit);
-                colorEditor.show(undefined, undefined, editorState);
+                
+                let initialState;
+                if (colorToEdit.type === 'color') {
+                    const parsedColor = U.parseColor(colorToEdit.value);
+                    initialState = {
+                        type: 'colormap',
+                        points: [{
+                            pos: 0.5,
+                            alpha: parsedColor.a,
+                            color: [parsedColor.r, parsedColor.g, parsedColor.b],
+                            order: 1
+                        }]
+                    };
+                } else if (colorToEdit.type === 'colormap') {
+                    initialState = {
+                        type: 'colormap',
+                        points: colorToEdit.vertices.map(v => ({
+                            pos: v.pos,
+                            alpha: v.alpha !== undefined ? v.alpha : 1.0,
+                            color: Array.isArray(v.color) ? [...v.color] : [v.color.r || 0, v.color.g || 0, v.color.b || 0],
+                            order: v.order || 1
+                        }))
+                    };
+                }
+                
+                colorEditor.show(undefined, undefined, initialState);
                 clickData.count = 0;
             } else {
                 // Single-click to assign color
@@ -7892,14 +7951,20 @@ function handleMouseUp(event) {
                     internalEdges.forEach(edge => {
                         const newId1 = newIdMapForThisCopy.get(edge.id1);
                         const newId2 = newIdMapForThisCopy.get(edge.id2);
-                        if (newId1 && newId2) allNewEdges.push({ id1: newId1, id2: newId2, color: getColorForTarget(C.COLOR_TARGET_EDGE, allNewEdges.length, allNewEdges.length + internalEdges.length) });
+                        if (newId1 && newId2) {
+                            const newEdge = { id1: newId1, id2: newId2 };
+                            applyColormapToEdge(newEdge, allNewEdges.length, allNewEdges.length + internalEdges.length);
+                            allNewEdges.push(newEdge);
+                        }
                     });
                     externalEdges.forEach(edge => {
                         const originalDraggedId = originalIds.has(edge.id1) ? edge.id1 : edge.id2;
                         const staticId = originalIds.has(edge.id1) ? edge.id2 : edge.id1;
                         const newCopiedId = newIdMapForThisCopy.get(originalDraggedId);
                         if (newCopiedId && staticId) {
-                            allNewEdges.push({ id1: newCopiedId, id2: staticId, color: getColorForTarget(C.COLOR_TARGET_EDGE, allNewEdges.length, allNewEdges.length + externalEdges.length) });
+                            const newEdge = { id1: newCopiedId, id2: staticId };
+                            applyColormapToEdge(newEdge, allNewEdges.length, allNewEdges.length + externalEdges.length);
+                            allNewEdges.push(newEdge);
                         }
                     });
                 }
@@ -8015,7 +8080,9 @@ function handleMouseUp(event) {
                         const edgeExists = allEdges.some(e => (e.id1 === startVertex.id && e.id2 === newVertex.id) || (e.id2 === startVertex.id && e.id1 === newVertex.id));
                         if (!edgeExists) {
                             // Create edge with temporary color - will be redistributed
-                            allEdges.push({ id1: startVertex.id, id2: newVertex.id, color: getColorForTarget(C.COLOR_TARGET_EDGE) });
+                            const newEdge = { id1: startVertex.id, id2: newVertex.id };
+                            applyColormapToEdge(newEdge);
+                            allEdges.push(newEdge);
                             updateFaces(edgesBefore, allEdges);
                         }
                         

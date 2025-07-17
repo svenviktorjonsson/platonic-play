@@ -170,21 +170,49 @@ function generateRandomColor() {
 
 function getColorForTarget(targetType, index = 0, total = 1) {
     const colorIndex = colorAssignments[targetType];
-    if (colorIndex === -1) { // -1 represents the "random" swatch
+    if (colorIndex === -1) {
         return generateRandomColor();
     }
     const item = allColors[colorIndex];
     if (item?.type === 'color') {
         return item.value;
     } else if (item?.type === 'colormap') {
-        // For edges, sample the colormap based on the edge's position in creation order
         const t = total > 1 ? index / (total - 1) : 0.5;
         return U.sampleColormap(item, t);
     }
-    // Fallback for colormaps or undefined items
-    return getColors().vertex; // A sensible default
+    return getColors().vertex;
 }
 
+function applyColormapToEdge(edge, index = 0, total = 1) {
+    const colorIndex = colorAssignments[C.COLOR_TARGET_EDGE];
+    if (colorIndex === -1) {
+        edge.color = generateRandomColor();
+        return;
+    }
+    
+    const colorItem = allColors[colorIndex];
+    if (colorItem && colorItem.type === 'colormap') {
+        const startT = total > 1 ? index / total : 0;
+        const endT = total > 1 ? (index + 1) / total : 1;
+        edge.gradientStart = startT;
+        edge.gradientEnd = endT;
+        edge.colormapItem = colorItem;
+        delete edge.colormapOffset;
+        delete edge.color;
+    } else if (colorItem && colorItem.type === 'color') {
+        edge.color = colorItem.value;
+        delete edge.gradientStart;
+        delete edge.gradientEnd;
+        delete edge.colormapItem;
+        delete edge.colormapOffset;
+    } else {
+        edge.color = getColors().edge;
+        delete edge.gradientStart;
+        delete edge.gradientEnd;
+        delete edge.colormapItem;
+        delete edge.colormapOffset;
+    }
+}
 
 function applyColorsToSelection() {
     saveStateForUndo();
@@ -216,11 +244,13 @@ function applyColorsToSelection() {
             selectedEdgeIds.forEach((edgeId, index) => {
                 const edge = allEdges.find(e => U.getEdgeId(e) === edgeId);
                 if (edge) {
-                    const t = selectedEdgeIds.length > 1 ? index / (selectedEdgeIds.length - 1) : 0.5;
-                    edge.gradientStart = 0;
-                    edge.gradientEnd = 1;
+                    const totalEdges = selectedEdgeIds.length;
+                    const startT = totalEdges > 1 ? index / totalEdges : 0;
+                    const endT = totalEdges > 1 ? (index + 1) / totalEdges : 1;
+                    edge.gradientStart = startT;
+                    edge.gradientEnd = endT;
                     edge.colormapItem = colorItem;
-                    edge.colormapOffset = t;
+                    delete edge.colormapOffset;
                     delete edge.color;
                 }
             });
@@ -2693,10 +2723,12 @@ function updateDrawingSequenceEdgeColors() {
         );
         
         if (edge) {
-            edge.gradientStart = 0;
-            edge.gradientEnd = 1;
+            const startT = i / totalEdges;
+            const endT = (i + 1) / totalEdges;
+            edge.gradientStart = startT;
+            edge.gradientEnd = endT;
             edge.colormapItem = colorItem;
-            edge.colormapOffset = totalEdges > 1 ? i / (totalEdges - 1) : 0.5;
+            delete edge.colormapOffset;
             delete edge.color;
         }
     }
@@ -2748,8 +2780,32 @@ function handleColorPaletteClick(screenPos, shiftKey, ctrlKey) {
                 isEditingColor = true;
                 editingColorIndex = swatch.index;
                 const colorToEdit = allColors[swatch.index];
-                const editorState = U.convertColorToColormapFormat(colorToEdit);
-                colorEditor.show(undefined, undefined, editorState);
+                
+                let initialState;
+                if (colorToEdit.type === 'color') {
+                    const parsedColor = U.parseColor(colorToEdit.value);
+                    initialState = {
+                        type: 'colormap',
+                        points: [{
+                            pos: 0.5,
+                            alpha: parsedColor.a,
+                            color: [parsedColor.r, parsedColor.g, parsedColor.b],
+                            order: 1
+                        }]
+                    };
+                } else if (colorToEdit.type === 'colormap') {
+                    initialState = {
+                        type: 'colormap',
+                        points: colorToEdit.vertices.map(v => ({
+                            pos: v.pos,
+                            alpha: v.alpha !== undefined ? v.alpha : 1.0,
+                            color: Array.isArray(v.color) ? [...v.color] : [v.color.r || 0, v.color.g || 0, v.color.b || 0],
+                            order: v.order || 1
+                        }))
+                    };
+                }
+                
+                colorEditor.show(undefined, undefined, initialState);
                 clickData.count = 0;
             } else {
                 // Single-click to assign color
@@ -3833,14 +3889,20 @@ function handleMouseUp(event) {
                     internalEdges.forEach(edge => {
                         const newId1 = newIdMapForThisCopy.get(edge.id1);
                         const newId2 = newIdMapForThisCopy.get(edge.id2);
-                        if (newId1 && newId2) allNewEdges.push({ id1: newId1, id2: newId2, color: getColorForTarget(C.COLOR_TARGET_EDGE, allNewEdges.length, allNewEdges.length + internalEdges.length) });
+                        if (newId1 && newId2) {
+                            const newEdge = { id1: newId1, id2: newId2 };
+                            applyColormapToEdge(newEdge, allNewEdges.length, allNewEdges.length + internalEdges.length);
+                            allNewEdges.push(newEdge);
+                        }
                     });
                     externalEdges.forEach(edge => {
                         const originalDraggedId = originalIds.has(edge.id1) ? edge.id1 : edge.id2;
                         const staticId = originalIds.has(edge.id1) ? edge.id2 : edge.id1;
                         const newCopiedId = newIdMapForThisCopy.get(originalDraggedId);
                         if (newCopiedId && staticId) {
-                            allNewEdges.push({ id1: newCopiedId, id2: staticId, color: getColorForTarget(C.COLOR_TARGET_EDGE, allNewEdges.length, allNewEdges.length + externalEdges.length) });
+                            const newEdge = { id1: newCopiedId, id2: staticId };
+                            applyColormapToEdge(newEdge, allNewEdges.length, allNewEdges.length + externalEdges.length);
+                            allNewEdges.push(newEdge);
                         }
                     });
                 }
@@ -3956,7 +4018,9 @@ function handleMouseUp(event) {
                         const edgeExists = allEdges.some(e => (e.id1 === startVertex.id && e.id2 === newVertex.id) || (e.id2 === startVertex.id && e.id1 === newVertex.id));
                         if (!edgeExists) {
                             // Create edge with temporary color - will be redistributed
-                            allEdges.push({ id1: startVertex.id, id2: newVertex.id, color: getColorForTarget(C.COLOR_TARGET_EDGE) });
+                            const newEdge = { id1: startVertex.id, id2: newVertex.id };
+                            applyColormapToEdge(newEdge);
+                            allEdges.push(newEdge);
                             updateFaces(edgesBefore, allEdges);
                         }
                         

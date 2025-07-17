@@ -245,7 +245,7 @@ function generateSnapFactors(maxDenominator, maxInteger) {
 export const SNAP_FACTORS = generateSnapFactors(MAX_SNAP_DENOMINATOR, MAX_SNAP_INTEGER);
 
 // --- ENUMS & LITERALS ---
-export const POINT_TYPE_REGULAR = 'regular';
+export const VERTEX_TYPE_REGULAR = 'regular';
 export const TRANSFORMATION_TYPE_ROTATION = ' transformation_rotation';
 export const TRANSFORMATION_TYPE_SCALE = ' transformation_scale';
 export const TRANSFORMATION_TYPE_DIRECTIONAL_SCALE = 'transformation_directional_scale';
