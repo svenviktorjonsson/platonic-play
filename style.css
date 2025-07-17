@@ -1,5 +1,6 @@
 :root {
     --container-bg-color: #1e1e1e;
+    --default-text-color: #e2e8f0; /* A light default text color */
 }
 
 html, body {
@@ -8,11 +9,14 @@ html, body {
     width: 100%;
     height: 100%;
     overflow: hidden;
-    font-family: Arial, sans-serif;
     background-color: var(--container-bg-color);
+    /* Set a default text color for the whole page */
+    color: var(--default-text-color);
 }
 
 .container {
+    /* Scope the specific font only to the app's container */
+    font-family: Arial, sans-serif;
     display: flex;
     flex-direction: column;
     width: 100%;
@@ -35,7 +39,8 @@ html, body {
     height: 100%;
 }
 
-canvas {
+/* This rule is now specific to the main drawing canvas */
+#drawingCanvas {
     display: block;
     background-color: #1a1a1a;
     cursor: crosshair;
@@ -48,17 +53,4 @@ canvas {
     pointer-events: none;
     width: 100%;
     height: 100%;
-}
-
-/* A different method for hiding the color picker */
-#colorPicker {
-    position: absolute;
-    top: 200;
-    left: 200;
-    width: 1px;
-    height: 1px;
-    opacity: 0;
-    border: none;
-    padding: 0;
-    /* We are no longer positioning it far off-screen */
 }

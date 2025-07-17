@@ -1,26 +1,11 @@
-import {
-    SCIENTIFIC_NOTATION_UPPER_BOUND,
-    SCIENTIFIC_NOTATION_LOWER_BOUND,
-    MAX_DECIMAL_PLACES_FORMAT,
-    GEOMETRY_CALCULATION_EPSILON,
-    RADIANS_IN_CIRCLE,
-    DEGREES_IN_CIRCLE,
-    ZERO_TOLERANCE,
-    FRACTION_FORMAT_TOLERANCE,
-    FRACTION_FORMAT_MAX_DENOMINATOR,
-    KATEX_MINUS_PHANTOM,
-    ON_SEGMENT_STRICT_T_MIN,
-    ON_SEGMENT_STRICT_T_MAX,
-    ANGLE_SNAP_THRESHOLD_RAD,
-    TRIANGULAR_GRID_Y_STEP_FACTOR,
-} from './constants.js';
+import * as C from './constants.js';
 
 export function formatNumber(value, sigFigs) {
     if (value === 0) return "0";
     const absValue = Math.abs(value);
     const sign = value < 0 ? "-" : "";
     let formattedString;
-    if (absValue >= SCIENTIFIC_NOTATION_UPPER_BOUND || (absValue !== 0 && absValue < SCIENTIFIC_NOTATION_LOWER_BOUND)) {
+    if (absValue >= C.SCIENTIFIC_NOTATION_UPPER_BOUND || (absValue !== 0 && absValue < C.SCIENTIFIC_NOTATION_LOWER_BOUND)) {
         const expStr = absValue.toExponential(Math.max(0, sigFigs - 1));
         const parts = expStr.split('e');
         let coefficient = parseFloat(parts[0]).toString();
@@ -42,7 +27,7 @@ export function formatNumber(value, sigFigs) {
         } else {
             decimalPlacesToDisplay = Math.max(0, sigFigs - integerDigits);
         }
-        decimalPlacesToDisplay = Math.min(decimalPlacesToDisplay, MAX_DECIMAL_PLACES_FORMAT);
+        decimalPlacesToDisplay = Math.min(decimalPlacesToDisplay, C.MAX_DECIMAL_PLACES_FORMAT);
         let fixedStr = absValue.toFixed(decimalPlacesToDisplay);
         let num = parseFloat(fixedStr);
         if (Math.abs(num) === 0 && value !== 0) {
@@ -57,16 +42,18 @@ export function gcd(a, b) {
     return b === 0 ? a : gcd(b, a % b);
 }
 
+export function getEdgeId(edge) {
+    return edge.id1 < edge.id2 
+        ? `${edge.id1}${C.EDGE_ID_DELIMITER}${edge.id2}` 
+        : `${edge.id2}${C.EDGE_ID_DELIMITER}${edge.id1}`;
+}
 
-export function generateAngleSnapFractions(maxDenominator, maxResultingMultipleOfBase) {
-    const fractionsSet = new Set();
-    fractionsSet.add(0);
-    for (let q = 1; q <= maxDenominator; q++) {
-        for (let p = 0; p <= q * maxResultingMultipleOfBase; p++) {
-            fractionsSet.add(p / q);
-        }
+export function getFaceId(face) {
+    if (face.id) return face.id;
+    if (face.vertexIds) {
+        return `face_${[...face.vertexIds].sort().join('_')}`;
     }
-    return Array.from(fractionsSet).sort((a, b) => a - b);
+    return null;
 }
 
 export function getGridSnapCandidates(mouseDataPos, gridDisplayMode, gridInterval, angularGridState, getMultipleRect = false) {
@@ -89,7 +76,7 @@ export function getGridSnapCandidates(mouseDataPos, gridDisplayMode, gridInterva
             }
         });
     } else if (gridDisplayMode === 'triangular') {
-        const y_step = gridInterval * TRIANGULAR_GRID_Y_STEP_FACTOR;
+        const y_step = gridInterval * C.TRIANGULAR_GRID_Y_STEP_FACTOR;
         const i_f = (mouseDataPos.x / gridInterval) - (mouseDataPos.y / (gridInterval * Math.sqrt(3)));
         const j_f = mouseDataPos.y / y_step;
 
@@ -110,7 +97,7 @@ export function getGridSnapCandidates(mouseDataPos, gridDisplayMode, gridInterva
         const snappedX = i_r * gridInterval + j_r * gridInterval / 2;
         const snappedY = j_r * y_step;
         candidates.push({ x: snappedX, y: snappedY, isGridPoint: true });
-    } else { // 'lines' or 'points'
+    } else {
         if (getMultipleRect) {
             const gridX = Math.floor(mouseDataPos.x / gridInterval) * gridInterval;
             const gridY = Math.floor(mouseDataPos.y / gridInterval) * gridInterval;
@@ -127,80 +114,34 @@ export function getGridSnapCandidates(mouseDataPos, gridDisplayMode, gridInterva
     return candidates;
 }
 
-
-export function solveForPoint(N1, N2, d1, alpha) {
-    const d_n = distance(N1, N2);
-    if (d_n < GEOMETRY_CALCULATION_EPSILON || Math.sin(alpha) < GEOMETRY_CALCULATION_EPSILON) return [];
-    const solutions = [];
-    const A = 1,
-        B = -2 * d1 * Math.cos(alpha),
-        C = d1 * d1 - d_n * d_n;
-    const discriminant = B * B - 4 * A * C;
-    if (discriminant < 0) return [];
-
-    [(-B + Math.sqrt(discriminant)) / (2 * A), (-B - Math.sqrt(discriminant)) / (2 * A)].forEach(d2 => {
-        if (d2 <= 0) return;
-        const a = (d1 * d1 - d2 * d2 + d_n * d_n) / (2 * d_n);
-        const h = Math.sqrt(Math.max(0, d1 * d1 - a * a));
-        const x_mid = N1.x + a * (N2.x - N1.x) / d_n;
-        const y_mid = N1.y + a * (N2.y - N1.y) / d_n;
-        solutions.push({ x: x_mid + h * (N2.y - N1.y) / d_n, y: y_mid - h * (N2.x - N1.x) / d_n, dist: d1, angle: alpha });
-        solutions.push({ x: x_mid - h * (N2.y - N1.y) / d_n, y: y_mid + h * (N2.x - N1.x) / d_n, dist: d1, angle: alpha });
-    });
-    return solutions;
-}
-
-export function generateDistanceSnapFactors() {
-    const fractionsSet = new Set();
-    fractionsSet.add(0);
-    for (let q = 1; q <= 6; q++) {
-        for (let p = 1; p <= q; p++) {
-            fractionsSet.add(p / q);
-        }
-    }
-    for (let i = 1; i <= 10; i++) {
-        fractionsSet.add(i);
-        if (i > 1) {
-            fractionsSet.add(i - 0.5);
-        }
-    }
-    return Array.from(fractionsSet).sort((a, b) => a - b);
-}
-
 export function generateUniqueId() {
     return crypto.randomUUID();
 }
 
 export function normalizeAngle(angleRad) {
-    while (angleRad < 0) angleRad += RADIANS_IN_CIRCLE;
-    while (angleRad >= RADIANS_IN_CIRCLE) angleRad -= RADIANS_IN_CIRCLE;
+    while (angleRad < 0) angleRad += C.RADIANS_IN_CIRCLE;
+    while (angleRad >= C.RADIANS_IN_CIRCLE) angleRad -= C.RADIANS_IN_CIRCLE;
     return angleRad;
 }
 
 export function calculateRotationAngle(initialStartAngle, currentMouseAngle, totalAccumulatedRotationFromStart = 0) {
-    // Calculate the raw delta
     let rawDeltaAngle = currentMouseAngle - initialStartAngle;
-    
-    // Find the number of full revolutions that maintains continuity
     let numRevolutions = Math.round((totalAccumulatedRotationFromStart - rawDeltaAngle) / (2 * Math.PI));
-    
-    // Apply the revolutions to maintain continuity - this ensures we never flip at ±180°
     let continuousDeltaAngle = rawDeltaAngle + numRevolutions * (2 * Math.PI);
-    
     return continuousDeltaAngle;
 }
 
 export function normalizeAngleToPi(angleRad) {
     angleRad = normalizeAngle(angleRad);
     if (angleRad > Math.PI) {
-        angleRad -= RADIANS_IN_CIRCLE;
+        angleRad -= C.RADIANS_IN_CIRCLE;
     }
     return angleRad;
 }
 
 export function normalizeAngleDegrees(angleDeg) {
-    while (angleDeg < 0) angleDeg += DEGREES_IN_CIRCLE;
-    while (angleDeg >= DEGREES_IN_CIRCLE) angleDeg -= DEGREES_IN_CIRCLE;
+    while (angleDeg < 0) angleDeg += C.DEGREES_IN_CIRCLE;
+    while (angleDeg >= C.DEGREES_IN_CIRCLE) angleDeg -= C.DEGREES_IN_CIRCLE;
     return angleDeg;
 }
 
@@ -219,38 +160,21 @@ export function getLineCircleIntersection(line, circle) {
     discriminant = Math.sqrt(discriminant);
     const t1 = (-b - discriminant) / (2 * a);
     const t2 = (-b + discriminant) / (2 * a);
-    
+
     return [
         { x: p1.x + t1 * d.x, y: p1.y + t1 * d.y },
         { x: p1.x + t2 * d.x, y: p1.y + t2 * d.y }
     ];
 }
 
-export function getClosestPointOnLine(p, a, b) {
-    const abx = b.x - a.x;
-    const aby = b.y - a.y;
-    const acx = p.x - a.x;
-    const acy = p.y - a.y;
-    const lenSqAB = abx * abx + aby * aby;
-
-    if (lenSqAB === 0) {
-        return { point: { x: a.x, y: a.y }, distance: distance(p, a) };
-    }
-    let t = (acx * abx + acy * aby) / lenSqAB;
-    const closestX = a.x + t * abx;
-    const closestY = a.y + t * aby;
-    const dist = distance(p, { x: closestX, y: closestY });
-    return { point: { x: closestX, y: closestY }, distance: dist };
-}
-
 export function getLineLineIntersection(line1, line2) {
     const p1 = line1.p1, p2 = line1.p2, p3 = line2.p1, p4 = line2.p2;
     const den = (p1.x - p2.x) * (p3.y - p4.y) - (p1.y - p2.y) * (p3.x - p4.x);
-    if (Math.abs(den) < GEOMETRY_CALCULATION_EPSILON) return null;
+    if (Math.abs(den) < C.GEOMETRY_CALCULATION_EPSILON) return null;
     const t = ((p1.x - p3.x) * (p3.y - p4.y) - (p1.y - p3.y) * (p3.x - p4.x)) / den;
     const u = -((p1.x - p2.x) * (p1.y - p3.y) - (p1.y - p2.y) * (p1.x - p3.x)) / den;
     
-    if (u >= 0 && u <= 1) { 
+    if (u >= 0 && u <= 1) {
         return { x: p1.x + t * (p2.x - p1.x), y: p1.y + t * (p2.y - p1.y) };
     }
     return null;
@@ -286,30 +210,12 @@ export function formatSimplifiedRoot(coeff, radicand, symbol = '') {
     return `${coeff}\\sqrt{${radicand}}${symString}`;
 }
 
-export function snapTValue(t, fractions, snapThreshold = 0.05) {
-    let bestSnappedT = t;
-    let minDiff = snapThreshold;
-
-    if (t < -snapThreshold || t > 1 + snapThreshold) {
-        return Math.max(0, Math.min(1, t));
-    }
-
-    for (const snapFraction of fractions) {
-        const diff = Math.abs(t - snapFraction);
-        if (diff < minDiff) {
-            minDiff = diff;
-            bestSnappedT = snapFraction;
-        }
-    }
-    return Math.max(0, Math.min(1, bestSnappedT));
-}
-
 export function distance(p1, p2) {
     return Math.sqrt(Math.pow(p1.x - p2.x, 2) + Math.pow(p1.y - p2.y, 2));
 }
 
-export function formatFraction(decimal, tolerance = FRACTION_FORMAT_TOLERANCE, maxDisplayDenominator = FRACTION_FORMAT_MAX_DENOMINATOR) {
-    if (Math.abs(decimal) < ZERO_TOLERANCE) return "0";
+export function formatFraction(decimal, tolerance = C.FRACTION_FORMAT_TOLERANCE, maxDisplayDenominator = C.FRACTION_FORMAT_MAX_DENOMINATOR) {
+    if (Math.abs(decimal) < C.ZERO_TOLERANCE) return "0";
     const originalSign = decimal < 0 ? "-" : "";
     const absDecimal = Math.abs(decimal);
 
@@ -334,7 +240,7 @@ export function formatFraction(decimal, tolerance = FRACTION_FORMAT_TOLERANCE, m
 
     for (let currentDen = 1; currentDen <= maxDisplayDenominator; currentDen++) {
         const currentNum = Math.round(absDecimal * currentDen);
-        if (currentNum === 0 && absDecimal > ZERO_TOLERANCE) continue;
+        if (currentNum === 0 && absDecimal > C.ZERO_TOLERANCE) continue;
         if (Math.abs(absDecimal - currentNum / currentDen) < tolerance / currentDen) {
             const common = gcd(currentNum, currentDen);
             const n = currentNum/common;
@@ -352,13 +258,196 @@ export function formatFraction(decimal, tolerance = FRACTION_FORMAT_TOLERANCE, m
     return originalSign + absDecimal.toFixed(fixedPrecision);
 }
 
-export function formatCoordinateValue(value, decimalPlaces) {
-    if (typeof value !== 'number' || isNaN(value)) {
-        return '...';
+export function isVertexInPolygon(vertex, vertices) {
+    if (vertices.length < 3) return false;
+    
+    let inside = false;
+    const x = vertex.x;
+    const y = vertex.y;
+    
+    for (let i = 0, j = vertices.length - 1; i < vertices.length; j = i++) {
+        const xi = vertices[i].x;
+        const yi = vertices[i].y;
+        const xj = vertices[j].x;
+        const yj = vertices[j].y;
+        
+        if (((yi > y) !== (yj > y)) && 
+            (x < (xj - xi) * (y - yi) / (yj - yi) + xi)) {
+            inside = !inside;
+        }
     }
-    const sign = value < 0 ? "-" : KATEX_MINUS_PHANTOM;
-    const fixedValue = Math.abs(value).toFixed(decimalPlaces);
-    return sign + fixedValue;
+    
+    return inside;
+}
+
+export function parseColor(colorString) {
+    if (!colorString || typeof colorString !== 'string') {
+        return { r: 255, g: 255, b: 255, a: 1.0 };
+    }
+    
+    if (colorString.startsWith('rgba(')) {
+        const match = colorString.match(/rgba\((\d+),\s*(\d+),\s*(\d+),\s*([\d.]+)\)/);
+        if (match) {
+            return {
+                r: Math.max(0, Math.min(255, parseInt(match[1]))),
+                g: Math.max(0, Math.min(255, parseInt(match[2]))),
+                b: Math.max(0, Math.min(255, parseInt(match[3]))),
+                a: Math.max(0, Math.min(1, parseFloat(match[4])))
+            };
+        }
+    }
+    
+    if (colorString.startsWith('rgb(')) {
+        const match = colorString.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/);
+        if (match) {
+            return {
+                r: Math.max(0, Math.min(255, parseInt(match[1]))),
+                g: Math.max(0, Math.min(255, parseInt(match[2]))),
+                b: Math.max(0, Math.min(255, parseInt(match[3]))),
+                a: 1.0
+            };
+        }
+    }
+    
+    if (colorString.startsWith('#')) {
+        const hex = colorString.slice(1);
+        if (hex.length === 6) {
+            return {
+                r: parseInt(hex.slice(0, 2), 16),
+                g: parseInt(hex.slice(2, 4), 16),
+                b: parseInt(hex.slice(4, 6), 16),
+                a: 1.0
+            };
+        }
+        if (hex.length === 3) {
+            return {
+                r: parseInt(hex[0] + hex[0], 16),
+                g: parseInt(hex[1] + hex[1], 16),
+                b: parseInt(hex[2] + hex[2], 16),
+                a: 1.0
+            };
+        }
+    }
+    
+    return { r: 255, g: 255, b: 255, a: 1.0 };
+}
+
+export function findCoordinateSystemElement(screenPos, face, dataToScreen) {
+    const coordSystem = face.localCoordSystem;
+    if (!coordSystem) return null;
+
+    const centerScreen = dataToScreen(coordSystem.origin);
+    const centerSelectRadius = 10; // in screen pixels
+
+    if (distance(screenPos, centerScreen) < centerSelectRadius) {
+        return { face, type: 'center' };
+    }
+
+    const armEndSelectRadius = 10; // in screen pixels
+
+    const checkArm = (x, y, type) => {
+        const armEndGlobal = localToGlobal({ x, y }, coordSystem);
+        if (distance(screenPos, dataToScreen(armEndGlobal)) < armEndSelectRadius) {
+            return { face, type };
+        }
+        return null;
+    };
+
+    return checkArm(1, 0, 'x_axis') ||
+           checkArm(-1, 0, 'x_axis') ||
+           checkArm(0, 1, 'y_axis') ||
+           checkArm(0, -1, 'y_axis');
+}
+
+
+export function detectClosedPolygons(allEdges, findPointById) {
+    const adjacencyMap = new Map();
+    const vertices = new Map();
+
+    allEdges.forEach(edge => {
+        const p1 = findPointById(edge.id1);
+        const p2 = findPointById(edge.id2);
+        if (!p1 || !p2 || p1.type !== 'regular' || p2.type !== 'regular') return;
+
+        if (!vertices.has(p1.id)) vertices.set(p1.id, p1);
+        if (!vertices.has(p2.id)) vertices.set(p2.id, p2);
+
+        if (!adjacencyMap.has(edge.id1)) adjacencyMap.set(edge.id1, []);
+        if (!adjacencyMap.has(edge.id2)) adjacencyMap.set(edge.id2, []);
+
+        adjacencyMap.get(edge.id1).push(edge.id2);
+        adjacencyMap.get(edge.id2).push(edge.id1);
+    });
+
+    // For each vertex, sort its neighbors by angle (counter-clockwise)
+    for (const [vertexId, neighbors] of adjacencyMap.entries()) {
+        const centerPoint = vertices.get(vertexId);
+        neighbors.sort((a, b) => {
+            const pA = vertices.get(a);
+            const pB = vertices.get(b);
+            const angleA = Math.atan2(pA.y - centerPoint.y, pA.x - centerPoint.x);
+            const angleB = Math.atan2(pB.y - centerPoint.y, pB.x - centerPoint.x);
+            return angleA - angleB;
+        });
+    }
+
+    const visitedDarts = new Set(); // A "dart" is a directed edge like "p1->p2"
+    const faces = [];
+
+    function shoelaceArea(vertexPoints) {
+        let area = 0;
+        const n = vertexPoints.length;
+        for (let i = 0; i < n; i++) {
+            const j = (i + 1) % n;
+            area += vertexPoints[i].x * vertexPoints[j].y - vertexPoints[j].x * vertexPoints[i].y;
+        }
+        return area / 2;
+    }
+
+    for (const startNodeId of adjacencyMap.keys()) {
+        const neighbors = adjacencyMap.get(startNodeId);
+        for (const endNodeId of neighbors) {
+            const dart = `${startNodeId}->${endNodeId}`;
+            if (visitedDarts.has(dart)) continue;
+
+            const currentPath = [];
+            let prev = startNodeId;
+            let curr = endNodeId;
+
+            while (true) {
+                visitedDarts.add(`${prev}->${curr}`);
+                currentPath.push(prev);
+
+                const currNeighbors = adjacencyMap.get(curr);
+                if (!currNeighbors) break;
+                
+                const prevIndex = currNeighbors.indexOf(prev);
+                if (prevIndex === -1) break;
+
+                // To trace a face boundary, take the left turn (CCW successor) for standard inner face traversal
+                const nextIndex = (prevIndex + 1) % currNeighbors.length;
+                const nextNode = currNeighbors[nextIndex];
+
+                prev = curr;
+                curr = nextNode;
+                
+                if (prev === startNodeId && curr === endNodeId) {
+                    const vertexPoints = currentPath.map(id => vertices.get(id));
+                    // Positive area for CCW polygons, identifying inner faces
+                    if (shoelaceArea(vertexPoints) > 0) {
+                        faces.push({ vertexIds: currentPath });
+                    }
+                    break;
+                }
+
+                // Stop if we hit an edge that's already part of another face's boundary
+                if (visitedDarts.has(`${prev}->${curr}`)) {
+                    break;
+                }
+            }
+        }
+    }
+    return faces;
 }
 
 export function normalize(v) {
@@ -378,7 +467,7 @@ export function getClosestPointOnLineSegment(p, a, b) {
         return { x: a.x, y: a.y, distance: distance(p, a), onSegmentStrict: true, t: 0 };
     }
     let t = (acx * abx + acy * aby) / lenSqAB;
-    const onSegmentStrict = t > ON_SEGMENT_STRICT_T_MIN && t < ON_SEGMENT_STRICT_T_MAX;
+    const onSegmentStrict = t > C.ON_SEGMENT_STRICT_T_MIN && t < C.ON_SEGMENT_STRICT_T_MAX;
     const clampedT = Math.max(0, Math.min(1, t));
     const closestX = a.x + clampedT * abx;
     const closestY = a.y + clampedT * aby;
@@ -391,53 +480,6 @@ export function getMousePosOnCanvas(event, canvasElement) {
     return { x: event.clientX - rect.left, y: event.clientY - rect.top };
 }
 
-export function snapToAngle(targetAngleRad, offsetAngleRad, angleSnapFractionsArray, baseReferenceAngleRad, forceSnap = false) {
-    if (isNaN(targetAngleRad) || isNaN(offsetAngleRad) || Math.abs(baseReferenceAngleRad) < GEOMETRY_CALCULATION_EPSILON) {
-        const defaultAngle = isNaN(offsetAngleRad) ? 0 : offsetAngleRad;
-        return { angle: defaultAngle, turn: 0, factor: null };
-    }
-    let bestSnappedAngleRad = targetAngleRad;
-    let minAngleDifference = Infinity;
-    let bestTurn = normalizeAngleToPi(targetAngleRad - offsetAngleRad);
-    let bestFactor = null;
-
-    const maxAllowedFactor = (Math.PI + 0.0001) / Math.abs(baseReferenceAngleRad);
-
-    for (const fraction of angleSnapFractionsArray) {
-        if (fraction > maxAllowedFactor) {
-            continue;
-        }
-
-        const snapIncrementRad = baseReferenceAngleRad * fraction;
-
-        const potentialSnapAngleCCW = normalizeAngle(offsetAngleRad + snapIncrementRad);
-        let diffCCW = Math.abs(normalizeAngleToPi(targetAngleRad - potentialSnapAngleCCW));
-        if (diffCCW < minAngleDifference) {
-            minAngleDifference = diffCCW;
-            bestSnappedAngleRad = potentialSnapAngleCCW;
-            bestTurn = snapIncrementRad;
-            bestFactor = fraction;
-        }
-
-        if (fraction !== 0) {
-            const potentialSnapAngleCW = normalizeAngle(offsetAngleRad - snapIncrementRad);
-            let diffCW = Math.abs(normalizeAngleToPi(targetAngleRad - potentialSnapAngleCW));
-            if (diffCW < minAngleDifference) {
-                minAngleDifference = diffCW;
-                bestSnappedAngleRad = potentialSnapAngleCW;
-                bestTurn = -snapIncrementRad;
-                bestFactor = -fraction;
-            }
-        }
-    }
-
-    if (forceSnap || minAngleDifference < ANGLE_SNAP_THRESHOLD_RAD) {
-        return { angle: bestSnappedAngleRad, turn: bestTurn, factor: bestFactor };
-    }
-
-    return { angle: targetAngleRad, turn: normalizeAngleToPi(targetAngleRad - offsetAngleRad), factor: null };
-}
-
 function rgbToHsl(r, g, b) {
     r /= 255;
     g /= 255;
@@ -448,7 +490,7 @@ function rgbToHsl(r, g, b) {
     let h, s, l = (max + min) / 2;
 
     if (max === min) {
-        h = s = 0; // achromatic
+        h = s = 0;
     } else {
         const d = max - min;
         s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
@@ -467,7 +509,7 @@ function rgbToHsl(r, g, b) {
 export function invertGrayscaleValue(value) {
     if (Array.isArray(value)) {
         const [h, s, l] = rgbToHsl(value[0], value[1], value[2]);
-        const invertedL = 1 - l; // Invert lightness
+        const invertedL = 1 - l;
         const [newR, newG, newB] = hslToRgb(h, s, invertedL);
         return [newR, newG, newB];
     }
@@ -497,7 +539,6 @@ export function invertGrayscaleValue(value) {
             }
         }
         
-        // Handle named colors
         if (value === 'white') return 'black';
         if (value === 'black') return 'white';
     }
@@ -505,17 +546,143 @@ export function invertGrayscaleValue(value) {
     return value;
 }
 
-// Function to get the current theme based on active theme name
+export function shoelaceArea(vertices) {
+    let area = 0.0;
+    const n = vertices.length;
+    for (let i = 0; i < n; i++) {
+        const j = (i + 1) % n;
+        area += vertices[i].x * vertices[j].y;
+        area -= vertices[j].x * vertices[i].y;
+    }
+    return area / 2.0;
+}
+
+export function clamp(v, minv, maxv) {
+    return Math.max(minv, Math.min(maxv, v));
+}
+
+export function computeAngle(prev, curr, next) {
+    const u = { x: prev.x - curr.x, y: prev.y - curr.y };
+    const v = { x: next.x - curr.x, y: next.y - curr.y };
+    const dot = u.x * v.x + u.y * v.y;
+    const mag_u = Math.hypot(u.x, u.y);
+    const mag_v = Math.hypot(v.x, v.y);
+    if (mag_u === 0 || mag_v === 0) return Math.PI;
+    const cos_theta = dot / (mag_u * mag_v);
+    return Math.acos(clamp(cos_theta, -1, 1));
+}
+
+export function isSelfIntersecting(vertices) {
+    const n = vertices.length;
+    for (let i = 0; i < n; i++) {
+        const p1 = vertices[i];
+        const p2 = vertices[(i + 1) % n];
+        for (let j = i + 2; j < n; j++) {
+            const q1 = vertices[j];
+            const q2 = vertices[(j + 1) % n];
+            if ((j + 1) % n === i || j === (i + 1) % n) continue;
+            if (linesIntersect(p1, p2, q1, q2)) return true;
+        }
+    }
+    return false;
+}
+
+function linesIntersect(a, b, c, d) {
+    function ccw(A, B, C) {
+        return (C.y - A.y) * (B.x - A.x) > (B.y - A.y) * (C.x - A.x);
+    }
+    return ccw(a, c, d) !== ccw(b, c, d) && ccw(a, b, c) !== ccw(a, b, d);
+}
+
+export function triangulatePolygon(vertices) {
+    let n = vertices.length;
+    if (n < 3) return [];
+    
+    let area = shoelaceArea(vertices);
+    let windingSign = area > 0 ? 1 : (area < 0 ? -1 : 1);
+    
+    const triangles = [];
+    const indices = Array.from({length: n}, (_, i) => i);
+    
+    function isEar(i, verts, indices, windingSign) {
+        const prevIdx = (i - 1 + indices.length) % indices.length;
+        const currIdx = i;
+        const nextIdx = (i + 1) % indices.length;
+        
+        const prev = verts[indices[prevIdx]];
+        const curr = verts[indices[currIdx]];
+        const next = verts[indices[nextIdx]];
+        
+        const dx1 = curr.x - prev.x;
+        const dy1 = curr.y - prev.y;
+        const dx2 = next.x - curr.x;
+        const dy2 = next.y - curr.y;
+        const cross = dx1 * dy2 - dy1 * dx2;
+        if (cross * windingSign <= 0) return false;
+        
+        const tri = [prev, curr, next];
+        for (let j = 0; j < indices.length; j++) {
+            const idx = indices[j];
+            if (idx === indices[prevIdx] || idx === indices[currIdx] || idx === indices[nextIdx]) continue;
+            if (vertexInTriangle(verts[idx], tri)) return false;
+        }
+        return true;
+    }
+    
+    function vertexInTriangle(pt, tri) {
+        const [p1, p2, p3] = tri;
+        const denom = (p2.y - p3.y) * (p1.x - p3.x) + (p3.x - p2.x) * (p1.y - p3.y);
+        if (Math.abs(denom) < 1e-10) return false;
+        
+        const a = ((p2.y - p3.y) * (pt.x - p3.x) + (p3.x - p2.x) * (pt.y - p3.y)) / denom;
+        const b = ((p3.y - p1.y) * (pt.x - p3.x) + (p1.x - p3.x) * (pt.y - p3.y)) / denom;
+        const c = 1 - a - b;
+        
+        return a >= 0 && a <= 1 && b >= 0 && b <= 1 && c >= 0 && c <= 1;
+    }
+    
+    while (indices.length > 3) {
+        const ears = [];
+        for (let i = 0; i < indices.length; i++) {
+            if (isEar(i, vertices, indices, windingSign)) {
+                const prevIdx = (i - 1 + indices.length) % indices.length;
+                const currIdx = i;
+                const nextIdx = (i + 1) % indices.length;
+                const angle = computeAngle(vertices[indices[prevIdx]], vertices[indices[currIdx]], vertices[indices[nextIdx]]);
+                ears.push({ index: i, angle });
+            }
+        }
+        
+        if (ears.length === 0) break;
+        
+        ears.sort((a, b) => a.angle - b.angle);
+        
+        const earToClip = ears[0];
+        const i = earToClip.index;
+        
+        const prev = indices[(i - 1 + indices.length) % indices.length];
+        const curr = indices[i];
+        const next = indices[(i + 1) % indices.length];
+        
+        triangles.push([prev, curr, next]);
+        indices.splice(i, 1);
+    }
+    
+    if (indices.length === 3) {
+        triangles.push([indices[0], indices[1], indices[2]]);
+    }
+    
+    return triangles;
+}
+
 export function getCurrentTheme(activeThemeName, baseTheme) {
     if (activeThemeName === 'dark') {
         return baseTheme;
     } else {
-        // Generate light theme by inverting the base (dark) theme
         const lightTheme = {};
         for (const [key, value] of Object.entries(baseTheme)) {
-            // Keep some colors the same for light theme (like accent colors)
             if (key === 'frozenReference' || key === 'feedbackSnapped' || key === 'geometryInfoTextSnapped') {
-                lightTheme[key] = 'rgba(217, 119, 6, 0.95)'; // Orange accent for light theme
+                lightTheme[key] = 'rgba(217, 119, 6, 0.95)';
             } else {
                 lightTheme[key] = invertGrayscaleValue(value);
             }
@@ -579,12 +746,12 @@ export function formatSnapFactor(factor, symbol) {
     return `${fractionStr}${newSymbol}`;
 }
 
-export function applyTransformToPoint(point, center, rotation, scale, directionalScale, startVector) {
-    const pointVector = { x: point.x - center.x, y: point.y - center.y };
+export function applyTransformToVertex(vertex, center, rotation, scale, directionalScale, startVector) {
+    const pointVector = { x: vertex.x - center.x, y: vertex.y - center.y };
 
     if (directionalScale) {
         const startDist = Math.hypot(startVector.x, startVector.y);
-        if (startDist > GEOMETRY_CALCULATION_EPSILON) {
+        if (startDist > C.GEOMETRY_CALCULATION_EPSILON) {
             const startNormalized = { x: startVector.x / startDist, y: startVector.y / startDist };
 
             const parallelComponent = (pointVector.x * startNormalized.x + pointVector.y * startNormalized.y);
@@ -602,7 +769,7 @@ export function applyTransformToPoint(point, center, rotation, scale, directiona
 
             return { x: center.x + newVector.x, y: center.y + newVector.y };
         }
-        return { x: point.x, y: point.y };
+        return { x: vertex.x, y: vertex.y };
     } else {
         let transformedVector = { ...pointVector };
 
@@ -616,4 +783,267 @@ export function applyTransformToPoint(point, center, rotation, scale, directiona
 
         return { x: center.x + transformedVector.x, y: center.y + transformedVector.y };
     }
+}
+
+export function calculateIncenter(vertices) {
+    if (vertices.length < 3) return null;
+
+    if (vertices.length === 3) {
+        const [a, b, c] = vertices;
+        const sideA = distance(b, c);
+        const sideB = distance(a, c);
+        const sideC = distance(a, b);
+        const perimeter = sideA + sideB + sideC;
+        if (perimeter < C.GEOMETRY_CALCULATION_EPSILON) return null;
+        const incenterX = (sideA * a.x + sideB * b.x + sideC * c.x) / perimeter;
+        const incenterY = (sideA * a.y + sideB * b.y + sideC * c.y) / perimeter;
+        const area = Math.abs((b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y)) / 2;
+        const inradius = (2 * area) / perimeter;
+        return {
+            center: { x: incenterX, y: incenterY },
+            radius: inradius
+        };
+    }
+
+    return findLargestInscribedCircle(vertices);
+}
+
+export function findLargestInscribedCircle(vertices) {
+    if (vertices.length < 3) return null;
+
+    let centroid = {
+        x: vertices.reduce((sum, v) => sum + v.x, 0) / vertices.length,
+        y: vertices.reduce((sum, v) => sum + v.y, 0) / vertices.length
+    };
+
+    if (!isVertexInPolygon(centroid, vertices)) {
+        centroid.x = (vertices[0].x + vertices[1].x + vertices[2].x) / 3;
+        centroid.y = (vertices[0].y + vertices[1].y + vertices[2].y) / 3;
+    }
+
+    let bestCenter = centroid;
+    let bestRadius = distanceToPolygonEdges(centroid, vertices);
+
+    for (let iter = 0; iter < C.INSCRIBED_CIRCLE_ITERATIONS; iter++) {
+        let improved = false;
+        const stepSize = bestRadius * C.INSCRIBED_CIRCLE_STEP_FACTOR;
+
+        const directions = [
+            { x: stepSize, y: 0 }, { x: -stepSize, y: 0 },
+            { x: 0, y: stepSize }, { x: 0, y: -stepSize },
+            { x: stepSize * Math.SQRT1_2, y: stepSize * Math.SQRT1_2 },
+            { x: -stepSize * Math.SQRT1_2, y: stepSize * Math.SQRT1_2 },
+            { x: stepSize * Math.SQRT1_2, y: -stepSize * Math.SQRT1_2 },
+            { x: -stepSize * Math.SQRT1_2, y: -stepSize * Math.SQRT1_2 }
+        ];
+
+        for (const dir of directions) {
+            const testPoint = {
+                x: bestCenter.x + dir.x,
+                y: bestCenter.y + dir.y
+            };
+
+            if (isVertexInPolygon(testPoint, vertices)) {
+                const testRadius = distanceToPolygonEdges(testPoint, vertices);
+                if (testRadius > bestRadius) {
+                    bestCenter = testPoint;
+                    bestRadius = testRadius;
+                    improved = true;
+                }
+            }
+        }
+
+        if (!improved) break;
+    }
+
+    return {
+        center: bestCenter,
+        radius: Math.max(bestRadius, C.GEOMETRY_CALCULATION_EPSILON)
+    };
+}
+
+export function distanceToPolygonEdges(point, vertices) {
+    let minDistance = Infinity;
+    for (let i = 0; i < vertices.length; i++) {
+        const v1 = vertices[i];
+        const v2 = vertices[(i + 1) % vertices.length];
+        const edgeDistance = distancePointToLineSegment(point, v1, v2);
+        minDistance = Math.min(minDistance, edgeDistance);
+    }
+    return minDistance;
+}
+
+export function distancePointToLineSegment(point, lineStart, lineEnd) {
+    return getClosestPointOnLineSegment(point, lineStart, lineEnd).distance;
+}
+
+
+export function updateFaceLocalCoordinateSystems(allFaces, findPointById) {
+    allFaces.forEach(face => {
+        if (!face.localCoordSystem) {
+            face.localCoordSystem = createFaceLocalCoordinateSystem(face, findPointById);
+        } else if (!face.localCoordSystem.isCustom) {
+            // Recalculate if not manually positioned
+            const newSystem = createFaceLocalCoordinateSystem(face, findPointById);
+            if (newSystem) {
+                face.localCoordSystem.origin = newSystem.origin;
+                face.localCoordSystem.scale = newSystem.scale;
+            }
+        }
+    });
+}
+
+export function convertColorToColormapFormat(colormapData) {
+    // Handle colormap selector format (uses 'points' instead of 'vertices')
+    if (colormapData && colormapData.points) {
+        const processedVertices = colormapData.points.map(p => ({
+            pos: p.pos,
+            color: Array.isArray(p.color) ? p.color : [p.color.r || 0, p.color.g || 0, p.color.b || 0],
+            alpha: p.alpha !== undefined ? p.alpha : 1.0
+        }));
+        
+        if (processedVertices.length === 1) {
+            const singlePoint = processedVertices[0];
+            const colorValue = (singlePoint.alpha !== undefined && singlePoint.alpha < 1)
+                ? `rgba(${singlePoint.color.join(',')},${singlePoint.alpha})`
+                : `rgb(${singlePoint.color.join(',')})`;
+            return { type: 'color', value: colorValue };
+        }
+        
+        return {
+            type: 'colormap',
+            vertices: processedVertices
+        };
+    }
+    
+    if (colormapData && colormapData.vertices && colormapData.vertices.length === 1) {
+        const singlePoint = colormapData.vertices[0];
+        const colorValue = (singlePoint.alpha !== undefined && singlePoint.alpha < 1)
+            ? `rgba(${singlePoint.color.join(',')},${singlePoint.alpha})`
+            : `rgb(${singlePoint.color.join(',')})`;
+        return { type: 'color', value: colorValue };
+    } else if (colormapData && colormapData.vertices) {
+        const processedVertices = colormapData.vertices.map(p => ({
+            ...p,
+            alpha: p.alpha !== undefined ? p.alpha : 1.0
+        }));
+        return {
+            type: 'colormap',
+            vertices: processedVertices
+        };
+    }
+    return colormapData;
+}
+
+export function sampleColormap(colormapItem, t) {
+    if (!colormapItem || colormapItem.type !== 'colormap' || !colormapItem.vertices) {
+        return '#ffffff';
+    }
+
+    const vertices = colormapItem.vertices;
+    if (vertices.length === 0) return '#ffffff';
+    if (vertices.length === 1) {
+        const p = vertices[0];
+        const alpha = p.alpha !== undefined ? p.alpha : 1.0;
+        return `rgba(${p.color.join(',')},${alpha})`;
+    }
+
+    // Clamp t to [0, 1]
+    t = Math.max(0, Math.min(1, t));
+
+    // Find the two vertices to interpolate between
+    let leftPoint = vertices[0];
+    let rightPoint = vertices[vertices.length - 1];
+
+    for (let i = 0; i < vertices.length - 1; i++) {
+        if (t >= vertices[i].pos && t <= vertices[i + 1].pos) {
+            leftPoint = vertices[i];
+            rightPoint = vertices[i + 1];
+            break;
+        }
+    }
+
+    // Interpolate between the two vertices
+    const range = rightPoint.pos - leftPoint.pos;
+    const localT = range > 0 ? (t - leftPoint.pos) / range : 0;
+
+    const r = Math.round(leftPoint.color[0] + (rightPoint.color[0] - leftPoint.color[0]) * localT);
+    const g = Math.round(leftPoint.color[1] + (rightPoint.color[1] - leftPoint.color[1]) * localT);
+    const b = Math.round(leftPoint.color[2] + (rightPoint.color[2] - leftPoint.color[2]) * localT);
+
+    const leftAlpha = leftPoint.alpha !== undefined ? leftPoint.alpha : 1.0;
+    const rightAlpha = rightPoint.alpha !== undefined ? rightPoint.alpha : 1.0;
+    const alpha = leftAlpha + (rightAlpha - leftAlpha) * localT;
+
+    return `rgba(${r},${g},${b},${alpha})`;
+}
+
+export function createFaceLocalCoordinateSystem(face, findPointById) {
+    const vertices = face.vertexIds
+        .map(id => findPointById(id))
+        .filter(p => p && p.type === 'regular');
+    
+    if (vertices.length < 3) return null;
+    
+    const incircle = calculateIncenter(vertices);
+    if (!incircle) return null;
+    
+    return {
+        origin: { ...incircle.center },
+        angle: 0,
+        scale: incircle.radius / 4,
+        isCustom: false,
+        showCoordSystem: false
+    };
+}
+
+export function globalToLocal(globalPoint, coordSystem) {
+    if (!coordSystem) return globalPoint;
+    const translated = {
+        x: globalPoint.x - coordSystem.origin.x,
+        y: globalPoint.y - coordSystem.origin.y
+    };
+    const cos = Math.cos(-coordSystem.angle);
+    const sin = Math.sin(-coordSystem.angle);
+    const rotated = {
+        x: translated.x * cos - translated.y * sin,
+        y: translated.x * sin + translated.y * cos
+    };
+    if (coordSystem.scale === 0) return { x: 0, y: 0 };
+    return {
+        x: rotated.x / coordSystem.scale,
+        y: rotated.y / coordSystem.scale
+    };
+}
+
+export function findNeighbors(vertexId, allEdges) {
+    const neighbors = new Set();
+    allEdges.forEach(edge => {
+        if (edge.id1 === vertexId) {
+            neighbors.add(edge.id2);
+        } else if (edge.id2 === vertexId) {
+            neighbors.add(edge.id1);
+        }
+    });
+    return Array.from(neighbors);
+}
+
+export function localToGlobal(localPoint, coordSystem) {
+    if (!coordSystem) return localPoint;
+
+    const scaled = {
+        x: localPoint.x * coordSystem.scale,
+        y: localPoint.y * coordSystem.scale
+    };
+
+    const cos = Math.cos(coordSystem.angle);
+    const sin = Math.sin(coordSystem.angle);
+    const rotated = {
+        x: scaled.x * cos - scaled.y * sin,
+        y: scaled.x * sin + scaled.y * cos
+    };
+    return {
+        x: rotated.x + coordSystem.origin.x,
+        y: rotated.y + coordSystem.origin.y
+    };
 }

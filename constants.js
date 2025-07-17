@@ -7,7 +7,9 @@ export const BASE_THEME = {
     axis: 'rgba(255, 255, 255, 1)',
     axisTickLabel: [255, 255, 255],
     defaultStroke: 'white',
-    point: '#ffffff',
+    vertex: '#ffffff',
+    edge: '#BFC5D0',
+    face: '#808080',
     frozenReference: 'rgba(240, 240, 130, 0.95)',
     feedbackDefault: [230, 230, 230],
     feedbackSnapped: 'rgba(240, 240, 130, 0.95)',
@@ -25,10 +27,14 @@ export const BASE_THEME = {
     helperLine: 'rgba(200, 200, 200, 0.6)'
 };
 
+
+export const INSCRIBED_CIRCLE_ITERATIONS = 20;
+export const INSCRIBED_CIRCLE_STEP_FACTOR = 0.1;
 // --- GEOMETRY & DRAWING ---
-export const POINT_RADIUS = 5;
-export const CENTER_POINT_VISUAL_RADIUS = POINT_RADIUS * 2;
-export const POINT_SELECT_RADIUS = 10;
+export const UI_FACE_ICON_FILL_COLOR = '#808080';
+export const VERTEX_RADIUS = 5;
+export const CENTER_POINT_VISUAL_RADIUS = VERTEX_RADIUS * 2;
+export const VERTEX_SELECT_RADIUS = 10;
 export const LINE_WIDTH = 2;
 export const GRID_LINEWIDTH = 1;
 export const DASH_PATTERN = [6, 6];
@@ -111,8 +117,8 @@ export const TOOLBAR_SECTION_GAP = 20;
 export const UI_ICON_BASE_SIZE = 32;
 export const UI_ICON_LINE_WIDTH = 2;
 export const UI_ICON_LINE_WIDTH_SMALL = 1.5;
-export const UI_ICON_DASH_PATTERN = [2, 2];
-export const UI_ICON_POINT_RADIUS = 1.5;
+export const UI_ICON_DASH_PATTERN = [2, 4];
+export const UI_ICON_VERTEX_RADIUS = 1.5;
 export const UI_ICON_LABEL_FONT_SIZE = 10;
 export const UI_MENU_ICON_LINE_WIDTH = 3;
 export const TRANSFORM_ICON_SIZE = 30;
@@ -134,7 +140,7 @@ export const UI_BUTTON_ICON_PADDING = 7;
 export const UI_GHOST_ICON_SIZE = 30;
 export const COLOR_PALETTE_Y_OFFSET = 5;
 export const COLOR_WHEEL_FADE_START_RADIUS_FACTOR = 0.75;
-export const DEFAULT_RECENT_COLORS = ['#ffffff', '#ff4444', '#44ff44', '#4444ff', '#ffff44', '#ff44ff', '#44ffff', '#ffa544']
+export const DEFAULT_RECENT_COLORS = ['#ffffff', '#BFC5D0', '#808080', '#ff4444', '#44ff44', '#4444ff', '#ffff44', '#ff44ff']
 
 // --- FEEDBACK LABELS & TEXT ---
 export const FEEDBACK_LABEL_FONT_SIZE = 12;
@@ -174,7 +180,7 @@ export const SELECTION_GLOW_ALPHA = 0.8;
 export const SELECTION_GLOW_RADIUS_OFFSET = 3;
 export const SELECTION_GLOW_LINE_WIDTH = 2;
 export const EDGE_SELECTION_GLOW_WIDTH_OFFSET = 4;
-export const MAX_POINTS_FOR_ANGLES = 1;
+export const MAX_VERTICES_FOR_ANGLES = 1;
 export const MAX_EDGES_FOR_LABELS = 3;
 
 // --- GRID CALCULATIONS ---
@@ -196,7 +202,7 @@ export const FLOATING_POINT_PRECISION_LIMIT = 1e-15;
 export const VERTICAL_LINE_COS_THRESHOLD = 0.1;
 export const SNAP_STICKINESS_RADIUS_SCREEN = 30;
 export const LINE_TO_SNAP_RADIUS_SCREEN = 10;
-export const POINT_ON_LINE_SNAP_RADIUS_SCREEN = 15;
+export const VERTEX_ON_LINE_SNAP_RADIUS_SCREEN = 15;
 export const DRAG_SNAP_GEOMETRIC_DISTANCE_FACTORS = [0.5, 1, 1.5, 2, 3, 4, 5];
 export const DRAW_SNAP_CANDIDATE_COUNT_PER_SIDE = 2;
 export const DRAW_SNAP_DISTANCE_FACTOR_STEP = 0.5;
@@ -271,4 +277,6 @@ export const KEY_CUT = 'x';
 export const KEY_UNDO = 'z';
 export const KEY_REDO = 'y';
 export const KEY_SELECT_ALL = 'a';
-
+export const COLOR_TARGET_VERTEX = 'vertex';
+export const COLOR_TARGET_EDGE = 'edge';
+export const COLOR_TARGET_FACE = 'face';
