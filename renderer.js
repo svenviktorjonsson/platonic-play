@@ -1538,7 +1538,7 @@ export function drawAngleArc(ctx, centerScreen, dataStartAngleRad, dataEndAngleR
 
 export function drawVertex(ctx, vertex, { selectedVertexIds, selectedCenterIds, activeCenterId, colors, verticesVisible = true, isHovered = false }, dataToScreen, updateHtmlLabel) {
     let isSelected;
-    if (vertex.type === C.POINT_TYPE_REGULAR) {
+    if (vertex.type === C.VERTEX_TYPE_REGULAR) {
         isSelected = selectedVertexIds.includes(vertex.id);
         
         if (!verticesVisible && !isSelected && !isHovered) {
@@ -1552,7 +1552,7 @@ export function drawVertex(ctx, vertex, { selectedVertexIds, selectedCenterIds, 
     const screenPos = dataToScreen(vertex);
 
     switch (vertex.type) {
-        case C.POINT_TYPE_REGULAR:
+        case C.VERTEX_TYPE_REGULAR:
             ctx.beginPath();
             ctx.arc(screenPos.x, screenPos.y, C.VERTEX_RADIUS, 0, C.RADIANS_IN_CIRCLE);
             ctx.fillStyle = vertexColor;
@@ -1582,7 +1582,7 @@ export function drawVertex(ctx, vertex, { selectedVertexIds, selectedCenterIds, 
 
         ctx.beginPath();
         let glowRadius;
-        if (vertex.type === C.POINT_TYPE_REGULAR) {
+        if (vertex.type === C.VERTEX_TYPE_REGULAR) {
             glowRadius = C.VERTEX_RADIUS + C.SELECTION_GLOW_RADIUS_OFFSET;
         } else {
             glowRadius = C.CENTER_POINT_VISUAL_RADIUS + C.SELECTION_GLOW_RADIUS_OFFSET;
@@ -2727,9 +2727,9 @@ export function drawVisibilityIcon(ctx, rect, colors) {
 
 function drawColorToolbarPreview(ctx, rect, { verticesVisible, edgesVisible, facesVisible, colorAssignments, allColors }, colors) {
     const options = {
-        vertexState: verticesVisible ? 'filled' : 'outline',
-        edgeState: edgesVisible ? 'solid' : 'dashed',
-        faceState: facesVisible ? 'filled' : 'dotted'
+        vertexState: verticesVisible ? 'filled' : 'hidden',
+        edgeState: edgesVisible ? 'solid' : 'hidden',
+        faceState: facesVisible ? 'filled' : 'hidden'
     };
     
     const vertexColorIndex = colorAssignments[C.COLOR_TARGET_VERTEX];
@@ -2774,11 +2774,6 @@ function drawTriangleIcon(ctx, rect, options, colors, isActive = false) {
     
     ctx.save();
     
-    if (isActive) {
-        ctx.shadowColor = colors.activeCenterGlow;
-        ctx.shadowBlur = 15;
-    }
-
     const center = { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
     
     ctx.translate(center.x, center.y);
@@ -2801,26 +2796,17 @@ function drawTriangleIcon(ctx, rect, options, colors, isActive = false) {
     facePath.lineTo(vertices[2].x, vertices[2].y);
     facePath.closePath();
     
-    if (faceState === 'filled' || faceState === 'dotted') {
-        if (faceState === 'dotted') {
-            const patternCanvas = document.createElement('canvas');
-            const patternCtx = patternCanvas.getContext('2d');
-            patternCanvas.width = 5;
-            patternCanvas.height = 5;
-            patternCtx.fillStyle = colors.uiIcon;
-            patternCtx.beginPath();
-            patternCtx.arc(1.5, 1.5, 1, 0, 2 * Math.PI);
-            patternCtx.fill();
-            ctx.fillStyle = ctx.createPattern(patternCanvas, 'repeat');
-        } else {
-            ctx.fillStyle = faceColor || colors.face;
-        }
+    if (faceState === 'filled') {
+        ctx.fillStyle = faceColor || colors.face;
+        ctx.fill(facePath);
+    } else if (faceState === 'disabled') {
+        ctx.fillStyle = '#808080';
         ctx.fill(facePath);
     }
     
-    if (edgeState === 'solid' || edgeState === 'dashed') {
+    if (edgeState === 'solid' || edgeState === 'disabled') {
         ctx.lineWidth = C.UI_ICON_LINE_WIDTH_SMALL;
-        ctx.setLineDash(edgeState === 'dashed' ? C.UI_ICON_DASH_PATTERN : []);
+        ctx.setLineDash([]);
         
         const edges = [
             [vertices[0], vertices[1]],
@@ -2830,8 +2816,7 @@ function drawTriangleIcon(ctx, rect, options, colors, isActive = false) {
         
         edges.forEach((edge, edgeIndex) => {
             const [start, end] = edge;
-            
-            if (options.edgeColormapItem && options.edgeColormapItem.type === 'colormap') {
+            if (options.edgeColormapItem && options.edgeColormapItem.type === 'colormap' && edgeState === 'solid') {
                 const gradient = ctx.createLinearGradient(start.x, start.y, end.x, end.y);
                 const edgeOffset = edges.length > 1 ? edgeIndex / (edges.length - 1) : 0.5;
                 const startT = Math.max(0, Math.min(1, edgeOffset));
@@ -2841,10 +2826,11 @@ function drawTriangleIcon(ctx, rect, options, colors, isActive = false) {
                 gradient.addColorStop(0, startColor);
                 gradient.addColorStop(1, endColor);
                 ctx.strokeStyle = gradient;
+            } else if (edgeState === 'disabled') {
+                ctx.strokeStyle = '#808080';
             } else {
                 ctx.strokeStyle = edgeColor || colors.edge;
             }
-            
             ctx.beginPath();
             ctx.moveTo(start.x, start.y);
             ctx.lineTo(end.x, end.y);
@@ -2852,38 +2838,42 @@ function drawTriangleIcon(ctx, rect, options, colors, isActive = false) {
         });
     }
     
-    if (vertexState === 'filled' || vertexState === 'outline') {
+    if (vertexState === 'filled' || vertexState === 'disabled') {
         ctx.lineWidth = C.UI_ICON_LINE_WIDTH_SMALL;
-        
         vertices.forEach((vertex, index) => {
             let currentVertexColor = optionsVertexColor || colors.vertex;
-            
-            if (options.vertexColormapItem && options.vertexColormapItem.type === 'colormap') {
+            if (options.vertexColormapItem && options.vertexColormapItem.type === 'colormap' && vertexState === 'filled') {
                 const t = vertices.length > 1 ? index / (vertices.length - 1) : 0.5;
                 currentVertexColor = U.sampleColormap(options.vertexColormapItem, t);
             }
-            
+            if (vertexState === 'disabled') {
+                currentVertexColor = '#808080';
+            }
             const vertexPath = new Path2D();
             vertexPath.moveTo(vertex.x + C.UI_ICON_VERTEX_RADIUS * 2, vertex.y);
             vertexPath.arc(vertex.x, vertex.y, C.UI_ICON_VERTEX_RADIUS * 2, 0, 2 * Math.PI);
-            
-            if (vertexState === 'filled') {
-                ctx.fillStyle = currentVertexColor;
-                ctx.setLineDash([]);
-                ctx.fill(vertexPath);
-            } else {
-                ctx.strokeStyle = currentVertexColor;
-                ctx.setLineDash(C.UI_ICON_DASH_PATTERN);
-                ctx.stroke(vertexPath);
-            }
+            ctx.fillStyle = currentVertexColor;
+            ctx.setLineDash([]);
+            ctx.fill(vertexPath);
         });
+    }
+
+    const hasDisabledElements = vertexState === 'disabled' || edgeState === 'disabled' || faceState === 'disabled';
+    if (hasDisabledElements) {
+        ctx.strokeStyle = '#ff0000';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([]);
+        ctx.beginPath();
+        ctx.moveTo(2, 2);
+        ctx.lineTo(30, 30);
+        ctx.stroke();
     }
     
     ctx.restore();
 }
 
 export function drawFace(ctx, screenVertices, color, colors) {
-    if (screenVertices.length < 3) return;
+    if (!screenVertices || screenVertices.length < 3) return;
 
     if (U.isSelfIntersecting(screenVertices)) {
         return;
@@ -2905,7 +2895,7 @@ export function drawFace(ctx, screenVertices, color, colors) {
 }
 
 export function drawFaces(ctx, { allFaces, facesVisible, isDragConfirmed, dragPreviewVertices, colors }, dataToScreen, findVertexById) {
-    if (!facesVisible || !allFaces) return;
+    if (!facesVisible || !allFaces || !colors || !ctx) return;
 
     const getLiveVertex = (vertexId) => {
         if (isDragConfirmed && dragPreviewVertices) {
@@ -2917,17 +2907,33 @@ export function drawFaces(ctx, { allFaces, facesVisible, isDragConfirmed, dragPr
         return findVertexById(vertexId);
     };
 
-    allFaces.forEach(face => {
+    allFaces.forEach((face, index) => {
+        if (!face) {
+            console.warn(`Face at index ${index} is null/undefined`);
+            return;
+        }
+        if (!face.vertexIds || !Array.isArray(face.vertexIds)) {
+            console.warn(`Face at index ${index} has invalid vertexIds:`, face);
+            return;
+        }
+        if (face.vertexIds.length < 3) {
+            console.warn(`Face at index ${index} has less than 3 vertices:`, face);
+            return;
+        }
+        
         const vertices = face.vertexIds.map(id => getLiveVertex(id)).filter(p => p && p.type === 'regular');
         if (vertices.length < 3) return;
 
         const screenVertices = vertices.map(v => dataToScreen(v));
-        drawFace(ctx, screenVertices, face.color, colors);
+        
+        if (screenVertices.every(v => v && typeof v.x === 'number' && typeof v.y === 'number')) {
+            drawFace(ctx, screenVertices, face.color, colors);
+        }
     });
 }
 
 function drawVisibilityPanelIcon(ctx, icon, state, htmlOverlay, updateHtmlLabel, iconColors) {
-    const { verticesVisible, edgesVisible, facesVisible, angleDisplayMode, distanceDisplayMode, colors } = state;
+    const {angleDisplayMode, distanceDisplayMode, colors } = state;
     
     const rect = { x: icon.x, y: icon.y, width: icon.width, height: icon.height };
     switch (icon.group) {
@@ -3024,7 +3030,7 @@ function drawMainToolbar(ctx, htmlOverlay, state, updateHtmlLabel) {
 }
 
 function drawColorPalette(ctx, htmlOverlay, state, updateHtmlLabel) {
-    const { canvasUI, colors, allColors, namedColors, colorAssignments, activeColorTarget, verticesVisible, edgesVisible, facesVisible } = state;
+    const { canvasUI, colors, allColors, namedColors, colorAssignments, activeColorTargets, verticesVisible, edgesVisible, facesVisible } = state;
 
     const checkerboardColor1 = '#808080';
     const checkerboardColor2 = '#c0c0c0';
@@ -3044,37 +3050,6 @@ function drawColorPalette(ctx, htmlOverlay, state, updateHtmlLabel) {
         }
     }
     
-    const applyBtn = canvasUI.applyColorsButton;
-    if (applyBtn) {
-        ctx.strokeStyle = colors.uiDefault;
-        ctx.lineWidth = C.UI_BUTTON_BORDER_WIDTH;
-        ctx.strokeRect(applyBtn.x, applyBtn.y, applyBtn.width, applyBtn.height);
-        const centerX = applyBtn.x + applyBtn.width / 2;
-        const centerY = applyBtn.y + applyBtn.height / 2;
-        const bucketSize = applyBtn.width * 0.6;
-        ctx.fillStyle = colors.uiDefault;
-        ctx.strokeStyle = colors.uiDefault;
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.moveTo(centerX - bucketSize/3, centerY + bucketSize/4);
-        ctx.lineTo(centerX + bucketSize/3, centerY + bucketSize/4);
-        ctx.lineTo(centerX + bucketSize/4, centerY - bucketSize/4);
-        ctx.lineTo(centerX - bucketSize/4, centerY - bucketSize/4);
-        ctx.closePath();
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.moveTo(centerX, centerY - bucketSize/4);
-        ctx.lineTo(centerX + bucketSize/6, centerY - bucketSize/2);
-        ctx.moveTo(centerX + bucketSize/6, centerY - bucketSize/2);
-        ctx.lineTo(centerX + bucketSize/3, centerY - bucketSize/3);
-        ctx.stroke();
-        for (let i = 0; i < 3; i++) {
-            ctx.beginPath();
-            ctx.arc(centerX - bucketSize/6 + i * bucketSize/8, centerY - bucketSize/8, 1, 0, 2 * Math.PI);
-            ctx.fill();
-        }
-    }
-
     const randomBtn = canvasUI.randomColorButton;
     if (randomBtn) {
         ctx.fillStyle = '#000000';
@@ -3158,21 +3133,21 @@ function drawColorPalette(ctx, htmlOverlay, state, updateHtmlLabel) {
 
             const options = {};
             if (target === C.COLOR_TARGET_VERTEX) {
-                options.vertexState = verticesVisible ? 'filled' : 'outline';
+                options.vertexState = verticesVisible ? 'filled' : 'disabled';
                 if (colorItem && colorItem.type === 'color') {
                     options.vertexColor = colorItem.value;
                 } else if (colorItem && colorItem.type === 'colormap') {
                     options.vertexColormapItem = colorItem;
                 }
             } else if (target === C.COLOR_TARGET_EDGE) {
-                options.edgeState = edgesVisible ? 'solid' : 'dashed';
+                options.edgeState = edgesVisible ? 'solid' : 'disabled';
                 if (colorItem && colorItem.type === 'color') {
                     options.edgeColor = colorItem.value;
                 } else if (colorItem && colorItem.type === 'colormap') {
                     options.edgeColormapItem = colorItem;
                 }
             } else if (target === C.COLOR_TARGET_FACE) {
-                options.faceState = facesVisible ? 'filled' : 'dotted';
+                options.faceState = facesVisible ? 'filled' : 'disabled';
                 if (colorItem && colorItem.type === 'color') {
                     options.faceColor = colorItem.value;
                 }
@@ -3184,12 +3159,42 @@ function drawColorPalette(ctx, htmlOverlay, state, updateHtmlLabel) {
         drawOrder.forEach(targetToDraw => {
             const icon = canvasUI.colorTargetIcons.find(i => i.target === targetToDraw);
             if (icon) {
-                drawTriangleIcon(ctx, icon, getIconOptions(targetToDraw), colors, activeColorTarget === targetToDraw);
+                const isActive = activeColorTargets.includes(targetToDraw);
+                drawTriangleIcon(ctx, icon, getIconOptions(targetToDraw), colors, isActive);
             }
         });
     }
-}
 
+    // Draw combined selection boxes
+    const drawnBoxesForSwatches = new Set();
+    activeColorTargets.forEach(target => {
+        const colorIndex = colorAssignments[target];
+        if (colorIndex === -1 || drawnBoxesForSwatches.has(colorIndex)) return;
+
+        const swatch = canvasUI.colorSwatches.find(s => s.index === colorIndex);
+        if (swatch) {
+            const targetsForThisSwatch = Object.keys(colorAssignments).filter(t => 
+                colorAssignments[t] === swatch.index && activeColorTargets.includes(t)
+            );
+            const iconsForThisSwatch = canvasUI.colorTargetIcons.filter(icon => targetsForThisSwatch.includes(icon.target));
+
+            if (iconsForThisSwatch.length > 0) {
+                const minY = Math.min(...iconsForThisSwatch.map(i => i.y));
+                
+                ctx.strokeStyle = colors.selectionGlow;
+                ctx.lineWidth = C.UI_BUTTON_BORDER_WIDTH;
+                const padding = 2;
+                const boxX = swatch.x - padding;
+                const boxY = minY - padding;
+                const boxWidth = swatch.width + (padding * 2);
+                const boxHeight = (swatch.y + swatch.height) - boxY + padding;
+                
+                ctx.strokeRect(boxX, boxY, boxWidth, boxHeight);
+                drawnBoxesForSwatches.add(colorIndex);
+            }
+        }
+    });
+}
 function drawTransformPanel(ctx, state) {
     const { canvasUI, colors } = state;
     canvasUI.transformIcons.forEach(icon => {

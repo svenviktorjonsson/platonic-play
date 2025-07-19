@@ -359,8 +359,207 @@ export function findCoordinateSystemElement(screenPos, face, dataToScreen) {
            checkArm(0, -1, 'y_axis');
 }
 
-
 export function detectClosedPolygons(allEdges, findPointById) {
+    const adjacencyMap = new Map();
+    const vertices = new Map();
+
+    // Build adjacency map
+    allEdges.forEach(edge => {
+        const p1 = findPointById(edge.id1);
+        const p2 = findPointById(edge.id2);
+        if (!p1 || !p2 || p1.type !== 'regular' || p2.type !== 'regular') return;
+
+        if (!vertices.has(p1.id)) vertices.set(p1.id, p1);
+        if (!vertices.has(p2.id)) vertices.set(p2.id, p2);
+
+        if (!adjacencyMap.has(edge.id1)) adjacencyMap.set(edge.id1, []);
+        if (!adjacencyMap.has(edge.id2)) adjacencyMap.set(edge.id2, []);
+
+        adjacencyMap.get(edge.id1).push(edge.id2);
+        adjacencyMap.get(edge.id2).push(edge.id1);
+    });
+
+    // Sort neighbors by angle
+    for (const [vertexId, neighbors] of adjacencyMap.entries()) {
+        const centerPoint = vertices.get(vertexId);
+        if (!centerPoint) continue;
+        
+        neighbors.sort((a, b) => {
+            const pA = vertices.get(a);
+            const pB = vertices.get(b);
+            if (!pA || !pB) return 0;
+            
+            const angleA = Math.atan2(pA.y - centerPoint.y, pA.x - centerPoint.x);
+            const angleB = Math.atan2(pB.y - centerPoint.y, pB.x - centerPoint.x);
+            return angleA - angleB;
+        });
+    }
+
+    // Simple face finding: only keep minimal faces
+    const allCycles = findAllSimpleCycles(adjacencyMap, vertices);
+    const minimalFaces = filterToMinimalFaces(allCycles, vertices);
+    
+    return minimalFaces.map(face => ({
+        vertexIds: face,
+        id: `face_${[...face].sort().join('_')}`
+    }));
+}
+
+function findAllSimpleCycles(adjacencyMap, vertices) {
+    const visitedEdges = new Set();
+    const cycles = [];
+
+    for (const [start, neighbors] of adjacencyMap.entries()) {
+        for (const next of neighbors) {
+            const edgeKey = `${start}-${next}`;
+            if (visitedEdges.has(edgeKey)) continue;
+
+            const cycle = findCycleFromEdge(start, next, adjacencyMap, visitedEdges);
+            if (cycle && cycle.length >= 3 && cycle.length <= 6) {
+                cycles.push(cycle);
+            }
+        }
+    }
+
+    return cycles;
+}
+
+export function getClickedUIElement(screenPos, canvasUI, { isToolbarExpanded, isColorPaletteExpanded, isTransformPanelExpanded, isDisplayPanelExpanded, isVisibilityPanelExpanded }) {
+    const isInside = (pos, rect) => {
+        if (!rect) return false;
+        return pos.x >= rect.x && pos.x <= rect.x + rect.width &&
+               pos.y >= rect.y && pos.y <= rect.y + rect.height;
+    };
+
+    if (isColorPaletteExpanded) {
+        for (const icon of (canvasUI.colorTargetIcons || [])) {
+            if (isInside(screenPos, icon)) return { ...icon, type: 'colorTargetIcon' };
+        }
+        for (const swatch of (canvasUI.colorSwatches || [])) {
+            if (isInside(screenPos, swatch)) return { ...swatch, type: 'colorSwatch' };
+        }
+        if (isInside(screenPos, canvasUI.applyColorsButton)) return { ...canvasUI.applyColorsButton, type: 'button' };
+        if (isInside(screenPos, canvasUI.randomColorButton)) return { ...canvasUI.randomColorButton, type: 'button' };
+        if (isInside(screenPos, canvasUI.removeColorButton)) return { ...canvasUI.removeColorButton, type: 'button' };
+        if (isInside(screenPos, canvasUI.addColorButton)) return { ...canvasUI.addColorButton, type: 'button' };
+    }
+
+    if (isTransformPanelExpanded) {
+        for (const icon of (canvasUI.transformIcons || [])) {
+            if (isInside(screenPos, icon)) return { ...icon, type: 'transformIcon' };
+        }
+    }
+    
+    if (isDisplayPanelExpanded) {
+        for (const icon of (canvasUI.displayIcons || [])) {
+            if (isInside(screenPos, icon)) return { ...icon, type: 'displayIcon' };
+        }
+    }
+    
+    if (isVisibilityPanelExpanded) {
+        for (const icon of (canvasUI.visibilityIcons || [])) {
+            if (isInside(screenPos, icon)) return { ...icon, type: 'visibilityIcon' };
+        }
+    }
+
+    if (isToolbarExpanded) {
+        if (isInside(screenPos, canvasUI.colorToolButton)) return { ...canvasUI.colorToolButton, type: 'toolButton' };
+        if (isInside(screenPos, canvasUI.transformToolButton)) return { ...canvasUI.transformToolButton, type: 'toolButton' };
+        if (isInside(screenPos, canvasUI.displayToolButton)) return { ...canvasUI.displayToolButton, type: 'toolButton' };
+        if (isInside(screenPos, canvasUI.visibilityToolButton)) return { ...canvasUI.visibilityToolButton, type: 'toolButton' };
+        if (isInside(screenPos, canvasUI.themeToggleButton)) return { ...canvasUI.themeToggleButton, type: 'toolButton' };
+    }
+
+    if (isInside(screenPos, canvasUI.toolbarButton)) return { ...canvasUI.toolbarButton, type: 'menuButton' };
+
+    return null;
+}
+
+function filterToMinimalFaces(cycles, vertices) {
+    if (cycles.length <= 1) return cycles;
+
+    // Calculate areas and sort by area (smallest first)
+    const cyclesWithAreas = cycles.map(cycle => {
+        const cycleVertices = cycle.map(id => vertices.get(id));
+        const area = Math.abs(shoelaceArea(cycleVertices));
+        return { cycle, area };
+    }).filter(c => c.area > 0.001) // Remove degenerate faces
+    .sort((a, b) => a.area - b.area);
+
+    const result = [];
+    
+    // Only keep faces that are not completely contained by other faces
+    for (const candidate of cyclesWithAreas) {
+        const candidateVertices = candidate.cycle.map(id => vertices.get(id));
+        let isContained = false;
+        
+        for (const existing of result) {
+            const existingVertices = existing.cycle.map(id => vertices.get(id));
+            
+            // Check if candidate is completely inside existing face
+            if (candidate.area < existing.area && 
+                candidateVertices.every(v => isVertexInPolygon(v, existingVertices))) {
+                isContained = true;
+                break;
+            }
+        }
+        
+        if (!isContained) {
+            // Also check if this face would contain any existing faces
+            // If so, don't add it (keep the smaller ones)
+            const wouldContainExisting = result.some(existing => {
+                const existingVertices = existing.cycle.map(id => vertices.get(id));
+                return existing.area < candidate.area && 
+                       existingVertices.every(v => isVertexInPolygon(v, candidateVertices));
+            });
+            
+            if (!wouldContainExisting) {
+                result.push(candidate);
+            }
+        }
+    }
+
+    return result.map(r => r.cycle);
+}
+
+function findCycleFromEdge(start, second, adjacencyMap, visitedEdges) {
+    const path = [start];
+    let current = start;
+    let next = second;
+    const maxSteps = 10; // Prevent infinite loops
+    let steps = 0;
+
+    while (steps < maxSteps) {
+        steps++;
+        visitedEdges.add(`${current}-${next}`);
+        path.push(next);
+
+        if (next === start) {
+            path.pop(); // Remove duplicate start
+            return path.length >= 3 ? path : null;
+        }
+
+        const neighbors = adjacencyMap.get(next);
+        if (!neighbors) return null;
+
+        const prevIndex = neighbors.indexOf(current);
+        if (prevIndex === -1) return null;
+
+        // Take next neighbor (counter-clockwise)
+        const nextIndex = (prevIndex + 1) % neighbors.length;
+        current = next;
+        next = neighbors[nextIndex];
+    }
+
+    return null;
+}
+
+
+export function debugFaceDetection(allEdges, findPointById) {
+    console.log('=== FACE DETECTION DEBUG ===');
+    console.log('Edges:', allEdges.map(e => `${e.id1}-${e.id2}`));
+    
+    // Debug the adjacency map
     const adjacencyMap = new Map();
     const vertices = new Map();
 
@@ -379,74 +578,41 @@ export function detectClosedPolygons(allEdges, findPointById) {
         adjacencyMap.get(edge.id2).push(edge.id1);
     });
 
-    // For each vertex, sort its neighbors by angle (counter-clockwise)
+    console.log('Adjacency map:');
+    for (const [vertexId, neighbors] of adjacencyMap.entries()) {
+        console.log(`  ${vertexId}: [${neighbors.join(', ')}]`);
+    }
+
+    // Sort neighbors and show the result
     for (const [vertexId, neighbors] of adjacencyMap.entries()) {
         const centerPoint = vertices.get(vertexId);
+        if (!centerPoint) continue;
+        
         neighbors.sort((a, b) => {
             const pA = vertices.get(a);
             const pB = vertices.get(b);
+            if (!pA || !pB) return 0;
+            
             const angleA = Math.atan2(pA.y - centerPoint.y, pA.x - centerPoint.x);
             const angleB = Math.atan2(pB.y - centerPoint.y, pB.x - centerPoint.x);
             return angleA - angleB;
         });
     }
 
-    const visitedDarts = new Set(); // A "dart" is a directed edge like "p1->p2"
-    const faces = [];
-
-    function shoelaceArea(vertexPoints) {
-        let area = 0;
-        const n = vertexPoints.length;
-        for (let i = 0; i < n; i++) {
-            const j = (i + 1) % n;
-            area += vertexPoints[i].x * vertexPoints[j].y - vertexPoints[j].x * vertexPoints[i].y;
-        }
-        return area / 2;
+    console.log('Sorted adjacency map:');
+    for (const [vertexId, neighbors] of adjacencyMap.entries()) {
+        console.log(`  ${vertexId}: [${neighbors.join(', ')}]`);
     }
 
-    for (const startNodeId of adjacencyMap.keys()) {
-        const neighbors = adjacencyMap.get(startNodeId);
-        for (const endNodeId of neighbors) {
-            const dart = `${startNodeId}->${endNodeId}`;
-            if (visitedDarts.has(dart)) continue;
-
-            const currentPath = [];
-            let prev = startNodeId;
-            let curr = endNodeId;
-
-            while (true) {
-                visitedDarts.add(`${prev}->${curr}`);
-                currentPath.push(prev);
-
-                const currNeighbors = adjacencyMap.get(curr);
-                if (!currNeighbors) break;
-                
-                const prevIndex = currNeighbors.indexOf(prev);
-                if (prevIndex === -1) break;
-
-                // To trace a face boundary, take the left turn (CCW successor) for standard inner face traversal
-                const nextIndex = (prevIndex + 1) % currNeighbors.length;
-                const nextNode = currNeighbors[nextIndex];
-
-                prev = curr;
-                curr = nextNode;
-                
-                if (prev === startNodeId && curr === endNodeId) {
-                    const vertexPoints = currentPath.map(id => vertices.get(id));
-                    // Positive area for CCW polygons, identifying inner faces
-                    if (shoelaceArea(vertexPoints) > 0) {
-                        faces.push({ vertexIds: currentPath });
-                    }
-                    break;
-                }
-
-                // Stop if we hit an edge that's already part of another face's boundary
-                if (visitedDarts.has(`${prev}->${curr}`)) {
-                    break;
-                }
-            }
-        }
-    }
+    const faces = detectClosedPolygons(allEdges, findPointById);
+    console.log('Detected faces:');
+    faces.forEach((face, i) => {
+        console.log(`Face ${i}:`, face.vertexIds);
+        const vertices = face.vertexIds.map(id => findPointById(id));
+        const area = Math.abs(shoelaceArea(vertices));
+        console.log(`  Area: ${area.toFixed(4)}`);
+    });
+    
     return faces;
 }
 
@@ -473,6 +639,103 @@ export function getClosestPointOnLineSegment(p, a, b) {
     const closestY = a.y + clampedT * aby;
     const dist = distance(p, { x: closestX, y: closestY });
     return { x: closestX, y: closestY, distance: dist, onSegmentStrict: onSegmentStrict, t: clampedT };
+}
+
+export function validateAndFilterFaces(faces, findPointById) {
+    if (faces.length <= 1) return faces;
+    
+    const validFaces = [];
+    const facesByArea = faces.map(face => {
+        const vertices = face.vertexIds.map(id => findPointById(id)).filter(v => v && v.type === 'regular');
+        const area = vertices.length >= 3 ? Math.abs(shoelaceArea(vertices)) : 0;
+        return { face, area, vertices };
+    }).filter(f => f.area > 0).sort((a, b) => a.area - b.area);
+    
+    for (const candidateData of facesByArea) {
+        const candidate = candidateData.face;
+        let isComposite = false;
+        
+        // Check if this face can be decomposed into smaller existing faces
+        const candidateEdges = new Set();
+        for (let i = 0; i < candidate.vertexIds.length; i++) {
+            const v1 = candidate.vertexIds[i];
+            const v2 = candidate.vertexIds[(i + 1) % candidate.vertexIds.length];
+            candidateEdges.add(getEdgeId({ id1: v1, id2: v2 }));
+        }
+        
+        // Look for combinations of existing faces that could form this candidate
+        for (let i = 0; i < validFaces.length && !isComposite; i++) {
+            for (let j = i + 1; j < validFaces.length && !isComposite; j++) {
+                const face1 = validFaces[i].face;
+                const face2 = validFaces[j].face;
+                
+                if (canCombineToForm(face1, face2, candidate)) {
+                    isComposite = true;
+                }
+            }
+        }
+        
+        if (!isComposite) {
+            validFaces.push(candidateData);
+        }
+    }
+    
+    return validFaces.map(f => f.face);
+}
+
+function canCombineToForm(face1, face2, targetFace) {
+    // Get edges for each face
+    const face1Edges = new Set();
+    const face2Edges = new Set();
+    const targetEdges = new Set();
+    
+    for (let i = 0; i < face1.vertexIds.length; i++) {
+        const v1 = face1.vertexIds[i];
+        const v2 = face1.vertexIds[(i + 1) % face1.vertexIds.length];
+        face1Edges.add(getEdgeId({ id1: v1, id2: v2 }));
+    }
+    
+    for (let i = 0; i < face2.vertexIds.length; i++) {
+        const v1 = face2.vertexIds[i];
+        const v2 = face2.vertexIds[(i + 1) % face2.vertexIds.length];
+        face2Edges.add(getEdgeId({ id1: v1, id2: v2 }));
+    }
+    
+    for (let i = 0; i < targetFace.vertexIds.length; i++) {
+        const v1 = targetFace.vertexIds[i];
+        const v2 = targetFace.vertexIds[(i + 1) % targetFace.vertexIds.length];
+        targetEdges.add(getEdgeId({ id1: v1, id2: v2 }));
+    }
+    
+    // Find shared edges (internal edges that should be removed)
+    const sharedEdges = new Set();
+    for (const edge of face1Edges) {
+        if (face2Edges.has(edge)) {
+            sharedEdges.add(edge);
+        }
+    }
+    
+    // Union of boundary edges (removing shared internal edges)
+    const unionBoundary = new Set();
+    for (const edge of face1Edges) {
+        if (!sharedEdges.has(edge)) {
+            unionBoundary.add(edge);
+        }
+    }
+    for (const edge of face2Edges) {
+        if (!sharedEdges.has(edge)) {
+            unionBoundary.add(edge);
+        }
+    }
+    
+    // Check if union boundary matches target
+    if (unionBoundary.size !== targetEdges.size) return false;
+    
+    for (const edge of targetEdges) {
+        if (!unionBoundary.has(edge)) return false;
+    }
+    
+    return true;
 }
 
 export function getMousePosOnCanvas(event, canvasElement) {
@@ -891,6 +1154,52 @@ export function updateFaceLocalCoordinateSystems(allFaces, findPointById) {
             }
         }
     });
+}
+
+export function detectFacesFromNewEdge(newEdge, allEdges, findPointById, deletedFaceIds = new Set()) {
+    // Get all possible faces with the current edge set
+    const allPossibleFaces = detectClosedPolygons(allEdges, findPointById);
+    
+    // Create a set of edges before adding the new edge
+    const edgesWithoutNew = allEdges.filter(e => 
+        !(e.id1 === newEdge.id1 && e.id2 === newEdge.id2) && 
+        !(e.id1 === newEdge.id2 && e.id2 === newEdge.id1)
+    );
+    
+    // Get faces that existed before
+    const facesBefore = detectClosedPolygons(edgesWithoutNew, findPointById);
+    const faceIdsBefore = new Set(facesBefore.map(f => `face_${[...f.vertexIds].sort().join('_')}`));
+    
+    // Return only the new faces that weren't there before and aren't blacklisted
+    const newFaces = allPossibleFaces.filter(face => {
+        if (!face.vertexIds || face.vertexIds.length < 3) return false;
+        
+        const faceId = `face_${[...face.vertexIds].sort().join('_')}`;
+        
+        // Skip if blacklisted or existed before
+        if (deletedFaceIds.has(faceId) || faceIdsBefore.has(faceId)) return false;
+        
+        return true;
+    });
+    
+    return newFaces.map(face => ({
+        ...face,
+        id: `face_${[...face.vertexIds].sort().join('_')}`
+    }));
+}
+
+export function findClosestUIElement(pos, elements) {
+    let closest = null;
+    let minDist = Infinity;
+    elements.forEach(el => {
+        if (!el) return;
+        const dist = Math.abs(pos.x - (el.x + el.width / 2));
+        if (dist < minDist && dist < (el.width / 2 + C.UI_BUTTON_PADDING)) {
+            minDist = dist;
+            closest = el;
+        }
+    });
+    return closest;
 }
 
 export function convertColorToColormapFormat(colormapData) {
