@@ -54,7 +54,7 @@ Now please just read the project and the rules for writing code and just wait fo
 Here are the rules:
 1. DONT write comments, placeholders or docstrings if not explicitely told.
 2. Write functions with the correct initial indentation so that if the function is indented so is your code that you write.
-3. Use regular spaces: " " and do NOT use " " for space. MAKE SURE TO FOLLOW THIS!
+3. DO NOT USE NON-TERMINATED SPACES: " ". MAKE SURE TO FOLLOW THIS!
 4. For changes that require multiple replacements please tell me what to replace with what instead of rewriting large portions of text. You can use vscode valid regexp for instance.
 5. For small functions less than 100 lines of code pleae rewrite the full function. For larger functions than that please only write complete control statements if/while/case.
 6. Never omit/change working logic if not explicitely statet that it should be removed/change

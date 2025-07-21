@@ -359,70 +359,7 @@ export function findCoordinateSystemElement(screenPos, face, dataToScreen) {
            checkArm(0, -1, 'y_axis');
 }
 
-export function detectClosedPolygons(allEdges, findPointById) {
-    const adjacencyMap = new Map();
-    const vertices = new Map();
 
-    // Build adjacency map
-    allEdges.forEach(edge => {
-        const p1 = findPointById(edge.id1);
-        const p2 = findPointById(edge.id2);
-        if (!p1 || !p2 || p1.type !== 'regular' || p2.type !== 'regular') return;
-
-        if (!vertices.has(p1.id)) vertices.set(p1.id, p1);
-        if (!vertices.has(p2.id)) vertices.set(p2.id, p2);
-
-        if (!adjacencyMap.has(edge.id1)) adjacencyMap.set(edge.id1, []);
-        if (!adjacencyMap.has(edge.id2)) adjacencyMap.set(edge.id2, []);
-
-        adjacencyMap.get(edge.id1).push(edge.id2);
-        adjacencyMap.get(edge.id2).push(edge.id1);
-    });
-
-    // Sort neighbors by angle
-    for (const [vertexId, neighbors] of adjacencyMap.entries()) {
-        const centerPoint = vertices.get(vertexId);
-        if (!centerPoint) continue;
-        
-        neighbors.sort((a, b) => {
-            const pA = vertices.get(a);
-            const pB = vertices.get(b);
-            if (!pA || !pB) return 0;
-            
-            const angleA = Math.atan2(pA.y - centerPoint.y, pA.x - centerPoint.x);
-            const angleB = Math.atan2(pB.y - centerPoint.y, pB.x - centerPoint.x);
-            return angleA - angleB;
-        });
-    }
-
-    // Simple face finding: only keep minimal faces
-    const allCycles = findAllSimpleCycles(adjacencyMap, vertices);
-    const minimalFaces = filterToMinimalFaces(allCycles, vertices);
-    
-    return minimalFaces.map(face => ({
-        vertexIds: face,
-        id: `face_${[...face].sort().join('_')}`
-    }));
-}
-
-function findAllSimpleCycles(adjacencyMap, vertices) {
-    const visitedEdges = new Set();
-    const cycles = [];
-
-    for (const [start, neighbors] of adjacencyMap.entries()) {
-        for (const next of neighbors) {
-            const edgeKey = `${start}-${next}`;
-            if (visitedEdges.has(edgeKey)) continue;
-
-            const cycle = findCycleFromEdge(start, next, adjacencyMap, visitedEdges);
-            if (cycle && cycle.length >= 3 && cycle.length <= 6) {
-                cycles.push(cycle);
-            }
-        }
-    }
-
-    return cycles;
-}
 
 export function getClickedUIElement(screenPos, canvasUI, { isToolbarExpanded, isColorPaletteExpanded, isTransformPanelExpanded, isDisplayPanelExpanded, isVisibilityPanelExpanded }) {
     const isInside = (pos, rect) => {
@@ -475,146 +412,6 @@ export function getClickedUIElement(screenPos, canvasUI, { isToolbarExpanded, is
     return null;
 }
 
-function filterToMinimalFaces(cycles, vertices) {
-    if (cycles.length <= 1) return cycles;
-
-    // Calculate areas and sort by area (smallest first)
-    const cyclesWithAreas = cycles.map(cycle => {
-        const cycleVertices = cycle.map(id => vertices.get(id));
-        const area = Math.abs(shoelaceArea(cycleVertices));
-        return { cycle, area };
-    }).filter(c => c.area > 0.001) // Remove degenerate faces
-    .sort((a, b) => a.area - b.area);
-
-    const result = [];
-    
-    // Only keep faces that are not completely contained by other faces
-    for (const candidate of cyclesWithAreas) {
-        const candidateVertices = candidate.cycle.map(id => vertices.get(id));
-        let isContained = false;
-        
-        for (const existing of result) {
-            const existingVertices = existing.cycle.map(id => vertices.get(id));
-            
-            // Check if candidate is completely inside existing face
-            if (candidate.area < existing.area && 
-                candidateVertices.every(v => isVertexInPolygon(v, existingVertices))) {
-                isContained = true;
-                break;
-            }
-        }
-        
-        if (!isContained) {
-            // Also check if this face would contain any existing faces
-            // If so, don't add it (keep the smaller ones)
-            const wouldContainExisting = result.some(existing => {
-                const existingVertices = existing.cycle.map(id => vertices.get(id));
-                return existing.area < candidate.area && 
-                       existingVertices.every(v => isVertexInPolygon(v, candidateVertices));
-            });
-            
-            if (!wouldContainExisting) {
-                result.push(candidate);
-            }
-        }
-    }
-
-    return result.map(r => r.cycle);
-}
-
-function findCycleFromEdge(start, second, adjacencyMap, visitedEdges) {
-    const path = [start];
-    let current = start;
-    let next = second;
-    const maxSteps = 10; // Prevent infinite loops
-    let steps = 0;
-
-    while (steps < maxSteps) {
-        steps++;
-        visitedEdges.add(`${current}-${next}`);
-        path.push(next);
-
-        if (next === start) {
-            path.pop(); // Remove duplicate start
-            return path.length >= 3 ? path : null;
-        }
-
-        const neighbors = adjacencyMap.get(next);
-        if (!neighbors) return null;
-
-        const prevIndex = neighbors.indexOf(current);
-        if (prevIndex === -1) return null;
-
-        // Take next neighbor (counter-clockwise)
-        const nextIndex = (prevIndex + 1) % neighbors.length;
-        current = next;
-        next = neighbors[nextIndex];
-    }
-
-    return null;
-}
-
-
-export function debugFaceDetection(allEdges, findPointById) {
-    console.log('=== FACE DETECTION DEBUG ===');
-    console.log('Edges:', allEdges.map(e => `${e.id1}-${e.id2}`));
-    
-    // Debug the adjacency map
-    const adjacencyMap = new Map();
-    const vertices = new Map();
-
-    allEdges.forEach(edge => {
-        const p1 = findPointById(edge.id1);
-        const p2 = findPointById(edge.id2);
-        if (!p1 || !p2 || p1.type !== 'regular' || p2.type !== 'regular') return;
-
-        if (!vertices.has(p1.id)) vertices.set(p1.id, p1);
-        if (!vertices.has(p2.id)) vertices.set(p2.id, p2);
-
-        if (!adjacencyMap.has(edge.id1)) adjacencyMap.set(edge.id1, []);
-        if (!adjacencyMap.has(edge.id2)) adjacencyMap.set(edge.id2, []);
-
-        adjacencyMap.get(edge.id1).push(edge.id2);
-        adjacencyMap.get(edge.id2).push(edge.id1);
-    });
-
-    console.log('Adjacency map:');
-    for (const [vertexId, neighbors] of adjacencyMap.entries()) {
-        console.log(`  ${vertexId}: [${neighbors.join(', ')}]`);
-    }
-
-    // Sort neighbors and show the result
-    for (const [vertexId, neighbors] of adjacencyMap.entries()) {
-        const centerPoint = vertices.get(vertexId);
-        if (!centerPoint) continue;
-        
-        neighbors.sort((a, b) => {
-            const pA = vertices.get(a);
-            const pB = vertices.get(b);
-            if (!pA || !pB) return 0;
-            
-            const angleA = Math.atan2(pA.y - centerPoint.y, pA.x - centerPoint.x);
-            const angleB = Math.atan2(pB.y - centerPoint.y, pB.x - centerPoint.x);
-            return angleA - angleB;
-        });
-    }
-
-    console.log('Sorted adjacency map:');
-    for (const [vertexId, neighbors] of adjacencyMap.entries()) {
-        console.log(`  ${vertexId}: [${neighbors.join(', ')}]`);
-    }
-
-    const faces = detectClosedPolygons(allEdges, findPointById);
-    console.log('Detected faces:');
-    faces.forEach((face, i) => {
-        console.log(`Face ${i}:`, face.vertexIds);
-        const vertices = face.vertexIds.map(id => findPointById(id));
-        const area = Math.abs(shoelaceArea(vertices));
-        console.log(`  Area: ${area.toFixed(4)}`);
-    });
-    
-    return faces;
-}
 
 export function normalize(v) {
     const mag = Math.hypot(v.x, v.y);
@@ -641,106 +438,48 @@ export function getClosestPointOnLineSegment(p, a, b) {
     return { x: closestX, y: closestY, distance: dist, onSegmentStrict: onSegmentStrict, t: clampedT };
 }
 
-export function validateAndFilterFaces(faces, findPointById) {
-    if (faces.length <= 1) return faces;
-    
-    const validFaces = [];
-    const facesByArea = faces.map(face => {
-        const vertices = face.vertexIds.map(id => findPointById(id)).filter(v => v && v.type === 'regular');
-        const area = vertices.length >= 3 ? Math.abs(shoelaceArea(vertices)) : 0;
-        return { face, area, vertices };
-    }).filter(f => f.area > 0).sort((a, b) => a.area - b.area);
-    
-    for (const candidateData of facesByArea) {
-        const candidate = candidateData.face;
-        let isComposite = false;
-        
-        // Check if this face can be decomposed into smaller existing faces
-        const candidateEdges = new Set();
-        for (let i = 0; i < candidate.vertexIds.length; i++) {
-            const v1 = candidate.vertexIds[i];
-            const v2 = candidate.vertexIds[(i + 1) % candidate.vertexIds.length];
-            candidateEdges.add(getEdgeId({ id1: v1, id2: v2 }));
-        }
-        
-        // Look for combinations of existing faces that could form this candidate
-        for (let i = 0; i < validFaces.length && !isComposite; i++) {
-            for (let j = i + 1; j < validFaces.length && !isComposite; j++) {
-                const face1 = validFaces[i].face;
-                const face2 = validFaces[j].face;
-                
-                if (canCombineToForm(face1, face2, candidate)) {
-                    isComposite = true;
-                }
-            }
-        }
-        
-        if (!isComposite) {
-            validFaces.push(candidateData);
-        }
-    }
-    
-    return validFaces.map(f => f.face);
-}
-
-function canCombineToForm(face1, face2, targetFace) {
-    // Get edges for each face
-    const face1Edges = new Set();
-    const face2Edges = new Set();
-    const targetEdges = new Set();
-    
-    for (let i = 0; i < face1.vertexIds.length; i++) {
-        const v1 = face1.vertexIds[i];
-        const v2 = face1.vertexIds[(i + 1) % face1.vertexIds.length];
-        face1Edges.add(getEdgeId({ id1: v1, id2: v2 }));
-    }
-    
-    for (let i = 0; i < face2.vertexIds.length; i++) {
-        const v1 = face2.vertexIds[i];
-        const v2 = face2.vertexIds[(i + 1) % face2.vertexIds.length];
-        face2Edges.add(getEdgeId({ id1: v1, id2: v2 }));
-    }
-    
-    for (let i = 0; i < targetFace.vertexIds.length; i++) {
-        const v1 = targetFace.vertexIds[i];
-        const v2 = targetFace.vertexIds[(i + 1) % targetFace.vertexIds.length];
-        targetEdges.add(getEdgeId({ id1: v1, id2: v2 }));
-    }
-    
-    // Find shared edges (internal edges that should be removed)
-    const sharedEdges = new Set();
-    for (const edge of face1Edges) {
-        if (face2Edges.has(edge)) {
-            sharedEdges.add(edge);
-        }
-    }
-    
-    // Union of boundary edges (removing shared internal edges)
-    const unionBoundary = new Set();
-    for (const edge of face1Edges) {
-        if (!sharedEdges.has(edge)) {
-            unionBoundary.add(edge);
-        }
-    }
-    for (const edge of face2Edges) {
-        if (!sharedEdges.has(edge)) {
-            unionBoundary.add(edge);
-        }
-    }
-    
-    // Check if union boundary matches target
-    if (unionBoundary.size !== targetEdges.size) return false;
-    
-    for (const edge of targetEdges) {
-        if (!unionBoundary.has(edge)) return false;
-    }
-    
-    return true;
-}
-
 export function getMousePosOnCanvas(event, canvasElement) {
     const rect = canvasElement.getBoundingClientRect();
     return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+}
+
+function linesIntersectStrict(a1, a2, b1, b2) {
+    const denom = (b2.y - b1.y) * (a2.x - a1.x) - (b2.x - b1.x) * (a2.y - a1.y);
+    if (Math.abs(denom) < 1e-10) return false;
+    
+    const ua = ((b2.x - b1.x) * (a1.y - b1.y) - (b2.y - b1.y) * (a1.x - b1.x)) / denom;
+    const ub = ((a2.x - a1.x) * (a1.y - b1.y) - (a2.y - a1.y) * (a1.x - b1.x)) / denom;
+    
+    return ua > 0 && ua < 1 && ub > 0 && ub < 1;
+}
+
+export function findFacesToSplit(vertexId1, vertexId2, allFaces, findVertexById) {
+    const facesToSplit = [];
+    
+    allFaces.forEach(face => {
+        if (!face.vertexIds || face.vertexIds.length < 3) return;
+        
+        const hasVertex1 = face.vertexIds.includes(vertexId1);
+        const hasVertex2 = face.vertexIds.includes(vertexId2);
+        
+        
+        if (hasVertex1 && hasVertex2) {
+            const index1 = face.vertexIds.indexOf(vertexId1);
+            const index2 = face.vertexIds.indexOf(vertexId2);
+            const faceLength = face.vertexIds.length;
+            
+            const areAdjacent = 
+                (index1 === (index2 + 1) % faceLength) || 
+                (index2 === (index1 + 1) % faceLength);
+            
+            
+            if (!areAdjacent) {
+                facesToSplit.push(face);
+            }
+        }
+    });
+    
+    return facesToSplit;
 }
 
 function rgbToHsl(r, g, b) {
@@ -835,27 +574,6 @@ export function computeAngle(prev, curr, next) {
     return Math.acos(clamp(cos_theta, -1, 1));
 }
 
-export function isSelfIntersecting(vertices) {
-    const n = vertices.length;
-    for (let i = 0; i < n; i++) {
-        const p1 = vertices[i];
-        const p2 = vertices[(i + 1) % n];
-        for (let j = i + 2; j < n; j++) {
-            const q1 = vertices[j];
-            const q2 = vertices[(j + 1) % n];
-            if ((j + 1) % n === i || j === (i + 1) % n) continue;
-            if (linesIntersect(p1, p2, q1, q2)) return true;
-        }
-    }
-    return false;
-}
-
-function linesIntersect(a, b, c, d) {
-    function ccw(A, B, C) {
-        return (C.y - A.y) * (B.x - A.x) > (B.y - A.y) * (C.x - A.x);
-    }
-    return ccw(a, c, d) !== ccw(b, c, d) && ccw(a, b, c) !== ccw(a, b, d);
-}
 
 export function triangulatePolygon(vertices) {
     let n = vertices.length;
@@ -1155,6 +873,238 @@ export function updateFaceLocalCoordinateSystems(allFaces, findPointById) {
         }
     });
 }
+
+function walkMinimalFaceDirected(startVertex, secondVertex, adjacencyMap) {
+    const facePath = [startVertex];
+    let prevNode = startVertex;
+    let currentNode = secondVertex;
+    
+    const maxSteps = adjacencyMap.size + 2;
+    for (let stepCount = 0; stepCount < maxSteps; stepCount++) {
+        facePath.push(currentNode);
+
+        if (currentNode === startVertex) {
+            facePath.pop();
+            return facePath;
+        }
+
+        const neighbors = adjacencyMap.get(currentNode);
+        if (!neighbors || neighbors.length < 1) return null; 
+
+        const prevNodeIndex = neighbors.indexOf(prevNode);
+        if (prevNodeIndex === -1) return null;
+
+        const nextNodeIndex = (prevNodeIndex + 1) % neighbors.length;
+        const nextNode = neighbors[nextNodeIndex];
+        
+        prevNode = currentNode;
+        currentNode = nextNode;
+    }
+    return null;
+}
+
+function findAllTriangularFaces(adjacencyMap, vertices) {
+    const triangularFaces = [];
+    const processedTriangles = new Set();
+    
+    for (const [v1, neighbors1] of adjacencyMap.entries()) {
+        for (let i = 0; i < neighbors1.length; i++) {
+            const v2 = neighbors1[i];
+            const neighbors2 = adjacencyMap.get(v2) || [];
+            
+            for (let j = 0; j < neighbors2.length; j++) {
+                const v3 = neighbors2[j];
+                if (v3 === v1) continue;
+                
+                const neighbors3 = adjacencyMap.get(v3) || [];
+                
+                if (neighbors3.includes(v1)) {
+                    if (v1 !== v2 && v2 !== v3 && v3 !== v1) {
+                        const triangle = [v1, v2, v3];
+                        const triangleKey = triangle.slice().sort().join('_');
+                        
+                        if (!processedTriangles.has(triangleKey)) {
+                            processedTriangles.add(triangleKey);
+                            triangularFaces.push(triangle);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    return triangularFaces;
+}
+
+function filterCompositeFaces(allFaces, allEdges, findPointById) {
+    if (allFaces.length <= 1) return allFaces;
+
+    const allVertexIdsInComponent = new Set();
+    const edgeSet = new Set();
+    
+    allEdges.forEach(edge => {
+        allVertexIdsInComponent.add(edge.id1);
+        allVertexIdsInComponent.add(edge.id2);
+        const edgeKey = [edge.id1, edge.id2].sort().join('_');
+        edgeSet.add(edgeKey);
+    });
+
+    return allFaces.filter(face => {
+        const faceVertexSet = new Set(face.vertexIds);
+
+        for (const vertexId of allVertexIdsInComponent) {
+            if (!faceVertexSet.has(vertexId)) {
+                const vertex = findPointById(vertexId);
+                const faceVertices = face.vertexIds.map(id => findPointById(id));
+                
+                if (vertex && faceVertices.every(v => v) && isVertexInPolygon(vertex, faceVertices)) {
+                    return false;
+                }
+            }
+        }
+
+        const faceBoundaryEdges = new Set();
+        for (let i = 0; i < face.vertexIds.length; i++) {
+            const v1 = face.vertexIds[i];
+            const v2 = face.vertexIds[(i + 1) % face.vertexIds.length];
+            const edgeKey = [v1, v2].sort().join('_');
+            faceBoundaryEdges.add(edgeKey);
+        }
+
+        for (let i = 0; i < face.vertexIds.length; i++) {
+            for (let j = i + 2; j < face.vertexIds.length; j++) {
+                if (j === face.vertexIds.length - 1 && i === 0) continue;
+                
+                const v1 = face.vertexIds[i];
+                const v2 = face.vertexIds[j];
+                const edgeKey = [v1, v2].sort().join('_');
+                
+                if (edgeSet.has(edgeKey)) {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    });
+}
+
+function isSelfIntersectingImproved(vertices) {
+    const n = vertices.length;
+    if (n <= 3) return false;
+    
+    for (let i = 0; i < n; i++) {
+        const p1 = vertices[i];
+        const p2 = vertices[(i + 1) % n];
+        
+        for (let j = i + 2; j < n; j++) {
+            if (j === (i + n - 1) % n || (j + 1) % n === i) continue;
+            
+            const q1 = vertices[j];
+            const q2 = vertices[(j + 1) % n];
+            
+            if (linesIntersectProper(p1, p2, q1, q2)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+function linesIntersectProper(a, b, c, d) {
+    function ccw(A, B, C) {
+        return (C.y - A.y) * (B.x - A.x) > (B.y - A.y) * (C.x - A.x);
+    }
+    
+    const intersect = ccw(a, c, d) !== ccw(b, c, d) && ccw(a, b, c) !== ccw(a, b, d);
+    
+    if (!intersect) return false;
+    
+    const samePoint = (p1, p2) => Math.abs(p1.x - p2.x) < 1e-10 && Math.abs(p1.y - p2.y) < 1e-10;
+    
+    return !(samePoint(a, c) || samePoint(a, d) || samePoint(b, c) || samePoint(b, d));
+}
+
+export function detectClosedPolygons(allEdges, findPointById) {
+    const adjacencyMap = new Map();
+    const vertices = new Map();
+
+    allEdges.forEach(edge => {
+        const p1 = findPointById(edge.id1);
+        const p2 = findPointById(edge.id2);
+        if (!p1 || !p2 || p1.type !== 'regular' || p2.type !== 'regular') return;
+        if (!vertices.has(p1.id)) vertices.set(p1.id, p1);
+        if (!vertices.has(p2.id)) vertices.set(p2.id, p2);
+        if (!adjacencyMap.has(edge.id1)) adjacencyMap.set(edge.id1, []);
+        if (!adjacencyMap.has(edge.id2)) adjacencyMap.set(edge.id2, []);
+        adjacencyMap.get(edge.id1).push(edge.id2);
+        adjacencyMap.get(edge.id2).push(edge.id1);
+    });
+
+    for (const [vertexId, neighbors] of adjacencyMap.entries()) {
+        const centerPoint = vertices.get(vertexId);
+        if (!centerPoint) continue;
+        neighbors.sort((a, b) => {
+            const pA = vertices.get(a);
+            const pB = vertices.get(b);
+            if (!pA || !pB) return 0;
+            const angleA = Math.atan2(pA.y - centerPoint.y, pA.x - centerPoint.x);
+            const angleB = Math.atan2(pB.y - centerPoint.y, pB.x - centerPoint.x);
+            return angleA - angleB;
+        });
+    }
+
+    const triangularFaces = findAllTriangularFaces(adjacencyMap, vertices);
+    
+    const allPossibleFaces = triangularFaces.map(triangle => ({
+        vertexIds: triangle,
+        id: `face_${triangle.join('_')}`
+    }));
+
+    const processedDirectedEdges = new Set();
+    for (const [startVertex, neighbors] of adjacencyMap.entries()) {
+        for (const nextVertex of neighbors) {
+            const directedEdgeKey = `${startVertex}->${nextVertex}`;
+            if (processedDirectedEdges.has(directedEdgeKey)) continue;
+
+            const facePath = walkMinimalFaceDirected(startVertex, nextVertex, adjacencyMap);
+            
+            if (facePath && facePath.length >= 3) {
+                const uniqueVertices = new Set(facePath);
+                if (uniqueVertices.size === facePath.length) {
+                    for (let i = 0; i < facePath.length; i++) {
+                        const v1 = facePath[i];
+                        const v2 = facePath[(i + 1) % facePath.length];
+                        processedDirectedEdges.add(`${v1}->${v2}`);
+                    }
+                    
+                    if (facePath.length > 3) {
+                        allPossibleFaces.push({
+                            vertexIds: facePath,
+                            id: `face_${facePath.join('_')}`
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    const principleFaces = filterCompositeFaces(allPossibleFaces, allEdges, findPointById);
+
+    const uniqueFaces = [];
+    const seenFaceVertexSets = new Set();
+    
+    principleFaces.forEach(face => {
+        const sortedVertexIds = [...face.vertexIds].sort().join('_');
+        if (!seenFaceVertexSets.has(sortedVertexIds)) {
+            uniqueFaces.push(face);
+            seenFaceVertexSets.add(sortedVertexIds);
+        }
+    });
+
+    return uniqueFaces;
+}
+
 
 export function detectFacesFromNewEdge(newEdge, allEdges, findPointById, deletedFaceIds = new Set()) {
     // Get all possible faces with the current edge set

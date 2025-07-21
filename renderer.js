@@ -319,40 +319,35 @@ export function drawCopyPreviews(ctx, {
     dragPreviewVertices,
     transformIndicatorData,
     allEdges,
+    allFaces,
     findVertexById,
     findNeighbors,
     colors
 }, dataToScreen) {
-
-    ctx.save();
-    ctx.globalAlpha = 0.5;
 
     const verticesToCopy = initialDragVertexStates.filter(p => p.type === 'regular');
     const vertexIdsToCopy = new Set(verticesToCopy.map(p => p.id));
     const incidentEdges = allEdges.filter(edge =>
         vertexIdsToCopy.has(edge.id1) && vertexIdsToCopy.has(edge.id2)
     );
+    
+    const affectedFaces = allFaces.filter(face => 
+        face.vertexIds && face.vertexIds.some(vId => vertexIdsToCopy.has(vId))
+    );
 
-    verticesToCopy.forEach(p => drawVertex(ctx, p, { selectedVertexIds: [], selectedCenterIds: [], activeCenterId: null, currentColor: p.color, colors, verticesVisible: true }, dataToScreen, () => {}));
-    ctx.setLineDash(C.DASH_PATTERN);
-    incidentEdges.forEach(edge => {
-        const p1 = findVertexById(edge.id1);
-        const p2 = findVertexById(edge.id2);
-        if (p1 && p2) {
-            const p1Screen = dataToScreen(p1);
-            const p2Screen = dataToScreen(p2);
-            ctx.beginPath();
-            ctx.moveTo(p1Screen.x, p1Screen.y);
-            ctx.lineTo(p2Screen.x, p2Screen.y);
-            ctx.strokeStyle = colors.defaultStroke;
-            ctx.stroke();
-        }
-    });
+    const isRigidBodyMotion = affectedFaces.every(face => 
+        face.vertexIds.every(vId => vertexIdsToCopy.has(vId))
+    );
 
-    for (let i = 1; i < copyCount; i++) {
+    ctx.save();
+    ctx.globalAlpha = 1.0;
+
+    for (let i = 0; i < copyCount; i++) {
         let previewVerticesForThisCopy;
 
-        if (transformIndicatorData) {
+        if (i === 0) {
+            previewVerticesForThisCopy = initialDragVertexStates.filter(p => p.type === 'regular');
+        } else if (transformIndicatorData) {
             const { center, rotation, scale, directionalScale, startPos } = transformIndicatorData;
             const effectiveRotation = rotation * i;
             const effectiveScale = Math.pow(scale, i);
@@ -371,25 +366,70 @@ export function drawCopyPreviews(ctx, {
             }));
         }
 
-        const newIdMap = new Map(previewVerticesForThisCopy.map((p, j) => [verticesToCopy[j].id, p.id]));
+        const newIdMapForThisCopy = new Map();
+        previewVerticesForThisCopy.forEach((previewVertex, index) => {
+            const originalVertex = verticesToCopy[index];
+            newIdMapForThisCopy.set(originalVertex.id, previewVertex);
+        });
 
-        ctx.setLineDash(C.DASH_PATTERN);
-        incidentEdges.forEach(edge => {
-            const p1 = previewVerticesForThisCopy.find(p => p.id === newIdMap.get(edge.id1));
-            const p2 = previewVerticesForThisCopy.find(p => p.id === newIdMap.get(edge.id2));
-            if (p1 && p2) {
-                const p1Screen = dataToScreen(p1);
-                const p2Screen = dataToScreen(p2);
-                ctx.beginPath();
-                ctx.moveTo(p1Screen.x, p1Screen.y);
-                ctx.lineTo(p2Screen.x, p2Screen.y);
-                ctx.stroke();
+        affectedFaces.forEach(originalFace => {
+            const faceVerticesForThisCopy = [];
+            
+            originalFace.vertexIds.forEach(originalVertexId => {
+                if (vertexIdsToCopy.has(originalVertexId)) {
+                    const previewVertex = newIdMapForThisCopy.get(originalVertexId);
+                    if (previewVertex) {
+                        faceVerticesForThisCopy.push(previewVertex);
+                    }
+                } else {
+                    const staticVertex = findVertexById(originalVertexId);
+                    if (staticVertex && staticVertex.type === 'regular') {
+                        faceVerticesForThisCopy.push(staticVertex);
+                    }
+                }
+            });
+
+            if (faceVerticesForThisCopy.length >= 3) {
+                const screenVertices = faceVerticesForThisCopy.map(v => dataToScreen(v));
+                if (screenVertices.every(v => v && typeof v.x === 'number' && typeof v.y === 'number')) {
+                    ctx.fillStyle = originalFace.color || colors.face;
+                    ctx.beginPath();
+                    screenVertices.forEach((vertex, index) => {
+                        if (index === 0) {
+                            ctx.moveTo(vertex.x, vertex.y);
+                        } else {
+                            ctx.lineTo(vertex.x, vertex.y);
+                        }
+                    });
+                    ctx.closePath();
+                    ctx.fill();
+                }
             }
         });
 
+        if (isRigidBodyMotion) {
+            ctx.setLineDash([]);
+            incidentEdges.forEach(originalEdge => {
+                const p1 = newIdMapForThisCopy.get(originalEdge.id1);
+                const p2 = newIdMapForThisCopy.get(originalEdge.id2);
+                if (p1 && p2) {
+                    const p1Screen = dataToScreen(p1);
+                    const p2Screen = dataToScreen(p2);
+                    ctx.beginPath();
+                    ctx.moveTo(p1Screen.x, p1Screen.y);
+                    ctx.lineTo(p2Screen.x, p2Screen.y);
+                    ctx.strokeStyle = originalEdge.color || colors.defaultStroke;
+                    ctx.lineWidth = C.LINE_WIDTH;
+                    ctx.stroke();
+                }
+            });
+        }
+
+        ctx.setLineDash(isRigidBodyMotion ? [] : C.DASH_PATTERN);
         verticesToCopy.forEach(originalVertex => {
-            const correspondingPreviewVertex = previewVerticesForThisCopy.find(p => p.id === newIdMap.get(originalVertex.id));
+            const correspondingPreviewVertex = newIdMapForThisCopy.get(originalVertex.id);
             if (!correspondingPreviewVertex) return;
+            
             const neighbors = findNeighbors(originalVertex.id);
             neighbors.forEach(neighborId => {
                 if (!vertexIdsToCopy.has(neighborId)) {
@@ -400,13 +440,24 @@ export function drawCopyPreviews(ctx, {
                         ctx.beginPath();
                         ctx.moveTo(previewScreen.x, previewScreen.y);
                         ctx.lineTo(neighborScreen.x, neighborScreen.y);
+                        ctx.strokeStyle = colors.defaultStroke;
+                        ctx.lineWidth = C.LINE_WIDTH;
                         ctx.stroke();
                     }
                 }
             });
         });
 
-        previewVerticesForThisCopy.forEach(vertex => drawVertex(ctx, vertex, { selectedVertexIds: [], selectedCenterIds: [], activeCenterId: null, currentColor: vertex.color, colors, verticesVisible: true }, dataToScreen, () => {}));
+        previewVerticesForThisCopy.forEach(vertex => {
+            drawVertex(ctx, vertex, { 
+                selectedVertexIds: [], 
+                selectedCenterIds: [], 
+                activeCenterId: null, 
+                currentColor: vertex.color, 
+                colors, 
+                verticesVisible: true 
+            }, dataToScreen, () => {});
+        });
     }
 
     ctx.restore();
@@ -2725,6 +2776,192 @@ export function drawVisibilityIcon(ctx, rect, colors) {
     ctx.restore();
 }
 
+function drawColorPalette(ctx, htmlOverlay, state, updateHtmlLabel) {
+    const { canvasUI, colors, allColors, namedColors, colorAssignments, activeColorTargets, verticesVisible, edgesVisible, facesVisible, isDraggingColorTarget, draggedColorTargetInfo } = state;
+
+    const checkerboardColor1 = '#808080';
+    const checkerboardColor2 = '#c0c0c0';
+    
+    function drawCheckerboard(rect) {
+        const tileSize = rect.height / 3;
+        const numCols = Math.ceil(rect.width / tileSize);
+        for (let row = 0; row < 3; row++) {
+            for (let col = 0; col < numCols; col++) {
+                ctx.fillStyle = (row + col) % 2 === 0 ? checkerboardColor1 : checkerboardColor2;
+                const tileX = rect.x + col * tileSize;
+                const tileY = rect.y + row * tileSize;
+                const tileWidth = Math.min(tileSize, rect.x + rect.width - tileX);
+                const tileHeight = Math.min(tileSize, rect.y + rect.height - tileY);
+                if (tileWidth > 0 && tileHeight > 0) ctx.fillRect(tileX, tileY, tileWidth, tileHeight);
+            }
+        }
+    }
+    
+    const randomBtn = canvasUI.randomColorButton;
+    if (randomBtn) {
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(randomBtn.x, randomBtn.y, randomBtn.width, randomBtn.height);
+        ctx.strokeStyle = colors.uiDefault;
+        ctx.lineWidth = C.UI_BUTTON_BORDER_WIDTH;
+        ctx.strokeRect(randomBtn.x, randomBtn.y, randomBtn.width, randomBtn.height);
+        const centerX = randomBtn.x + randomBtn.width / 2;
+        const centerY = randomBtn.y + randomBtn.height / 2;
+        const wheelRadius = randomBtn.width * 0.35;
+        const segments = 8;
+        for (let i = 0; i < segments; i++) {
+            const angle1 = (i / segments) * 2 * Math.PI;
+            const angle2 = ((i + 1) / segments) * 2 * Math.PI;
+            const hue = (i / segments) * 360;
+            ctx.fillStyle = `hsl(${hue}, 70%, 60%)`;
+            ctx.beginPath();
+            ctx.moveTo(centerX, centerY);
+            ctx.arc(centerX, centerY, wheelRadius, angle1, angle2);
+            ctx.closePath();
+            ctx.fill();
+        }
+        ctx.fillStyle = colors.background;
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, wheelRadius * 0.4, 0, 2 * Math.PI);
+        ctx.fill();
+    }
+
+    const removeBtn = canvasUI.removeColorButton;
+    if (removeBtn) {
+        ctx.strokeStyle = colors.uiDefault;
+        ctx.lineWidth = C.UI_BUTTON_BORDER_WIDTH;
+        ctx.strokeRect(removeBtn.x, removeBtn.y, removeBtn.width, removeBtn.height);
+        ctx.beginPath();
+        ctx.moveTo(removeBtn.x + C.UI_BUTTON_ICON_PADDING, removeBtn.y + removeBtn.height / 2);
+        ctx.lineTo(removeBtn.x + removeBtn.width - C.UI_BUTTON_ICON_PADDING, removeBtn.y + removeBtn.height / 2);
+        ctx.stroke();
+    }
+
+    canvasUI.colorSwatches.forEach((swatch) => {
+        const colorItem = swatch.item;
+        let hasAlpha = false;
+        if (colorItem && colorItem.type === 'color') {
+            const parsedColor = U.parseColor(colorItem.value);
+            if (parsedColor && parsedColor.a < 1.0) hasAlpha = true;
+        } else if (colorItem && colorItem.type === 'colormap') {
+            if (colorItem.vertices.some(p => p.alpha !== undefined && p.alpha < 1.0)) hasAlpha = true;
+        }
+        if (hasAlpha) drawCheckerboard(swatch);
+        if (colorItem && colorItem.type === 'colormap') {
+            const gradient = ctx.createLinearGradient(swatch.x, swatch.y, swatch.x + swatch.width, swatch.y);
+            colorItem.vertices.forEach(vertex => {
+                let colorValue = vertex.color;
+                if (typeof colorValue === 'string') colorValue = namedColors[colorValue] || [0, 0, 0];
+                gradient.addColorStop(vertex.pos, `rgba(${colorValue.join(',')},${vertex.alpha || 1.0})`);
+            });
+            ctx.fillStyle = gradient;
+        } else if (colorItem) {
+            ctx.fillStyle = colorItem.value;
+        }
+        ctx.fillRect(swatch.x, swatch.y, swatch.width, swatch.height);
+    });
+
+    const addBtn = canvasUI.addColorButton;
+    if (addBtn) {
+        ctx.strokeStyle = colors.uiDefault;
+        ctx.lineWidth = C.UI_BUTTON_BORDER_WIDTH;
+        ctx.strokeRect(addBtn.x, addBtn.y, addBtn.width, addBtn.height);
+        ctx.beginPath();
+        ctx.moveTo(addBtn.x + addBtn.width / 2, addBtn.y + C.UI_BUTTON_ICON_PADDING);
+        ctx.lineTo(addBtn.x + addBtn.width / 2, addBtn.y + addBtn.height - C.UI_BUTTON_ICON_PADDING);
+        ctx.moveTo(addBtn.x + C.UI_BUTTON_ICON_PADDING, addBtn.y + addBtn.height / 2);
+        ctx.lineTo(addBtn.x + addBtn.width - C.UI_BUTTON_ICON_PADDING, addBtn.y + addBtn.height / 2);
+        ctx.stroke();
+    }
+
+    if (canvasUI.colorTargetIcons) {
+        const getIconOptions = (target) => {
+            // Check if this target is being dragged and use preview color
+            let targetColorIndex = colorAssignments[target];
+            if (isDraggingColorTarget && draggedColorTargetInfo && draggedColorTargetInfo.target === target && draggedColorTargetInfo.previewColorIndex !== undefined) {
+                targetColorIndex = draggedColorTargetInfo.previewColorIndex;
+            }
+
+            const colorItem = (targetColorIndex === -1) ? null : allColors[targetColorIndex];
+
+            const options = {};
+            if (target === C.COLOR_TARGET_VERTEX) {
+                options.vertexState = verticesVisible ? 'filled' : 'disabled';
+                if (targetColorIndex === -1) {
+                    options.vertexColor = 'rgba(128, 128, 128, 1)';
+                } else if (colorItem && colorItem.type === 'color') {
+                    options.vertexColor = colorItem.value;
+                } else if (colorItem && colorItem.type === 'colormap') {
+                    options.vertexColormapItem = colorItem;
+                }
+            } else if (target === C.COLOR_TARGET_EDGE) {
+                options.edgeState = edgesVisible ? 'solid' : 'disabled';
+                if (targetColorIndex === -1) {
+                    options.edgeColor = 'rgba(128, 128, 128, 1)';
+                } else if (colorItem && colorItem.type === 'color') {
+                    options.edgeColor = colorItem.value;
+                } else if (colorItem && colorItem.type === 'colormap') {
+                    options.edgeColormapItem = colorItem;
+                }
+            } else if (target === C.COLOR_TARGET_FACE) {
+                options.faceState = facesVisible ? 'filled' : 'disabled';
+                if (targetColorIndex === -1) {
+                    options.faceColor = 'rgba(128, 128, 128, 1)';
+                } else if (colorItem && colorItem.type === 'color') {
+                    options.faceColor = colorItem.value;
+                }
+            }
+            return options;
+        };
+
+        const drawOrder = [C.COLOR_TARGET_FACE, C.COLOR_TARGET_EDGE, C.COLOR_TARGET_VERTEX];
+        drawOrder.forEach(targetToDraw => {
+            const icon = canvasUI.colorTargetIcons.find(i => i.target === targetToDraw);
+            if (icon) {
+                const isActive = activeColorTargets.includes(targetToDraw);
+                drawTriangleIcon(ctx, icon, getIconOptions(targetToDraw), colors, isActive);
+            }
+        });
+    }
+
+    // Draw combined selection boxes
+    const drawnBoxesForSwatches = new Set();
+    activeColorTargets.forEach(target => {
+        let targetColorIndex = colorAssignments[target];
+        if (isDraggingColorTarget && draggedColorTargetInfo && draggedColorTargetInfo.target === target && draggedColorTargetInfo.previewColorIndex !== undefined) {
+            targetColorIndex = draggedColorTargetInfo.previewColorIndex;
+        }
+        
+        if (targetColorIndex === -1 || drawnBoxesForSwatches.has(targetColorIndex)) return;
+
+        const swatch = canvasUI.colorSwatches.find(s => s.index === targetColorIndex);
+        if (swatch) {
+            const targetsForThisSwatch = Object.keys(colorAssignments).filter(t => {
+                let checkIndex = colorAssignments[t];
+                if (isDraggingColorTarget && draggedColorTargetInfo && draggedColorTargetInfo.target === t && draggedColorTargetInfo.previewColorIndex !== undefined) {
+                    checkIndex = draggedColorTargetInfo.previewColorIndex;
+                }
+                return checkIndex === swatch.index && activeColorTargets.includes(t);
+            });
+            const iconsForThisSwatch = canvasUI.colorTargetIcons.filter(icon => targetsForThisSwatch.includes(icon.target));
+
+            if (iconsForThisSwatch.length > 0) {
+                const minY = Math.min(...iconsForThisSwatch.map(i => i.y));
+                
+                ctx.strokeStyle = colors.selectionGlow;
+                ctx.lineWidth = C.UI_BUTTON_BORDER_WIDTH;
+                const padding = 2;
+                const boxX = swatch.x - padding;
+                const boxY = minY - padding;
+                const boxWidth = swatch.width + (padding * 2);
+                const boxHeight = (swatch.y + swatch.height) - boxY + padding;
+                
+                ctx.strokeRect(boxX, boxY, boxWidth, boxHeight);
+                drawnBoxesForSwatches.add(targetColorIndex);
+            }
+        }
+    });
+}
+
 function drawColorToolbarPreview(ctx, rect, { verticesVisible, edgesVisible, facesVisible, colorAssignments, allColors }, colors) {
     const options = {
         vertexState: verticesVisible ? 'filled' : 'hidden',
@@ -2874,10 +3111,6 @@ function drawTriangleIcon(ctx, rect, options, colors, isActive = false) {
 
 export function drawFace(ctx, screenVertices, color, colors) {
     if (!screenVertices || screenVertices.length < 3) return;
-
-    if (U.isSelfIntersecting(screenVertices)) {
-        return;
-    }
 
     ctx.save();
     ctx.fillStyle = color || colors.face;
@@ -3029,172 +3262,8 @@ function drawMainToolbar(ctx, htmlOverlay, state, updateHtmlLabel) {
    }
 }
 
-function drawColorPalette(ctx, htmlOverlay, state, updateHtmlLabel) {
-    const { canvasUI, colors, allColors, namedColors, colorAssignments, activeColorTargets, verticesVisible, edgesVisible, facesVisible } = state;
 
-    const checkerboardColor1 = '#808080';
-    const checkerboardColor2 = '#c0c0c0';
-    
-    function drawCheckerboard(rect) {
-        const tileSize = rect.height / 3;
-        const numCols = Math.ceil(rect.width / tileSize);
-        for (let row = 0; row < 3; row++) {
-            for (let col = 0; col < numCols; col++) {
-                ctx.fillStyle = (row + col) % 2 === 0 ? checkerboardColor1 : checkerboardColor2;
-                const tileX = rect.x + col * tileSize;
-                const tileY = rect.y + row * tileSize;
-                const tileWidth = Math.min(tileSize, rect.x + rect.width - tileX);
-                const tileHeight = Math.min(tileSize, rect.y + rect.height - tileY);
-                if (tileWidth > 0 && tileHeight > 0) ctx.fillRect(tileX, tileY, tileWidth, tileHeight);
-            }
-        }
-    }
-    
-    const randomBtn = canvasUI.randomColorButton;
-    if (randomBtn) {
-        ctx.fillStyle = '#000000';
-        ctx.fillRect(randomBtn.x, randomBtn.y, randomBtn.width, randomBtn.height);
-        ctx.strokeStyle = colors.uiDefault;
-        ctx.lineWidth = C.UI_BUTTON_BORDER_WIDTH;
-        ctx.strokeRect(randomBtn.x, randomBtn.y, randomBtn.width, randomBtn.height);
-        const centerX = randomBtn.x + randomBtn.width / 2;
-        const centerY = randomBtn.y + randomBtn.height / 2;
-        const wheelRadius = randomBtn.width * 0.35;
-        const segments = 8;
-        for (let i = 0; i < segments; i++) {
-            const angle1 = (i / segments) * 2 * Math.PI;
-            const angle2 = ((i + 1) / segments) * 2 * Math.PI;
-            const hue = (i / segments) * 360;
-            ctx.fillStyle = `hsl(${hue}, 70%, 60%)`;
-            ctx.beginPath();
-            ctx.moveTo(centerX, centerY);
-            ctx.arc(centerX, centerY, wheelRadius, angle1, angle2);
-            ctx.closePath();
-            ctx.fill();
-        }
-        ctx.fillStyle = colors.background;
-        ctx.beginPath();
-        ctx.arc(centerX, centerY, wheelRadius * 0.4, 0, 2 * Math.PI);
-        ctx.fill();
-    }
 
-    const removeBtn = canvasUI.removeColorButton;
-    if (removeBtn) {
-        ctx.strokeStyle = colors.uiDefault;
-        ctx.lineWidth = C.UI_BUTTON_BORDER_WIDTH;
-        ctx.strokeRect(removeBtn.x, removeBtn.y, removeBtn.width, removeBtn.height);
-        ctx.beginPath();
-        ctx.moveTo(removeBtn.x + C.UI_BUTTON_ICON_PADDING, removeBtn.y + removeBtn.height / 2);
-        ctx.lineTo(removeBtn.x + removeBtn.width - C.UI_BUTTON_ICON_PADDING, removeBtn.y + removeBtn.height / 2);
-        ctx.stroke();
-    }
-
-    canvasUI.colorSwatches.forEach((swatch) => {
-        const colorItem = swatch.item;
-        let hasAlpha = false;
-        if (colorItem && colorItem.type === 'color') {
-            const parsedColor = U.parseColor(colorItem.value);
-            if (parsedColor && parsedColor.a < 1.0) hasAlpha = true;
-        } else if (colorItem && colorItem.type === 'colormap') {
-            if (colorItem.vertices.some(p => p.alpha !== undefined && p.alpha < 1.0)) hasAlpha = true;
-        }
-        if (hasAlpha) drawCheckerboard(swatch);
-        if (colorItem && colorItem.type === 'colormap') {
-            const gradient = ctx.createLinearGradient(swatch.x, swatch.y, swatch.x + swatch.width, swatch.y);
-            colorItem.vertices.forEach(vertex => {
-                let colorValue = vertex.color;
-                if (typeof colorValue === 'string') colorValue = namedColors[colorValue] || [0, 0, 0];
-                gradient.addColorStop(vertex.pos, `rgba(${colorValue.join(',')},${vertex.alpha || 1.0})`);
-            });
-            ctx.fillStyle = gradient;
-        } else if (colorItem) {
-            ctx.fillStyle = colorItem.value;
-        }
-        ctx.fillRect(swatch.x, swatch.y, swatch.width, swatch.height);
-    });
-
-    const addBtn = canvasUI.addColorButton;
-    if (addBtn) {
-        ctx.strokeStyle = colors.uiDefault;
-        ctx.lineWidth = C.UI_BUTTON_BORDER_WIDTH;
-        ctx.strokeRect(addBtn.x, addBtn.y, addBtn.width, addBtn.height);
-        ctx.beginPath();
-        ctx.moveTo(addBtn.x + addBtn.width / 2, addBtn.y + C.UI_BUTTON_ICON_PADDING);
-        ctx.lineTo(addBtn.x + addBtn.width / 2, addBtn.y + addBtn.height - C.UI_BUTTON_ICON_PADDING);
-        ctx.moveTo(addBtn.x + C.UI_BUTTON_ICON_PADDING, addBtn.y + addBtn.height / 2);
-        ctx.lineTo(addBtn.x + addBtn.width - C.UI_BUTTON_ICON_PADDING, addBtn.y + addBtn.height / 2);
-        ctx.stroke();
-    }
-
-    if (canvasUI.colorTargetIcons) {
-        const getIconOptions = (target) => {
-            const colorIndex = colorAssignments[target];
-            const colorItem = (colorIndex === -1) ? null : allColors[colorIndex];
-
-            const options = {};
-            if (target === C.COLOR_TARGET_VERTEX) {
-                options.vertexState = verticesVisible ? 'filled' : 'disabled';
-                if (colorItem && colorItem.type === 'color') {
-                    options.vertexColor = colorItem.value;
-                } else if (colorItem && colorItem.type === 'colormap') {
-                    options.vertexColormapItem = colorItem;
-                }
-            } else if (target === C.COLOR_TARGET_EDGE) {
-                options.edgeState = edgesVisible ? 'solid' : 'disabled';
-                if (colorItem && colorItem.type === 'color') {
-                    options.edgeColor = colorItem.value;
-                } else if (colorItem && colorItem.type === 'colormap') {
-                    options.edgeColormapItem = colorItem;
-                }
-            } else if (target === C.COLOR_TARGET_FACE) {
-                options.faceState = facesVisible ? 'filled' : 'disabled';
-                if (colorItem && colorItem.type === 'color') {
-                    options.faceColor = colorItem.value;
-                }
-            }
-            return options;
-        };
-
-        const drawOrder = [C.COLOR_TARGET_FACE, C.COLOR_TARGET_EDGE, C.COLOR_TARGET_VERTEX];
-        drawOrder.forEach(targetToDraw => {
-            const icon = canvasUI.colorTargetIcons.find(i => i.target === targetToDraw);
-            if (icon) {
-                const isActive = activeColorTargets.includes(targetToDraw);
-                drawTriangleIcon(ctx, icon, getIconOptions(targetToDraw), colors, isActive);
-            }
-        });
-    }
-
-    // Draw combined selection boxes
-    const drawnBoxesForSwatches = new Set();
-    activeColorTargets.forEach(target => {
-        const colorIndex = colorAssignments[target];
-        if (colorIndex === -1 || drawnBoxesForSwatches.has(colorIndex)) return;
-
-        const swatch = canvasUI.colorSwatches.find(s => s.index === colorIndex);
-        if (swatch) {
-            const targetsForThisSwatch = Object.keys(colorAssignments).filter(t => 
-                colorAssignments[t] === swatch.index && activeColorTargets.includes(t)
-            );
-            const iconsForThisSwatch = canvasUI.colorTargetIcons.filter(icon => targetsForThisSwatch.includes(icon.target));
-
-            if (iconsForThisSwatch.length > 0) {
-                const minY = Math.min(...iconsForThisSwatch.map(i => i.y));
-                
-                ctx.strokeStyle = colors.selectionGlow;
-                ctx.lineWidth = C.UI_BUTTON_BORDER_WIDTH;
-                const padding = 2;
-                const boxX = swatch.x - padding;
-                const boxY = minY - padding;
-                const boxWidth = swatch.width + (padding * 2);
-                const boxHeight = (swatch.y + swatch.height) - boxY + padding;
-                
-                ctx.strokeRect(boxX, boxY, boxWidth, boxHeight);
-                drawnBoxesForSwatches.add(colorIndex);
-            }
-        }
-    });
-}
 function drawTransformPanel(ctx, state) {
     const { canvasUI, colors } = state;
     canvasUI.transformIcons.forEach(icon => {
@@ -3203,9 +3272,8 @@ function drawTransformPanel(ctx, state) {
 }
 
 function drawDisplayPanel(ctx, htmlOverlay, state, updateHtmlLabel) {
-    const { canvasUI, colors, colorAssignments, allColors, coordsDisplayMode, gridDisplayMode, angleDisplayMode, distanceDisplayMode } = state;
+    const { canvasUI, colors, coordsDisplayMode, gridDisplayMode, angleDisplayMode, distanceDisplayMode, activeThemeName } = state;
     
-
     canvasUI.displayIcons.forEach(icon => {
         const rect = { x: icon.x, y: icon.y, width: icon.width, height: icon.height };
         switch (icon.group) {
@@ -3215,11 +3283,18 @@ function drawDisplayPanel(ctx, htmlOverlay, state, updateHtmlLabel) {
             case 'grid':
                 drawGridIcon(ctx, rect, gridDisplayMode, gridDisplayMode !== C.GRID_DISPLAY_MODE_NONE, colors);
                 break;
+            case 'angles':
+                drawAngleIcon(ctx, rect, angleDisplayMode, angleDisplayMode !== C.ANGLE_DISPLAY_MODE_NONE, htmlOverlay, updateHtmlLabel, colors);
+                break;
+            case 'distances':
+                drawDistanceIcon(ctx, rect, distanceDisplayMode, distanceDisplayMode === C.DISTANCE_DISPLAY_MODE_ON, htmlOverlay, updateHtmlLabel, colors);
+                break;
+            case 'theme':
+                drawThemeIcon(ctx, rect, activeThemeName, colors);
+                break;
         }
     });
 }
-
-
 export function drawCanvasUI(ctx, htmlOverlay, state, updateHtmlLabel) {
     const { dpr, isToolbarExpanded, isColorPaletteExpanded, isTransformPanelExpanded, isDisplayPanelExpanded, isVisibilityPanelExpanded,
         isPlacingTransform, placingTransformType, placingSnapPos, mousePos, colors } = state;
@@ -3266,6 +3341,31 @@ export function drawCanvasUI(ctx, htmlOverlay, state, updateHtmlLabel) {
     }
 
     ctx.restore();
+}
+
+export function getIconPreviewColor(target, draggedColorTargetInfo, allColors, colors) {
+    if (draggedColorTargetInfo && draggedColorTargetInfo.target === target && draggedColorTargetInfo.previewColorIndex !== undefined) {
+        const colorIndex = draggedColorTargetInfo.previewColorIndex;
+        if (colorIndex === -1) {
+            return generateRandomColor();
+        }
+        const item = allColors[colorIndex];
+        if (item?.type === 'color') {
+            return item.value;
+        } else if (item?.type === 'colormap') {
+            return sampleColormap(item, 0.5);
+        }
+    }
+    
+    // Fallback to current assignment
+    const colorIndex = colorAssignments[target];
+    if (colorIndex === -1) {
+        return 'rgba(128, 128, 128, 1)';
+    }
+    const item = allColors[colorIndex];
+    if (!item) return colors.uiIcon;
+    if (item.type === 'color') return item.value;
+    return colors.uiIcon;
 }
 
 export function drawSelectedEdgeDistances(ctx, htmlOverlay, selectedEdgeIds, allEdges, { showDistances, distanceSigFigs, colors, lastGridState }, findVertexById, getEdgeId, dataToScreen, updateHtmlLabel, currentVertexStates = null) {

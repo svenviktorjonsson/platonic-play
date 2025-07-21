@@ -674,40 +674,35 @@ export function drawCopyPreviews(ctx, {
     dragPreviewVertices,
     transformIndicatorData,
     allEdges,
+    allFaces,
     findVertexById,
     findNeighbors,
     colors
 }, dataToScreen) {
-
-    ctx.save();
-    ctx.globalAlpha = 0.5;
 
     const verticesToCopy = initialDragVertexStates.filter(p => p.type === 'regular');
     const vertexIdsToCopy = new Set(verticesToCopy.map(p => p.id));
     const incidentEdges = allEdges.filter(edge =>
         vertexIdsToCopy.has(edge.id1) && vertexIdsToCopy.has(edge.id2)
     );
+    
+    const affectedFaces = allFaces.filter(face => 
+        face.vertexIds && face.vertexIds.some(vId => vertexIdsToCopy.has(vId))
+    );
 
-    verticesToCopy.forEach(p => drawVertex(ctx, p, { selectedVertexIds: [], selectedCenterIds: [], activeCenterId: null, currentColor: p.color, colors, verticesVisible: true }, dataToScreen, () => {}));
-    ctx.setLineDash(C.DASH_PATTERN);
-    incidentEdges.forEach(edge => {
-        const p1 = findVertexById(edge.id1);
-        const p2 = findVertexById(edge.id2);
-        if (p1 && p2) {
-            const p1Screen = dataToScreen(p1);
-            const p2Screen = dataToScreen(p2);
-            ctx.beginPath();
-            ctx.moveTo(p1Screen.x, p1Screen.y);
-            ctx.lineTo(p2Screen.x, p2Screen.y);
-            ctx.strokeStyle = colors.defaultStroke;
-            ctx.stroke();
-        }
-    });
+    const isRigidBodyMotion = affectedFaces.every(face => 
+        face.vertexIds.every(vId => vertexIdsToCopy.has(vId))
+    );
 
-    for (let i = 1; i < copyCount; i++) {
+    ctx.save();
+    ctx.globalAlpha = 1.0;
+
+    for (let i = 0; i < copyCount; i++) {
         let previewVerticesForThisCopy;
 
-        if (transformIndicatorData) {
+        if (i === 0) {
+            previewVerticesForThisCopy = initialDragVertexStates.filter(p => p.type === 'regular');
+        } else if (transformIndicatorData) {
             const { center, rotation, scale, directionalScale, startPos } = transformIndicatorData;
             const effectiveRotation = rotation * i;
             const effectiveScale = Math.pow(scale, i);
@@ -726,25 +721,70 @@ export function drawCopyPreviews(ctx, {
             }));
         }
 
-        const newIdMap = new Map(previewVerticesForThisCopy.map((p, j) => [verticesToCopy[j].id, p.id]));
+        const newIdMapForThisCopy = new Map();
+        previewVerticesForThisCopy.forEach((previewVertex, index) => {
+            const originalVertex = verticesToCopy[index];
+            newIdMapForThisCopy.set(originalVertex.id, previewVertex);
+        });
 
-        ctx.setLineDash(C.DASH_PATTERN);
-        incidentEdges.forEach(edge => {
-            const p1 = previewVerticesForThisCopy.find(p => p.id === newIdMap.get(edge.id1));
-            const p2 = previewVerticesForThisCopy.find(p => p.id === newIdMap.get(edge.id2));
-            if (p1 && p2) {
-                const p1Screen = dataToScreen(p1);
-                const p2Screen = dataToScreen(p2);
-                ctx.beginPath();
-                ctx.moveTo(p1Screen.x, p1Screen.y);
-                ctx.lineTo(p2Screen.x, p2Screen.y);
-                ctx.stroke();
+        affectedFaces.forEach(originalFace => {
+            const faceVerticesForThisCopy = [];
+            
+            originalFace.vertexIds.forEach(originalVertexId => {
+                if (vertexIdsToCopy.has(originalVertexId)) {
+                    const previewVertex = newIdMapForThisCopy.get(originalVertexId);
+                    if (previewVertex) {
+                        faceVerticesForThisCopy.push(previewVertex);
+                    }
+                } else {
+                    const staticVertex = findVertexById(originalVertexId);
+                    if (staticVertex && staticVertex.type === 'regular') {
+                        faceVerticesForThisCopy.push(staticVertex);
+                    }
+                }
+            });
+
+            if (faceVerticesForThisCopy.length >= 3) {
+                const screenVertices = faceVerticesForThisCopy.map(v => dataToScreen(v));
+                if (screenVertices.every(v => v && typeof v.x === 'number' && typeof v.y === 'number')) {
+                    ctx.fillStyle = originalFace.color || colors.face;
+                    ctx.beginPath();
+                    screenVertices.forEach((vertex, index) => {
+                        if (index === 0) {
+                            ctx.moveTo(vertex.x, vertex.y);
+                        } else {
+                            ctx.lineTo(vertex.x, vertex.y);
+                        }
+                    });
+                    ctx.closePath();
+                    ctx.fill();
+                }
             }
         });
 
+        if (isRigidBodyMotion) {
+            ctx.setLineDash([]);
+            incidentEdges.forEach(originalEdge => {
+                const p1 = newIdMapForThisCopy.get(originalEdge.id1);
+                const p2 = newIdMapForThisCopy.get(originalEdge.id2);
+                if (p1 && p2) {
+                    const p1Screen = dataToScreen(p1);
+                    const p2Screen = dataToScreen(p2);
+                    ctx.beginPath();
+                    ctx.moveTo(p1Screen.x, p1Screen.y);
+                    ctx.lineTo(p2Screen.x, p2Screen.y);
+                    ctx.strokeStyle = originalEdge.color || colors.defaultStroke;
+                    ctx.lineWidth = C.LINE_WIDTH;
+                    ctx.stroke();
+                }
+            });
+        }
+
+        ctx.setLineDash(isRigidBodyMotion ? [] : C.DASH_PATTERN);
         verticesToCopy.forEach(originalVertex => {
-            const correspondingPreviewVertex = previewVerticesForThisCopy.find(p => p.id === newIdMap.get(originalVertex.id));
+            const correspondingPreviewVertex = newIdMapForThisCopy.get(originalVertex.id);
             if (!correspondingPreviewVertex) return;
+            
             const neighbors = findNeighbors(originalVertex.id);
             neighbors.forEach(neighborId => {
                 if (!vertexIdsToCopy.has(neighborId)) {
@@ -755,13 +795,24 @@ export function drawCopyPreviews(ctx, {
                         ctx.beginPath();
                         ctx.moveTo(previewScreen.x, previewScreen.y);
                         ctx.lineTo(neighborScreen.x, neighborScreen.y);
+                        ctx.strokeStyle = colors.defaultStroke;
+                        ctx.lineWidth = C.LINE_WIDTH;
                         ctx.stroke();
                     }
                 }
             });
         });
 
-        previewVerticesForThisCopy.forEach(vertex => drawVertex(ctx, vertex, { selectedVertexIds: [], selectedCenterIds: [], activeCenterId: null, currentColor: vertex.color, colors, verticesVisible: true }, dataToScreen, () => {}));
+        previewVerticesForThisCopy.forEach(vertex => {
+            drawVertex(ctx, vertex, { 
+                selectedVertexIds: [], 
+                selectedCenterIds: [], 
+                activeCenterId: null, 
+                currentColor: vertex.color, 
+                colors, 
+                verticesVisible: true 
+            }, dataToScreen, () => {});
+        });
     }
 
     ctx.restore();
@@ -3080,6 +3131,192 @@ export function drawVisibilityIcon(ctx, rect, colors) {
     ctx.restore();
 }
 
+function drawColorPalette(ctx, htmlOverlay, state, updateHtmlLabel) {
+    const { canvasUI, colors, allColors, namedColors, colorAssignments, activeColorTargets, verticesVisible, edgesVisible, facesVisible, isDraggingColorTarget, draggedColorTargetInfo } = state;
+
+    const checkerboardColor1 = '#808080';
+    const checkerboardColor2 = '#c0c0c0';
+    
+    function drawCheckerboard(rect) {
+        const tileSize = rect.height / 3;
+        const numCols = Math.ceil(rect.width / tileSize);
+        for (let row = 0; row < 3; row++) {
+            for (let col = 0; col < numCols; col++) {
+                ctx.fillStyle = (row + col) % 2 === 0 ? checkerboardColor1 : checkerboardColor2;
+                const tileX = rect.x + col * tileSize;
+                const tileY = rect.y + row * tileSize;
+                const tileWidth = Math.min(tileSize, rect.x + rect.width - tileX);
+                const tileHeight = Math.min(tileSize, rect.y + rect.height - tileY);
+                if (tileWidth > 0 && tileHeight > 0) ctx.fillRect(tileX, tileY, tileWidth, tileHeight);
+            }
+        }
+    }
+    
+    const randomBtn = canvasUI.randomColorButton;
+    if (randomBtn) {
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(randomBtn.x, randomBtn.y, randomBtn.width, randomBtn.height);
+        ctx.strokeStyle = colors.uiDefault;
+        ctx.lineWidth = C.UI_BUTTON_BORDER_WIDTH;
+        ctx.strokeRect(randomBtn.x, randomBtn.y, randomBtn.width, randomBtn.height);
+        const centerX = randomBtn.x + randomBtn.width / 2;
+        const centerY = randomBtn.y + randomBtn.height / 2;
+        const wheelRadius = randomBtn.width * 0.35;
+        const segments = 8;
+        for (let i = 0; i < segments; i++) {
+            const angle1 = (i / segments) * 2 * Math.PI;
+            const angle2 = ((i + 1) / segments) * 2 * Math.PI;
+            const hue = (i / segments) * 360;
+            ctx.fillStyle = `hsl(${hue}, 70%, 60%)`;
+            ctx.beginPath();
+            ctx.moveTo(centerX, centerY);
+            ctx.arc(centerX, centerY, wheelRadius, angle1, angle2);
+            ctx.closePath();
+            ctx.fill();
+        }
+        ctx.fillStyle = colors.background;
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, wheelRadius * 0.4, 0, 2 * Math.PI);
+        ctx.fill();
+    }
+
+    const removeBtn = canvasUI.removeColorButton;
+    if (removeBtn) {
+        ctx.strokeStyle = colors.uiDefault;
+        ctx.lineWidth = C.UI_BUTTON_BORDER_WIDTH;
+        ctx.strokeRect(removeBtn.x, removeBtn.y, removeBtn.width, removeBtn.height);
+        ctx.beginPath();
+        ctx.moveTo(removeBtn.x + C.UI_BUTTON_ICON_PADDING, removeBtn.y + removeBtn.height / 2);
+        ctx.lineTo(removeBtn.x + removeBtn.width - C.UI_BUTTON_ICON_PADDING, removeBtn.y + removeBtn.height / 2);
+        ctx.stroke();
+    }
+
+    canvasUI.colorSwatches.forEach((swatch) => {
+        const colorItem = swatch.item;
+        let hasAlpha = false;
+        if (colorItem && colorItem.type === 'color') {
+            const parsedColor = U.parseColor(colorItem.value);
+            if (parsedColor && parsedColor.a < 1.0) hasAlpha = true;
+        } else if (colorItem && colorItem.type === 'colormap') {
+            if (colorItem.vertices.some(p => p.alpha !== undefined && p.alpha < 1.0)) hasAlpha = true;
+        }
+        if (hasAlpha) drawCheckerboard(swatch);
+        if (colorItem && colorItem.type === 'colormap') {
+            const gradient = ctx.createLinearGradient(swatch.x, swatch.y, swatch.x + swatch.width, swatch.y);
+            colorItem.vertices.forEach(vertex => {
+                let colorValue = vertex.color;
+                if (typeof colorValue === 'string') colorValue = namedColors[colorValue] || [0, 0, 0];
+                gradient.addColorStop(vertex.pos, `rgba(${colorValue.join(',')},${vertex.alpha || 1.0})`);
+            });
+            ctx.fillStyle = gradient;
+        } else if (colorItem) {
+            ctx.fillStyle = colorItem.value;
+        }
+        ctx.fillRect(swatch.x, swatch.y, swatch.width, swatch.height);
+    });
+
+    const addBtn = canvasUI.addColorButton;
+    if (addBtn) {
+        ctx.strokeStyle = colors.uiDefault;
+        ctx.lineWidth = C.UI_BUTTON_BORDER_WIDTH;
+        ctx.strokeRect(addBtn.x, addBtn.y, addBtn.width, addBtn.height);
+        ctx.beginPath();
+        ctx.moveTo(addBtn.x + addBtn.width / 2, addBtn.y + C.UI_BUTTON_ICON_PADDING);
+        ctx.lineTo(addBtn.x + addBtn.width / 2, addBtn.y + addBtn.height - C.UI_BUTTON_ICON_PADDING);
+        ctx.moveTo(addBtn.x + C.UI_BUTTON_ICON_PADDING, addBtn.y + addBtn.height / 2);
+        ctx.lineTo(addBtn.x + addBtn.width - C.UI_BUTTON_ICON_PADDING, addBtn.y + addBtn.height / 2);
+        ctx.stroke();
+    }
+
+    if (canvasUI.colorTargetIcons) {
+        const getIconOptions = (target) => {
+            // Check if this target is being dragged and use preview color
+            let targetColorIndex = colorAssignments[target];
+            if (isDraggingColorTarget && draggedColorTargetInfo && draggedColorTargetInfo.target === target && draggedColorTargetInfo.previewColorIndex !== undefined) {
+                targetColorIndex = draggedColorTargetInfo.previewColorIndex;
+            }
+
+            const colorItem = (targetColorIndex === -1) ? null : allColors[targetColorIndex];
+
+            const options = {};
+            if (target === C.COLOR_TARGET_VERTEX) {
+                options.vertexState = verticesVisible ? 'filled' : 'disabled';
+                if (targetColorIndex === -1) {
+                    options.vertexColor = 'rgba(128, 128, 128, 1)';
+                } else if (colorItem && colorItem.type === 'color') {
+                    options.vertexColor = colorItem.value;
+                } else if (colorItem && colorItem.type === 'colormap') {
+                    options.vertexColormapItem = colorItem;
+                }
+            } else if (target === C.COLOR_TARGET_EDGE) {
+                options.edgeState = edgesVisible ? 'solid' : 'disabled';
+                if (targetColorIndex === -1) {
+                    options.edgeColor = 'rgba(128, 128, 128, 1)';
+                } else if (colorItem && colorItem.type === 'color') {
+                    options.edgeColor = colorItem.value;
+                } else if (colorItem && colorItem.type === 'colormap') {
+                    options.edgeColormapItem = colorItem;
+                }
+            } else if (target === C.COLOR_TARGET_FACE) {
+                options.faceState = facesVisible ? 'filled' : 'disabled';
+                if (targetColorIndex === -1) {
+                    options.faceColor = 'rgba(128, 128, 128, 1)';
+                } else if (colorItem && colorItem.type === 'color') {
+                    options.faceColor = colorItem.value;
+                }
+            }
+            return options;
+        };
+
+        const drawOrder = [C.COLOR_TARGET_FACE, C.COLOR_TARGET_EDGE, C.COLOR_TARGET_VERTEX];
+        drawOrder.forEach(targetToDraw => {
+            const icon = canvasUI.colorTargetIcons.find(i => i.target === targetToDraw);
+            if (icon) {
+                const isActive = activeColorTargets.includes(targetToDraw);
+                drawTriangleIcon(ctx, icon, getIconOptions(targetToDraw), colors, isActive);
+            }
+        });
+    }
+
+    // Draw combined selection boxes
+    const drawnBoxesForSwatches = new Set();
+    activeColorTargets.forEach(target => {
+        let targetColorIndex = colorAssignments[target];
+        if (isDraggingColorTarget && draggedColorTargetInfo && draggedColorTargetInfo.target === target && draggedColorTargetInfo.previewColorIndex !== undefined) {
+            targetColorIndex = draggedColorTargetInfo.previewColorIndex;
+        }
+        
+        if (targetColorIndex === -1 || drawnBoxesForSwatches.has(targetColorIndex)) return;
+
+        const swatch = canvasUI.colorSwatches.find(s => s.index === targetColorIndex);
+        if (swatch) {
+            const targetsForThisSwatch = Object.keys(colorAssignments).filter(t => {
+                let checkIndex = colorAssignments[t];
+                if (isDraggingColorTarget && draggedColorTargetInfo && draggedColorTargetInfo.target === t && draggedColorTargetInfo.previewColorIndex !== undefined) {
+                    checkIndex = draggedColorTargetInfo.previewColorIndex;
+                }
+                return checkIndex === swatch.index && activeColorTargets.includes(t);
+            });
+            const iconsForThisSwatch = canvasUI.colorTargetIcons.filter(icon => targetsForThisSwatch.includes(icon.target));
+
+            if (iconsForThisSwatch.length > 0) {
+                const minY = Math.min(...iconsForThisSwatch.map(i => i.y));
+                
+                ctx.strokeStyle = colors.selectionGlow;
+                ctx.lineWidth = C.UI_BUTTON_BORDER_WIDTH;
+                const padding = 2;
+                const boxX = swatch.x - padding;
+                const boxY = minY - padding;
+                const boxWidth = swatch.width + (padding * 2);
+                const boxHeight = (swatch.y + swatch.height) - boxY + padding;
+                
+                ctx.strokeRect(boxX, boxY, boxWidth, boxHeight);
+                drawnBoxesForSwatches.add(targetColorIndex);
+            }
+        }
+    });
+}
+
 function drawColorToolbarPreview(ctx, rect, { verticesVisible, edgesVisible, facesVisible, colorAssignments, allColors }, colors) {
     const options = {
         vertexState: verticesVisible ? 'filled' : 'hidden',
@@ -3229,10 +3466,6 @@ function drawTriangleIcon(ctx, rect, options, colors, isActive = false) {
 
 export function drawFace(ctx, screenVertices, color, colors) {
     if (!screenVertices || screenVertices.length < 3) return;
-
-    if (U.isSelfIntersecting(screenVertices)) {
-        return;
-    }
 
     ctx.save();
     ctx.fillStyle = color || colors.face;
@@ -3384,172 +3617,8 @@ function drawMainToolbar(ctx, htmlOverlay, state, updateHtmlLabel) {
    }
 }
 
-function drawColorPalette(ctx, htmlOverlay, state, updateHtmlLabel) {
-    const { canvasUI, colors, allColors, namedColors, colorAssignments, activeColorTargets, verticesVisible, edgesVisible, facesVisible } = state;
 
-    const checkerboardColor1 = '#808080';
-    const checkerboardColor2 = '#c0c0c0';
-    
-    function drawCheckerboard(rect) {
-        const tileSize = rect.height / 3;
-        const numCols = Math.ceil(rect.width / tileSize);
-        for (let row = 0; row < 3; row++) {
-            for (let col = 0; col < numCols; col++) {
-                ctx.fillStyle = (row + col) % 2 === 0 ? checkerboardColor1 : checkerboardColor2;
-                const tileX = rect.x + col * tileSize;
-                const tileY = rect.y + row * tileSize;
-                const tileWidth = Math.min(tileSize, rect.x + rect.width - tileX);
-                const tileHeight = Math.min(tileSize, rect.y + rect.height - tileY);
-                if (tileWidth > 0 && tileHeight > 0) ctx.fillRect(tileX, tileY, tileWidth, tileHeight);
-            }
-        }
-    }
-    
-    const randomBtn = canvasUI.randomColorButton;
-    if (randomBtn) {
-        ctx.fillStyle = '#000000';
-        ctx.fillRect(randomBtn.x, randomBtn.y, randomBtn.width, randomBtn.height);
-        ctx.strokeStyle = colors.uiDefault;
-        ctx.lineWidth = C.UI_BUTTON_BORDER_WIDTH;
-        ctx.strokeRect(randomBtn.x, randomBtn.y, randomBtn.width, randomBtn.height);
-        const centerX = randomBtn.x + randomBtn.width / 2;
-        const centerY = randomBtn.y + randomBtn.height / 2;
-        const wheelRadius = randomBtn.width * 0.35;
-        const segments = 8;
-        for (let i = 0; i < segments; i++) {
-            const angle1 = (i / segments) * 2 * Math.PI;
-            const angle2 = ((i + 1) / segments) * 2 * Math.PI;
-            const hue = (i / segments) * 360;
-            ctx.fillStyle = `hsl(${hue}, 70%, 60%)`;
-            ctx.beginPath();
-            ctx.moveTo(centerX, centerY);
-            ctx.arc(centerX, centerY, wheelRadius, angle1, angle2);
-            ctx.closePath();
-            ctx.fill();
-        }
-        ctx.fillStyle = colors.background;
-        ctx.beginPath();
-        ctx.arc(centerX, centerY, wheelRadius * 0.4, 0, 2 * Math.PI);
-        ctx.fill();
-    }
 
-    const removeBtn = canvasUI.removeColorButton;
-    if (removeBtn) {
-        ctx.strokeStyle = colors.uiDefault;
-        ctx.lineWidth = C.UI_BUTTON_BORDER_WIDTH;
-        ctx.strokeRect(removeBtn.x, removeBtn.y, removeBtn.width, removeBtn.height);
-        ctx.beginPath();
-        ctx.moveTo(removeBtn.x + C.UI_BUTTON_ICON_PADDING, removeBtn.y + removeBtn.height / 2);
-        ctx.lineTo(removeBtn.x + removeBtn.width - C.UI_BUTTON_ICON_PADDING, removeBtn.y + removeBtn.height / 2);
-        ctx.stroke();
-    }
-
-    canvasUI.colorSwatches.forEach((swatch) => {
-        const colorItem = swatch.item;
-        let hasAlpha = false;
-        if (colorItem && colorItem.type === 'color') {
-            const parsedColor = U.parseColor(colorItem.value);
-            if (parsedColor && parsedColor.a < 1.0) hasAlpha = true;
-        } else if (colorItem && colorItem.type === 'colormap') {
-            if (colorItem.vertices.some(p => p.alpha !== undefined && p.alpha < 1.0)) hasAlpha = true;
-        }
-        if (hasAlpha) drawCheckerboard(swatch);
-        if (colorItem && colorItem.type === 'colormap') {
-            const gradient = ctx.createLinearGradient(swatch.x, swatch.y, swatch.x + swatch.width, swatch.y);
-            colorItem.vertices.forEach(vertex => {
-                let colorValue = vertex.color;
-                if (typeof colorValue === 'string') colorValue = namedColors[colorValue] || [0, 0, 0];
-                gradient.addColorStop(vertex.pos, `rgba(${colorValue.join(',')},${vertex.alpha || 1.0})`);
-            });
-            ctx.fillStyle = gradient;
-        } else if (colorItem) {
-            ctx.fillStyle = colorItem.value;
-        }
-        ctx.fillRect(swatch.x, swatch.y, swatch.width, swatch.height);
-    });
-
-    const addBtn = canvasUI.addColorButton;
-    if (addBtn) {
-        ctx.strokeStyle = colors.uiDefault;
-        ctx.lineWidth = C.UI_BUTTON_BORDER_WIDTH;
-        ctx.strokeRect(addBtn.x, addBtn.y, addBtn.width, addBtn.height);
-        ctx.beginPath();
-        ctx.moveTo(addBtn.x + addBtn.width / 2, addBtn.y + C.UI_BUTTON_ICON_PADDING);
-        ctx.lineTo(addBtn.x + addBtn.width / 2, addBtn.y + addBtn.height - C.UI_BUTTON_ICON_PADDING);
-        ctx.moveTo(addBtn.x + C.UI_BUTTON_ICON_PADDING, addBtn.y + addBtn.height / 2);
-        ctx.lineTo(addBtn.x + addBtn.width - C.UI_BUTTON_ICON_PADDING, addBtn.y + addBtn.height / 2);
-        ctx.stroke();
-    }
-
-    if (canvasUI.colorTargetIcons) {
-        const getIconOptions = (target) => {
-            const colorIndex = colorAssignments[target];
-            const colorItem = (colorIndex === -1) ? null : allColors[colorIndex];
-
-            const options = {};
-            if (target === C.COLOR_TARGET_VERTEX) {
-                options.vertexState = verticesVisible ? 'filled' : 'disabled';
-                if (colorItem && colorItem.type === 'color') {
-                    options.vertexColor = colorItem.value;
-                } else if (colorItem && colorItem.type === 'colormap') {
-                    options.vertexColormapItem = colorItem;
-                }
-            } else if (target === C.COLOR_TARGET_EDGE) {
-                options.edgeState = edgesVisible ? 'solid' : 'disabled';
-                if (colorItem && colorItem.type === 'color') {
-                    options.edgeColor = colorItem.value;
-                } else if (colorItem && colorItem.type === 'colormap') {
-                    options.edgeColormapItem = colorItem;
-                }
-            } else if (target === C.COLOR_TARGET_FACE) {
-                options.faceState = facesVisible ? 'filled' : 'disabled';
-                if (colorItem && colorItem.type === 'color') {
-                    options.faceColor = colorItem.value;
-                }
-            }
-            return options;
-        };
-
-        const drawOrder = [C.COLOR_TARGET_FACE, C.COLOR_TARGET_EDGE, C.COLOR_TARGET_VERTEX];
-        drawOrder.forEach(targetToDraw => {
-            const icon = canvasUI.colorTargetIcons.find(i => i.target === targetToDraw);
-            if (icon) {
-                const isActive = activeColorTargets.includes(targetToDraw);
-                drawTriangleIcon(ctx, icon, getIconOptions(targetToDraw), colors, isActive);
-            }
-        });
-    }
-
-    // Draw combined selection boxes
-    const drawnBoxesForSwatches = new Set();
-    activeColorTargets.forEach(target => {
-        const colorIndex = colorAssignments[target];
-        if (colorIndex === -1 || drawnBoxesForSwatches.has(colorIndex)) return;
-
-        const swatch = canvasUI.colorSwatches.find(s => s.index === colorIndex);
-        if (swatch) {
-            const targetsForThisSwatch = Object.keys(colorAssignments).filter(t => 
-                colorAssignments[t] === swatch.index && activeColorTargets.includes(t)
-            );
-            const iconsForThisSwatch = canvasUI.colorTargetIcons.filter(icon => targetsForThisSwatch.includes(icon.target));
-
-            if (iconsForThisSwatch.length > 0) {
-                const minY = Math.min(...iconsForThisSwatch.map(i => i.y));
-                
-                ctx.strokeStyle = colors.selectionGlow;
-                ctx.lineWidth = C.UI_BUTTON_BORDER_WIDTH;
-                const padding = 2;
-                const boxX = swatch.x - padding;
-                const boxY = minY - padding;
-                const boxWidth = swatch.width + (padding * 2);
-                const boxHeight = (swatch.y + swatch.height) - boxY + padding;
-                
-                ctx.strokeRect(boxX, boxY, boxWidth, boxHeight);
-                drawnBoxesForSwatches.add(colorIndex);
-            }
-        }
-    });
-}
 function drawTransformPanel(ctx, state) {
     const { canvasUI, colors } = state;
     canvasUI.transformIcons.forEach(icon => {
@@ -3558,9 +3627,8 @@ function drawTransformPanel(ctx, state) {
 }
 
 function drawDisplayPanel(ctx, htmlOverlay, state, updateHtmlLabel) {
-    const { canvasUI, colors, colorAssignments, allColors, coordsDisplayMode, gridDisplayMode, angleDisplayMode, distanceDisplayMode } = state;
+    const { canvasUI, colors, coordsDisplayMode, gridDisplayMode, angleDisplayMode, distanceDisplayMode, activeThemeName } = state;
     
-
     canvasUI.displayIcons.forEach(icon => {
         const rect = { x: icon.x, y: icon.y, width: icon.width, height: icon.height };
         switch (icon.group) {
@@ -3570,11 +3638,18 @@ function drawDisplayPanel(ctx, htmlOverlay, state, updateHtmlLabel) {
             case 'grid':
                 drawGridIcon(ctx, rect, gridDisplayMode, gridDisplayMode !== C.GRID_DISPLAY_MODE_NONE, colors);
                 break;
+            case 'angles':
+                drawAngleIcon(ctx, rect, angleDisplayMode, angleDisplayMode !== C.ANGLE_DISPLAY_MODE_NONE, htmlOverlay, updateHtmlLabel, colors);
+                break;
+            case 'distances':
+                drawDistanceIcon(ctx, rect, distanceDisplayMode, distanceDisplayMode === C.DISTANCE_DISPLAY_MODE_ON, htmlOverlay, updateHtmlLabel, colors);
+                break;
+            case 'theme':
+                drawThemeIcon(ctx, rect, activeThemeName, colors);
+                break;
         }
     });
 }
-
-
 export function drawCanvasUI(ctx, htmlOverlay, state, updateHtmlLabel) {
     const { dpr, isToolbarExpanded, isColorPaletteExpanded, isTransformPanelExpanded, isDisplayPanelExpanded, isVisibilityPanelExpanded,
         isPlacingTransform, placingTransformType, placingSnapPos, mousePos, colors } = state;
@@ -3621,6 +3696,31 @@ export function drawCanvasUI(ctx, htmlOverlay, state, updateHtmlLabel) {
     }
 
     ctx.restore();
+}
+
+export function getIconPreviewColor(target, draggedColorTargetInfo, allColors, colors) {
+    if (draggedColorTargetInfo && draggedColorTargetInfo.target === target && draggedColorTargetInfo.previewColorIndex !== undefined) {
+        const colorIndex = draggedColorTargetInfo.previewColorIndex;
+        if (colorIndex === -1) {
+            return generateRandomColor();
+        }
+        const item = allColors[colorIndex];
+        if (item?.type === 'color') {
+            return item.value;
+        } else if (item?.type === 'colormap') {
+            return sampleColormap(item, 0.5);
+        }
+    }
+    
+    // Fallback to current assignment
+    const colorIndex = colorAssignments[target];
+    if (colorIndex === -1) {
+        return 'rgba(128, 128, 128, 1)';
+    }
+    const item = allColors[colorIndex];
+    if (!item) return colors.uiIcon;
+    if (item.type === 'color') return item.value;
+    return colors.uiIcon;
 }
 
 export function drawSelectedEdgeDistances(ctx, htmlOverlay, selectedEdgeIds, allEdges, { showDistances, distanceSigFigs, colors, lastGridState }, findVertexById, getEdgeId, dataToScreen, updateHtmlLabel, currentVertexStates = null) {
@@ -4163,6 +4263,34 @@ let currentShiftPressed = false;
 let clipboard = { vertices: [], edges: [], faces: [], referenceVertex: null };
 let clickData = { targetId: null, type: null, count: 0, timestamp: 0 };
 let undoStack = [];
+
+function setupUndoStackDebugging() {
+    const originalPop = Array.prototype.pop;
+    const originalPush = Array.prototype.push;
+    const originalShift = Array.prototype.shift;
+    const originalSplice = Array.prototype.splice;
+
+    undoStack.pop = function() {
+        const result = originalPop.call(this);
+        return result;
+    };
+
+    undoStack.push = function(...args) {
+        const result = originalPush.call(this, ...args);
+        return result;
+    };
+
+    undoStack.shift = function() {
+        const result = originalShift.call(this);
+        return result;
+    };
+
+    undoStack.splice = function(...args) {
+        const result = originalSplice.call(this, ...args);
+        return result;
+    };
+}
+
 let redoStack = [];
 let ghostVertexPosition = null;
 let selectedCenterIds = [];
@@ -4191,7 +4319,7 @@ let lastAngularGridState = {
 let labelsToKeepThisFrame = new Set();
 let activeThemeName = 'dark';
 
-let activeColorTargets = [C.COLOR_TARGET_VERTEX];
+let activeColorTargets = [];
 let isDraggingColorSwatch = false;
 let draggedSwatchInfo = null;
 
@@ -4206,6 +4334,7 @@ let draggedCoordSystemElement = null;
 let coordSystemSnapTargets = null;
 
 let deletedFaceIds = new Set(); // Track explicitly deleted faces
+let draggedSwatchTemporarilyRemoved = false;
 
 
 function ensureFaceCoordinateSystems() {
@@ -4293,7 +4422,6 @@ function applyColormapToEdge(edge, index = 0, total = 1) {
 }
 
 function applyColorsToSelection() {
-    saveStateForUndo();
 
     activeColorTargets.forEach(target => {
         const colorIndex = colorAssignments[target];
@@ -4977,16 +5105,6 @@ function buildColorPaletteUI() {
 
     let currentX = C.UI_TOOLBAR_WIDTH + C.UI_BUTTON_PADDING;
 
-    canvasUI.randomColorButton = {
-        id: "random-color-button",
-        type: "button",
-        x: currentX,
-        y: paletteY + C.COLOR_PALETTE_Y_OFFSET,
-        width: C.UI_SWATCH_SIZE,
-        height: C.UI_SWATCH_SIZE,
-    };
-    currentX += C.UI_SWATCH_SIZE + C.UI_BUTTON_PADDING;
-
     canvasUI.removeColorButton = {
         id: "remove-color-button",
         type: "button",
@@ -5028,10 +5146,11 @@ function buildColorPaletteUI() {
     Object.entries(colorAssignments).forEach(([target, colorIndex]) => {
         const iconSize = C.UI_SWATCH_SIZE * 0.75;
         let swatch;
-        if (colorIndex === -1) {
-            swatch = canvasUI.randomColorButton;
-        } else {
+        if (colorIndex >= 0 && colorIndex < allColors.length) {
             swatch = canvasUI.colorSwatches.find(s => s.index === colorIndex);
+        } else {
+            swatch = canvasUI.colorSwatches[0];
+            colorAssignments[target] = 0;
         }
 
         if (swatch) {
@@ -5045,6 +5164,24 @@ function buildColorPaletteUI() {
             });
         }
     });
+}
+
+function removeColorAtIndex(indexToRemove) {
+    if (indexToRemove < 0 || indexToRemove >= allColors.length || allColors.length <= 1) {
+        return;
+    }
+
+    allColors.splice(indexToRemove, 1);
+
+    Object.keys(colorAssignments).forEach(target => {
+        if (colorAssignments[target] > indexToRemove) {
+            colorAssignments[target]--;
+        } else if (colorAssignments[target] === indexToRemove) {
+            colorAssignments[target] = Math.min(indexToRemove, allColors.length - 1);
+        }
+    });
+
+    buildColorPaletteUI();
 }
 
 function buildVisibilityPanelUI() {
@@ -5099,29 +5236,11 @@ function buildMainToolbarUI() {
         height: C.TOOL_BUTTON_HEIGHT,
     };
 
-    canvasUI.displayToolButton = {
-        id: "display-tool-button",
-        type: "toolButton",
-        x: C.UI_BUTTON_PADDING,
-        y: canvasUI.transformToolButton.y + canvasUI.transformToolButton.height + C.UI_BUTTON_PADDING,
-        width: C.UI_TOOLBAR_WIDTH - (2 * C.UI_BUTTON_PADDING),
-        height: C.TOOL_BUTTON_HEIGHT,
-    };
-
     canvasUI.visibilityToolButton = {
         id: "visibility-tool-button",
         type: "toolButton",
         x: C.UI_BUTTON_PADDING,
-        y: canvasUI.displayToolButton.y + canvasUI.displayToolButton.height + C.UI_BUTTON_PADDING,
-        width: C.UI_TOOLBAR_WIDTH - (2 * C.UI_BUTTON_PADDING),
-        height: C.TOOL_BUTTON_HEIGHT,
-    };
-
-    canvasUI.themeToggleButton = {
-        id: "theme-toggle-button",
-        type: "toolButton",
-        x: C.UI_BUTTON_PADDING,
-        y: canvasUI.visibilityToolButton.y + canvasUI.visibilityToolButton.height + C.UI_BUTTON_PADDING,
+        y: canvasUI.transformToolButton.y + canvasUI.transformToolButton.height + C.UI_BUTTON_PADDING,
         width: C.UI_TOOLBAR_WIDTH - (2 * C.UI_BUTTON_PADDING),
         height: C.TOOL_BUTTON_HEIGHT,
     };
@@ -5141,20 +5260,6 @@ function handleDisplayPanelClick(screenPos) {
                         const gridModes = [C.GRID_DISPLAY_MODE_LINES, C.GRID_DISPLAY_MODE_POINTS, C.GRID_DISPLAY_MODE_TRIANGULAR, C.GRID_DISPLAY_MODE_POLAR, C.GRID_DISPLAY_MODE_NONE];
                         gridDisplayMode = gridModes[(gridModes.indexOf(gridDisplayMode) + 1) % gridModes.length];
                         break;
-                }
-                return true;
-            }
-        }
-    }
-    return false;
-}
-
-function handleVisibilityPanelClick(screenPos) {
-    if (isVisibilityPanelExpanded) {
-        for (const icon of canvasUI.visibilityIcons) {
-            if (screenPos.x >= icon.x && screenPos.x <= icon.x + icon.width &&
-                screenPos.y >= icon.y && screenPos.y <= icon.y + icon.height) {
-                switch (icon.group) {
                     case 'angles':
                         const angleModes = [C.ANGLE_DISPLAY_MODE_DEGREES, C.ANGLE_DISPLAY_MODE_RADIANS, C.ANGLE_DISPLAY_MODE_NONE];
                         angleDisplayMode = angleModes[(angleModes.indexOf(angleDisplayMode) + 1) % angleModes.length];
@@ -5165,6 +5270,9 @@ function handleVisibilityPanelClick(screenPos) {
                         distanceDisplayMode = distModes[(distModes.indexOf(distanceDisplayMode) + 1) % distModes.length];
                         showDistances = distanceDisplayMode === C.DISTANCE_DISPLAY_MODE_ON;
                         break;
+                    case 'theme':
+                        handleThemeToggle();
+                        break;
                 }
                 return true;
             }
@@ -5172,6 +5280,7 @@ function handleVisibilityPanelClick(screenPos) {
     }
     return false;
 }
+
 
 function handleCanvasUIClick(screenPos, shiftKey = false, ctrlKey = false) {
     const btn = canvasUI.toolbarButton;
@@ -5206,26 +5315,11 @@ function handleCanvasUIClick(screenPos, shiftKey = false, ctrlKey = false) {
             return true;
         }
 
-        const dtb = canvasUI.displayToolButton;
-        if (dtb && screenPos.x >= dtb.x && screenPos.x <= dtb.x + dtb.width &&
-            screenPos.y >= dtb.y && screenPos.y <= dtb.y + dtb.height) {
-            isDisplayPanelExpanded = !isDisplayPanelExpanded;
-            if (isDisplayPanelExpanded) buildDisplayPanelUI();
-            return true;
-        }
-
         const vtb = canvasUI.visibilityToolButton;
         if (vtb && screenPos.x >= vtb.x && screenPos.x <= vtb.x + vtb.width &&
             screenPos.y >= vtb.y && screenPos.y <= vtb.y + vtb.height) {
-            isVisibilityPanelExpanded = !isVisibilityPanelExpanded;
-            if (isVisibilityPanelExpanded) buildVisibilityPanelUI();
-            return true;
-        }
-
-        const themeBtn = canvasUI.themeToggleButton;
-        if (themeBtn && screenPos.x >= themeBtn.x && screenPos.x <= themeBtn.x + themeBtn.width &&
-            screenPos.y >= themeBtn.y && screenPos.y <= themeBtn.y + themeBtn.height) {
-            handleThemeToggle();
+            isDisplayPanelExpanded = !isDisplayPanelExpanded;
+            if (isDisplayPanelExpanded) buildDisplayPanelUI();
             return true;
         }
     }
@@ -5242,6 +5336,7 @@ function handleCanvasUIClick(screenPos, shiftKey = false, ctrlKey = false) {
                 screenPos.y >= icon.y && screenPos.y <= icon.y + icon.height) {
                 isPlacingTransform = true;
                 placingTransformType = icon.type;
+                canvas.style.cursor = 'none';
                 return true;
             }
         }
@@ -5253,15 +5348,31 @@ function handleCanvasUIClick(screenPos, shiftKey = false, ctrlKey = false) {
         }
     }
 
-    if (isVisibilityPanelExpanded) {
-        if (handleVisibilityPanelClick(screenPos, shiftKey, ctrlKey)) {
-            return true;
-        }
-    }
-
     return false;
 }
 
+function buildDisplayPanelUI() {
+    canvasUI.displayIcons = [];
+    if (!canvasUI.visibilityToolButton) return;
+
+    const panelX = C.UI_TOOLBAR_WIDTH + C.UI_BUTTON_PADDING;
+    const iconY = canvasUI.visibilityToolButton.y;
+    const iconSize = C.DISPLAY_ICON_SIZE;
+    const iconPadding = C.DISPLAY_ICON_PADDING;
+
+    const iconGroups = ['coords', 'grid', 'angles', 'distances', 'theme'];
+
+    iconGroups.forEach((group, index) => {
+        canvasUI.displayIcons.push({
+            id: `display-icon-${group}`,
+            group: group,
+            x: panelX + index * (iconSize + iconPadding),
+            y: iconY,
+            width: iconSize,
+            height: iconSize
+        });
+    });
+}
 
 function addToColors(colorObject) {
     if (!colorObject || !colorObject.type) {
@@ -5308,23 +5419,20 @@ function getPrecedingSegment(vertexId, edgesToIgnoreIds = []) {
 }
 
 function saveStateForUndo() {
-    const state = {
-        vertices: JSON.parse(JSON.stringify(allVertices)),
-        edges: JSON.parse(JSON.stringify(allEdges)),
-        faces: JSON.parse(JSON.stringify(allFaces)),
-        selectedVertexIds: JSON.parse(JSON.stringify(selectedVertexIds)),
-        selectedEdgeIds: JSON.parse(JSON.stringify(selectedEdgeIds)),
-        selectedFaceIds: JSON.parse(JSON.stringify(selectedFaceIds)),
-        activeCenterId: activeCenterId,
-        isDrawingMode: isDrawingMode,
-        previewLineStartVertexId: previewLineStartVertexId,
-        frozenReference_A_rad, frozenReference_A_baseRad, frozenReference_D_du, frozenReference_Origin_Data,
-        frozenReference_D_g2g,
-        deletedFaceIds: new Set(deletedFaceIds)
+    const state = getCurrentState();
+    
+    // Create a simple signature of the current state
+    const signature = {
+        colorCount: allColors.length,
+        firstColor: allColors[0]?.value || 'none',
+        vertexCount: allVertices.length
     };
+    
+    
     undoStack.push(state);
     if (undoStack.length > C.MAX_HISTORY_SIZE) undoStack.shift();
     redoStack = [];
+    
 }
 
 function restoreState(state) {
@@ -5334,6 +5442,19 @@ function restoreState(state) {
     selectedVertexIds = JSON.parse(JSON.stringify(state.selectedVertexIds || []));
     selectedEdgeIds = JSON.parse(JSON.stringify(state.selectedEdgeIds || []));
     selectedFaceIds = JSON.parse(JSON.stringify(state.selectedFaceIds || []));
+    selectedCenterIds = JSON.parse(JSON.stringify(state.selectedCenterIds || []));
+    activeColorTargets = JSON.parse(JSON.stringify(state.activeColorTargets || []));
+    allColors = state.allColors ? JSON.parse(JSON.stringify(state.allColors)) : C.DEFAULT_RECENT_COLORS.map(color => {
+        if (typeof color === 'string') {
+            return { type: 'color', value: color };
+        }
+        return color;
+    });
+    colorAssignments = state.colorAssignments ? JSON.parse(JSON.stringify(state.colorAssignments)) : {
+        [C.COLOR_TARGET_VERTEX]: 0,
+        [C.COLOR_TARGET_EDGE]: 1,
+        [C.COLOR_TARGET_FACE]: 2,
+    };
     activeCenterId = state.activeCenterId !== undefined ? state.activeCenterId : null;
     isDrawingMode = state.isDrawingMode !== undefined ? state.isDrawingMode : false;
     previewLineStartVertexId = state.previewLineStartVertexId !== undefined ? state.previewLineStartVertexId : null;
@@ -5346,45 +5467,69 @@ function restoreState(state) {
     isActionInProgress = false; isDragConfirmed = false; isRectangleSelecting = false;
     isPanningBackground = false; dragPreviewVertices = [];
     actionTargetVertex = null; currentMouseButton = -1;
-    clickData = { vertexId: null, count: 0, timestamp: 0 };
+    clickData = { targetId: null, type: null, count: 0, timestamp: 0 };
     canvas.style.cursor = 'crosshair';
+    if (isColorPaletteExpanded) {
+        buildColorPaletteUI();
+    }
     ensureFaceCoordinateSystems();
+    const restoredState = getCurrentState();
+    if (undoStack.length === 0) {
+        undoStack.push(restoredState);
+    }
+    // REMOVE THE LINE BELOW:
+    // saveStateForUndo();  <-- REMOVE THIS
+}
+
+function getCurrentState() {
+    return {
+        vertices: JSON.parse(JSON.stringify(allVertices)),
+        edges: JSON.parse(JSON.stringify(allEdges)),
+        faces: JSON.parse(JSON.stringify(allFaces)),
+        selectedVertexIds: JSON.parse(JSON.stringify(selectedVertexIds)),
+        selectedEdgeIds: JSON.parse(JSON.stringify(selectedEdgeIds)),
+        selectedFaceIds: JSON.parse(JSON.stringify(selectedFaceIds)),
+        selectedCenterIds: JSON.parse(JSON.stringify(selectedCenterIds)),
+        activeColorTargets: JSON.parse(JSON.stringify(activeColorTargets)),
+        colorAssignments: JSON.parse(JSON.stringify(colorAssignments)),
+        allColors: JSON.parse(JSON.stringify(allColors)),
+        activeCenterId: activeCenterId,
+        isDrawingMode: isDrawingMode,
+        previewLineStartVertexId: previewLineStartVertexId,
+        frozenReference_A_rad, frozenReference_A_baseRad, frozenReference_D_du, frozenReference_Origin_Data,
+        frozenReference_D_g2g,
+        deletedFaceIds: new Set(deletedFaceIds)
+    };
 }
 
 function handleUndo() {
     if (undoStack.length === 0) return;
-    const currentStateForRedo = {
-        vertices: JSON.parse(JSON.stringify(allVertices)),
-        edges: JSON.parse(JSON.stringify(allEdges)),
-        faces: JSON.parse(JSON.stringify(allFaces)),
-        selectedVertexIds: JSON.parse(JSON.stringify(selectedVertexIds)),
-        selectedEdgeIds: JSON.parse(JSON.stringify(selectedEdgeIds)),
-        selectedFaceIds: JSON.parse(JSON.stringify(selectedFaceIds)),
-        activeCenterId: activeCenterId,
-        isDrawingMode: isDrawingMode,
-        previewLineStartVertexId: previewLineStartVertexId,
-        frozenReference_A_rad, frozenReference_A_baseRad, frozenReference_D_du, frozenReference_Origin_Data
+    
+    
+    const currentStateForRedo = getCurrentState();
+    const currentSignature = {
+        colorCount: allColors.length,
+        firstColor: allColors[0]?.value || 'none',
+        vertexCount: allVertices.length
     };
+    
     redoStack.push(currentStateForRedo);
     if (redoStack.length > C.MAX_HISTORY_SIZE) redoStack.shift();
+    
     const prevState = undoStack.pop();
+    
     restoreState(prevState);
+    
+    const restoredSignature = {
+        colorCount: allColors.length,
+        firstColor: allColors[0]?.value || 'none',
+        vertexCount: allVertices.length
+    };
 }
 
 function handleRedo() {
     if (redoStack.length === 0) return;
-    const currentStateForUndo = {
-        vertices: JSON.parse(JSON.stringify(allVertices)),
-        edges: JSON.parse(JSON.stringify(allEdges)),
-        faces: JSON.parse(JSON.stringify(allFaces)),
-        selectedVertexIds: JSON.parse(JSON.stringify(selectedVertexIds)),
-        selectedEdgeIds: JSON.parse(JSON.stringify(selectedEdgeIds)),
-        selectedFaceIds: JSON.parse(JSON.stringify(selectedFaceIds)),
-        activeCenterId: activeCenterId,
-        isDrawingMode: isDrawingMode,
-        previewLineStartVertexId: previewLineStartVertexId,
-        frozenReference_A_rad, frozenReference_A_baseRad, frozenReference_D_du, frozenReference_Origin_Data
-    };
+    const currentStateForUndo = getCurrentState();
     undoStack.push(currentStateForUndo);
     if (undoStack.length > C.MAX_HISTORY_SIZE) undoStack.shift();
     const nextState = redoStack.pop();
@@ -5549,14 +5694,13 @@ function handleCopy() {
         }
     });
 
-    clipboard.faces = facesToCopy.map(f => ({ vertexIds: f.vertexIds }));
+    clipboard.faces = facesToCopy.map(f => ({ vertexIds: f.vertexIds, color: f.color }));
     clipboard.referenceVertex = screenToData(mousePos);
 }
 
 function handlePaste() {
     if (clipboard.vertices.length === 0 || !clipboard.referenceVertex) return;
     saveStateForUndo();
-    const edgesBefore = JSON.parse(JSON.stringify(allEdges));
 
     const pastePosData = screenToData(mousePos);
     const deltaX = pastePosData.x - clipboard.referenceVertex.x;
@@ -5582,16 +5726,25 @@ function handlePaste() {
     clipboard.edges.forEach(cbEdge => {
         const newP1Id = oldToNewIdMap.get(cbEdge.id1);
         const newP2Id = oldToNewIdMap.get(cbEdge.id2);
-        if (newP1Id && newP2Id) allEdges.push({ id1: newP1Id, id2: newP2Id });
+        if (newP1Id && newP2Id) {
+            allEdges.push({ ...cbEdge, id1: newP1Id, id2: newP2Id });
+        }
     });
 
-    // FIX: Instead of manually creating faces, let the robust detection do it.
-    updateFaces(edgesBefore, allEdges);
+    const newPastedFaceIds = [];
+    clipboard.faces.forEach(cbFace => {
+        const newVertexIds = cbFace.vertexIds.map(id => oldToNewIdMap.get(id));
+        if (newVertexIds.every(id => id)) {
+            const newFace = createFaceWithCoordinateSystem(newVertexIds);
+            newFace.color = cbFace.color;
+            newPastedFaceIds.push(newFace.id);
+        }
+    });
 
     // Select the newly pasted geometry
     selectedVertexIds = newPastedRegularVertexIds;
     selectedEdgeIds = clipboard.edges.map(e => U.getEdgeId({ id1: oldToNewIdMap.get(e.id1), id2: oldToNewIdMap.get(e.id2) }));
-    selectedFaceIds = allFaces.filter(f => f.vertexIds.every(vid => oldToNewIdMap.has(vid))).map(f => U.getFaceId(f));
+    selectedFaceIds = newPastedFaceIds;
     activeCenterId = newPastedActiveCenterId;
 }
 
@@ -5606,9 +5759,15 @@ function deleteSelectedItems() {
     }
     saveStateForUndo();
 
+    // Around line 1089, replace the face deletion logic:
     if (faceIdsToExplicitlyDelete.size > 0) {
-        faceIdsToExplicitlyDelete.forEach(faceId => deletedFaceIds.add(faceId));
-        allFaces = allFaces.filter(face => !faceIdsToExplicitlyDelete.has(U.getFaceId(face)));
+        faceIdsToExplicitlyDelete.forEach(faceId => {
+            deletedFaceIds.add(faceId);
+        });
+        allFaces = allFaces.filter(face => {
+            const faceId = face.id || U.getFaceId(face);
+            return !faceIdsToExplicitlyDelete.has(faceId);
+        });
     }
 
     const edgesBefore = [...allEdges];
@@ -5770,11 +5929,13 @@ function completeGraphOnSelectedVertices() {
 
     if (regularVertexIds.length < 2) return;
 
+
     saveStateForUndo();
 
     const edgesBefore = JSON.parse(JSON.stringify(allEdges));
     const edgesToAdd = [];
     
+    // Find all edges that will be added
     for (let i = 0; i < regularVertexIds.length; i++) {
         for (let j = i + 1; j < regularVertexIds.length; j++) {
             const id1 = regularVertexIds[i];
@@ -5791,18 +5952,20 @@ function completeGraphOnSelectedVertices() {
         }
     }
 
+
     if (edgesToAdd.length === 0) return;
 
+    // Add all the new edges
     edgesToAdd.forEach(edge => {
         applyColormapToEdge(edge);
         allEdges.push(edge);
     });
 
-
+    // Update faces with the new topology
     if (facesVisible) {
         updateFaces(edgesBefore, allEdges);
         
-        
+        // Assign colors to any newly created faces
         allFaces.forEach(face => {
             if (!face.color) {
                 face.color = getColorForTarget(C.COLOR_TARGET_FACE);
@@ -5811,6 +5974,7 @@ function completeGraphOnSelectedVertices() {
         
         ensureFaceCoordinateSystems();
     }
+
 }
 
 function applySelectionLogic(vertexIdsToSelect = [], edgeIdsToSelect = [], faceIdsToSelect = [], wantsShift, wantsCtrl, targetIsCenter = false) {
@@ -5848,6 +6012,7 @@ function applySelectionLogic(vertexIdsToSelect = [], edgeIdsToSelect = [], faceI
 
 
 function initializeApp() {
+    setupUndoStackDebugging();
     allColors = C.DEFAULT_RECENT_COLORS.map(color => {
         if (typeof color === 'string') {
             return { type: 'color', value: color };
@@ -5874,10 +6039,12 @@ function initializeApp() {
 
         if (isEditingColor && editingColorIndex !== null) {
             allColors[editingColorIndex] = newItem;
-            colorAssignments[activeColorTarget] = editingColorIndex;
         } else {
             addToColors(newItem);
-            colorAssignments[activeColorTarget] = allColors.length - 1;
+            const newColorIndex = allColors.length - 1;
+            activeColorTargets.forEach(target => {
+                colorAssignments[target] = newColorIndex;
+            });
         }
 
         applyColorsToSelection();
@@ -5929,30 +6096,6 @@ function calculateTransformFromMouse(center, mouseData, startReferenceVertex, ce
     return { rotation, scale, directionalScale };
 }
 
-function findFacesContainingEdge(edgeId1, edgeId2) {
-    const facesWithEdge = [];
-
-    allFaces.forEach(face => {
-        const vertices = face.vertexIds;
-        for (let i = 0; i < vertices.length; i++) {
-            const currentVertex = vertices[i];
-            const nextVertex = vertices[(i + 1) % vertices.length];
-
-            if ((currentVertex === edgeId1 && nextVertex === edgeId2) ||
-                (currentVertex === edgeId2 && nextVertex === edgeId1)) {
-                facesWithEdge.push({
-                    face: face,
-                    edgeIndex: i,
-                    isReversed: currentVertex === edgeId2
-                });
-                break;
-            }
-        }
-    });
-
-    return facesWithEdge;
-}
-
 function updateFaces(edgesBefore, edgesAfter) {
     if (!facesVisible) {
         allFaces = [];
@@ -5960,66 +6103,65 @@ function updateFaces(edgesBefore, edgesAfter) {
         return;
     }
 
-    console.log('=== UPDATE FACES DEBUG ===');
-    console.log('Faces before update:', allFaces.map(f => ({ id: f.id, vertices: f.vertexIds })));
-    console.log('Edges before:', edgesBefore.map(e => `${e.id1}-${e.id2}`));
-    console.log('Edges after:', edgesAfter.map(e => `${e.id1}-${e.id2}`));
-
     const edgesBeforeSet = new Set(edgesBefore.map(e => U.getEdgeId(e)));
     const edgesAfterSet = new Set(edgesAfter.map(e => U.getEdgeId(e)));
     
     const addedEdges = edgesAfter.filter(e => !edgesBeforeSet.has(U.getEdgeId(e)));
     const removedEdges = edgesBefore.filter(e => !edgesAfterSet.has(U.getEdgeId(e)));
-    
-    console.log('Added edges:', addedEdges.map(e => `${e.id1}-${e.id2}`));
-    console.log('Removed edges:', removedEdges.map(e => `${e.id1}-${e.id2}`));
-    
-    // If no topology changes, keep existing faces
+
     if (addedEdges.length === 0 && removedEdges.length === 0) {
-        console.log('No topology changes, keeping existing faces');
         return;
     }
+
+    const dirtyVertices = new Set();
+    addedEdges.forEach(e => { dirtyVertices.add(e.id1); dirtyVertices.add(e.id2); });
+    removedEdges.forEach(e => { dirtyVertices.add(e.id1); dirtyVertices.add(e.id2); });
     
-    console.log('Rebuilding all faces from scratch...');
-    
-    // For any topology change, rebuild all faces from scratch
-    const allNewFaces = U.debugFaceDetection(edgesAfter, findVertexById);
-    
-    console.log('Before filtering deleted faces:', allNewFaces.map(f => f.id));
-    
-    // Filter out explicitly deleted faces
-    const validNewFaces = allNewFaces.filter(face => {
-        const faceId = face.id || U.getFaceId(face);
-        const isDeleted = deletedFaceIds.has(faceId);
-        console.log(`Face ${faceId}: deleted=${isDeleted}`);
-        return !isDeleted;
-    });
-    
-    console.log('After filtering:', validNewFaces.map(f => f.id));
-    
-    // Add colors to new faces
-    validNewFaces.forEach(face => {
-        const colorIndex = colorAssignments[C.COLOR_TARGET_FACE];
-        if (colorIndex === -1) {
-            face.color = generateRandomColor();
-        } else if (colorIndex >= 0 && allColors[colorIndex]) {
-            const colorItem = allColors[colorIndex];
-            if (colorItem.type === 'color') {
-                face.color = colorItem.value;
-            } else if (colorItem.type === 'colormap') {
-                face.color = U.sampleColormap(colorItem, 0.5);
-            }
-        } else {
-            face.color = getColors().face;
+    const affectedComponentVertices = new Set();
+    const processedStartNodes = new Set();
+    for (const startId of dirtyVertices) {
+        if (!processedStartNodes.has(startId)) {
+            const component = findAllVerticesInSubgraph(startId);
+            component.forEach(vId => {
+                affectedComponentVertices.add(vId);
+                processedStartNodes.add(vId);
+            });
         }
+    }
+
+    const affectedEdges = allEdges.filter(e => affectedComponentVertices.has(e.id1) && affectedComponentVertices.has(e.id2));
+    const oldFacesInComponent = allFaces.filter(face =>
+        face.vertexIds.every(vId => affectedComponentVertices.has(vId))
+    );
+    const oldFaceIds = new Set(oldFacesInComponent.map(f => f.id));
+
+    const correctFacesForComponent = U.detectClosedPolygons(affectedEdges, findVertexById);
+    const correctFaceIds = new Set(correctFacesForComponent.map(f => f.id));
+
+    const facesToRemove = oldFacesInComponent.filter(f => !correctFaceIds.has(f.id));
+
+    if (facesToRemove.length > 0) {
+        const idsToRemove = new Set(facesToRemove.map(f => f.id));
+        allFaces = allFaces.filter(f => !idsToRemove.has(f.id));
+    }
+
+    const facesToAdd = correctFacesForComponent.filter(f => !oldFaceIds.has(f.id));
+
+    facesToAdd.forEach(newFace => {
+        if (deletedFaceIds.has(newFace.id)) {
+            // If user is manually recreating edges, allow face recreation for added edges
+            if (addedEdges.length > 0) {
+                deletedFaceIds.delete(newFace.id);
+            } else {
+                return; // Skip if no new edges were added
+            }
+        }
+        newFace.color = getColorForTarget(C.COLOR_TARGET_FACE);
+        allFaces.push(newFace);
     });
-    
-    allFaces = validNewFaces;
-    console.log('Final faces:', allFaces.map(f => ({ id: f.id, vertices: f.vertexIds })));
+
     ensureFaceCoordinateSystems();
 }
-
-
 
 function insertVertexOnEdgeWithFaces(targetEdge, insertionVertex) {
     const p1 = findVertexById(targetEdge.id1);
@@ -6027,7 +6169,7 @@ function insertVertexOnEdgeWithFaces(targetEdge, insertionVertex) {
 
     if (!p1 || !p2) return null;
 
-    const facesContainingEdge = findFacesContainingEdge(targetEdge.id1, targetEdge.id2);
+    const edgesBefore = [...allEdges];
 
     const newVertex = {
         id: U.generateUniqueId(),
@@ -6039,20 +6181,14 @@ function insertVertexOnEdgeWithFaces(targetEdge, insertionVertex) {
 
     allVertices.push(newVertex);
 
-    // FIX: This now correctly uses U.getEdgeId to remove only the target edge
     allEdges = allEdges.filter(e => U.getEdgeId(e) !== U.getEdgeId(targetEdge));
 
     allEdges.push({ id1: targetEdge.id1, id2: newVertex.id });
     allEdges.push({ id1: newVertex.id, id2: targetEdge.id2 });
 
     if (facesVisible) {
-    // Store edges before modification
-    const edgesBefore = [...allEdges];
-    
-    // The edges have already been modified above, so we can call updateFaces
-    // to detect any new faces that were created by inserting the vertex
-    updateFaces(edgesBefore, allEdges);
-}
+        updateFaces(edgesBefore, allEdges);
+    }
 
     return newVertex;
 }
@@ -6522,7 +6658,15 @@ function redrawAll() {
     const stateForEdges = { allEdges, selectedEdgeIds: edgesWithHover, isDragConfirmed, dragPreviewVertices, colors, edgesVisible };
     R.drawAllEdges(ctx, stateForEdges, dataToScreen, findVertexById, U.getEdgeId);
 
+    const originalDraggedVertexIds = isCopyPreviewActive
+        ? new Set(initialDragVertexStates.map(v => v.id))
+        : new Set();
+
     allVertices.forEach(vertex => {
+        if (isCopyPreviewActive && originalDraggedVertexIds.has(vertex.id)) {
+            return;
+        }
+
         let vertexToDraw = { ...vertex };
         if (isDragConfirmed && dragPreviewVertices.length > 0) {
             const preview = dragPreviewVertices.find(dp => dp.id === vertex.id);
@@ -6539,7 +6683,18 @@ function redrawAll() {
     });
 
     if (isCopyPreviewActive) {
-        R.drawCopyPreviews(ctx, { copyCount, isDragConfirmed, initialDragVertexStates, dragPreviewVertices, transformIndicatorData, allEdges, findVertexById, findNeighbors: (id) => U.findNeighbors(id, allEdges), colors }, dataToScreen);
+        R.drawCopyPreviews(ctx, { 
+            copyCount, 
+            isDragConfirmed, 
+            initialDragVertexStates, 
+            dragPreviewVertices, 
+            transformIndicatorData, 
+            allEdges, 
+            allFaces,
+            findVertexById, 
+            findNeighbors: (id) => U.findNeighbors(id, allEdges), 
+            colors 
+        }, dataToScreen);
     }
 
     if (facesVisible && allVertices.length > 0) {
@@ -6699,7 +6854,8 @@ function redrawAll() {
         isPlacingTransform, placingTransformType, placingSnapPos, mousePos,
         allColors, activeThemeName, colors, verticesVisible, edgesVisible, facesVisible, coordsDisplayMode, gridDisplayMode, angleDisplayMode, distanceDisplayMode,
         namedColors: colorEditor.namedColors,
-        colorAssignments, activeColorTargets
+        colorAssignments, activeColorTargets,
+        isDraggingColorTarget, draggedColorTargetInfo
     };
     R.drawCanvasUI(ctx, htmlOverlay, stateForUI, updateHtmlLabel);
 
@@ -6829,114 +6985,20 @@ function updateDrawingSequenceEdgeColors() {
     }
 }
 
-function initializeColorPalette() {
-    allColors = allColors.map(color => {
-        if (typeof color === 'string') {
-            return { type: 'color', value: color };
-        }
-        return color;
-    });
-
-    if (!allColors.some(item => item.type === 'color' && item.value === currentColor)) {
-        allColors.unshift({ type: 'color', value: currentColor });
-        if (allColors.length > 8) {
-            allColors.pop();
-        }
-    }
-
-    const currentColorIndex = allColors.findIndex(item =>
-        item.type === 'color' && item.value === currentColor
-    );
-    if (currentColorIndex !== -1) {
-        selectedColorIndices = [currentColorIndex];
-    }
-}
-
 function handleColorPaletteClick(screenPos, shiftKey, ctrlKey) {
     if (!isColorPaletteExpanded) return false;
 
-    // Check for clicks on the target icons first
-    for (const icon of canvasUI.colorTargetIcons) {
-        if (screenPos.x >= icon.x && screenPos.x <= icon.x + icon.width &&
-            screenPos.y >= icon.y && screenPos.y <= icon.y + icon.height) {
-            activeColorTarget = icon.target;
-            return true;
-        }
-    }
-
-    const now = Date.now();
-    for (const swatch of canvasUI.colorSwatches) {
-        if (screenPos.x >= swatch.x && screenPos.x <= swatch.x + swatch.width &&
-            screenPos.y >= swatch.y && screenPos.y <= swatch.y + swatch.height) {
-
-            const swatchId = `swatch-${swatch.index}`;
-            if (clickData.targetId === swatchId && (now - clickData.timestamp) < C.DOUBLE_CLICK_MS) {
-                // Double-click to edit
-                isEditingColor = true;
-                editingColorIndex = swatch.index;
-                const colorToEdit = allColors[swatch.index];
-                
-                let initialState;
-                if (colorToEdit.type === 'color') {
-                    const parsedColor = U.parseColor(colorToEdit.value);
-                    initialState = {
-                        type: 'colormap',
-                        points: [{
-                            pos: 0.5,
-                            alpha: parsedColor.a,
-                            color: [parsedColor.r, parsedColor.g, parsedColor.b],
-                            order: 1
-                        }]
-                    };
-                } else if (colorToEdit.type === 'colormap') {
-                    initialState = {
-                        type: 'colormap',
-                        points: colorToEdit.vertices.map(v => ({
-                            pos: v.pos,
-                            alpha: v.alpha !== undefined ? v.alpha : 1.0,
-                            color: Array.isArray(v.color) ? [...v.color] : [v.color.r || 0, v.color.g || 0, v.color.b || 0],
-                            order: v.order || 1
-                        }))
-                    };
-                }
-                
-                colorEditor.show(undefined, undefined, initialState);
-                clickData.count = 0;
-            } else {
-                // Single-click to assign color
-                colorAssignments[activeColorTarget] = swatch.index;
-                applyColorsToSelection();
-                buildColorPaletteUI(); // Rebuild to move the icon
-                clickData.targetId = swatchId;
-                clickData.timestamp = now;
-            }
-            return true;
-        }
-    }
-
-    const randomBtn = canvasUI.randomColorButton;
-    if (randomBtn && screenPos.x >= randomBtn.x && screenPos.x <= randomBtn.x + randomBtn.width &&
-        screenPos.y >= randomBtn.y && screenPos.y <= randomBtn.y + randomBtn.height) {
-        colorAssignments[activeColorTarget] = -1; // -1 represents random
-        applyColorsToSelection();
-        buildColorPaletteUI();
-        return true;
-    }
 
     const removeBtn = canvasUI.removeColorButton;
     if (removeBtn && screenPos.x >= removeBtn.x && screenPos.x <= removeBtn.x + removeBtn.width &&
         screenPos.y >= removeBtn.y && screenPos.y <= removeBtn.y + removeBtn.height) {
-        const colorIndexToRemove = colorAssignments[activeColorTarget];
-        if (colorIndexToRemove >= 0 && allColors.length > 1) {
-            allColors.splice(colorIndexToRemove, 1);
-            Object.keys(colorAssignments).forEach(target => {
-                if (colorAssignments[target] > colorIndexToRemove) {
-                    colorAssignments[target]--;
-                } else if (colorAssignments[target] === colorIndexToRemove) {
-                    colorAssignments[target] = Math.min(colorIndexToRemove, allColors.length - 1);
-                }
-            });
-            buildColorPaletteUI();
+        if (allColors.length > 1 && activeColorTargets.length > 0) {
+            const primaryTarget = activeColorTargets[activeColorTargets.length - 1];
+            const colorIndexToRemove = colorAssignments[primaryTarget];
+            if (colorIndexToRemove >= 0) {
+                saveStateForUndo();
+                removeColorAtIndex(colorIndexToRemove);
+            }
         }
         return true;
     }
@@ -6957,6 +7019,23 @@ function performEscapeAction() {
     if (copyCountTimer) clearTimeout(copyCountTimer);
     copyCountInput = '';
     copyCountTimer = null;
+
+    // Add this new section:
+    if (isDraggingColorSwatch) {
+        // Restore original state since drag was cancelled
+        allColors = draggedSwatchInfo.originalAllColors;
+        colorAssignments = draggedSwatchInfo.originalAssignments;
+        buildColorPaletteUI();
+        
+        // Remove the state we saved at drag start since no action was completed
+        if (undoStack.length > 0) {
+            undoStack.pop();
+        }
+        
+        isDraggingColorSwatch = false;
+        draggedSwatchInfo = null;
+        draggedSwatchTemporarilyRemoved = false;
+    }
 
     if (isDrawingMode) {
         isDrawingMode = false;
@@ -6984,6 +7063,11 @@ function performEscapeAction() {
     selectedFaceIds = [];
     selectedCenterIds = [];
     activeCenterId = null;
+    activeColorTargets = [];
+    if (isColorPaletteExpanded) {
+        buildColorPaletteUI();
+    }
+
     isActionInProgress = false;
     isDragConfirmed = false;
     isRectangleSelecting = false;
@@ -7434,11 +7518,25 @@ function handleKeyDown(event) {
         handleRedo();
     } else if (isCtrlOrCmd && event.key.toLowerCase() === C.KEY_SELECT_ALL) {
         event.preventDefault();
+        saveStateForUndo();
         selectedVertexIds = allVertices.filter(p => p.type === 'regular').map(p => p.id);
         selectedEdgeIds = allEdges.map(edge => U.getEdgeId(edge));
         selectedFaceIds = allFaces.map(face => face.id);
         selectedCenterIds = allVertices.filter(p => p.type !== 'regular').map(p => p.id);
         activeCenterId = null;
+
+        // Update active color targets for select all
+        const newActiveTargets = [];
+        if (selectedFaceIds.length > 0) newActiveTargets.push(C.COLOR_TARGET_FACE);
+        if (selectedEdgeIds.length > 0) newActiveTargets.push(C.COLOR_TARGET_EDGE);
+        if (selectedVertexIds.length > 0) newActiveTargets.push(C.COLOR_TARGET_VERTEX);
+
+        if (newActiveTargets.length > 0) {
+            activeColorTargets = newActiveTargets;
+            if (isColorPaletteExpanded) {
+                buildColorPaletteUI();
+            }
+        }
     }
 }
 
@@ -7461,132 +7559,6 @@ function handleThemeToggle() {
     }
 }
 
-function handleUIClick(element) {
-    const { id, type, index, target } = element;
-    const { shiftKey, ctrlKey } = actionContext;
-    const now = Date.now();
-
-    switch (type) {
-        case 'menuButton':
-            isToolbarExpanded = !isToolbarExpanded;
-            if (!isToolbarExpanded) {
-                isColorPaletteExpanded = false;
-                isTransformPanelExpanded = false;
-                isDisplayPanelExpanded = false;
-                isVisibilityPanelExpanded = false;
-            } else {
-                buildMainToolbarUI();
-            }
-            break;
-
-        case 'toolButton':
-            if (id === 'color-tool-button') handleColorToolButtonClick();
-            else if (id === 'transform-tool-button') {
-                isTransformPanelExpanded = !isTransformPanelExpanded;
-                if (isTransformPanelExpanded) buildTransformPanelUI();
-            } else if (id === 'display-tool-button') {
-                isDisplayPanelExpanded = !isDisplayPanelExpanded;
-                if (isDisplayPanelExpanded) buildDisplayPanelUI();
-            } else if (id === 'visibility-tool-button') {
-                isVisibilityPanelExpanded = !isVisibilityPanelExpanded;
-                if (isVisibilityPanelExpanded) buildVisibilityPanelUI();
-            } else if (id === 'theme-toggle-button') {
-                handleThemeToggle();
-            }
-            break;
-
-        case 'colorTargetIcon':
-            if (shiftKey) {
-                if (activeColorTargets.includes(target)) {
-                    activeColorTargets = activeColorTargets.filter(t => t !== target);
-                    if (activeColorTargets.length === 0) activeColorTargets.push(target);
-                } else {
-                    activeColorTargets.push(target);
-                }
-            } else {
-                activeColorTargets = [target];
-            }
-            buildColorPaletteUI();
-            break;
-
-        case 'colorSwatch':
-            const swatchId = `swatch-${index}`;
-            if (clickData.targetId === swatchId && (now - clickData.timestamp) < C.DOUBLE_CLICK_MS) {
-                isEditingColor = true;
-                editingColorIndex = index;
-                const colorToEdit = allColors[index];
-                let initialState;
-                if (colorToEdit.type === 'color') {
-                    const parsedColor = U.parseColor(colorToEdit.value);
-                    initialState = { type: 'colormap', points: [{ pos: 0.5, alpha: parsedColor.a, color: [parsedColor.r, parsedColor.g, parsedColor.b], order: 1 }] };
-                } else if (colorToEdit.type === 'colormap') {
-                    initialState = { type: 'colormap', points: colorToEdit.vertices.map(v => ({ pos: v.pos, alpha: v.alpha !== undefined ? v.alpha : 1.0, color: Array.isArray(v.color) ? [...v.color] : [v.color.r || 0, v.color.g || 0, v.color.b || 0], order: v.order || 1 })) };
-                }
-                colorEditor.show(undefined, undefined, initialState);
-                clickData.count = 0;
-            } else {
-                activeColorTargets.forEach(t => colorAssignments[t] = index);
-                applyColorsToSelection();
-                buildColorPaletteUI();
-            }
-            clickData.targetId = swatchId;
-            clickData.timestamp = now;
-            break;
-        
-        case 'button':
-            if (id === 'random-color-button') {
-                activeColorTargets.forEach(t => colorAssignments[t] = -1);
-                applyColorsToSelection();
-                buildColorPaletteUI();
-            } else if (id === 'remove-color-button') {
-                const primaryTarget = activeColorTargets[activeColorTargets.length - 1];
-                const colorIndexToRemove = colorAssignments[primaryTarget];
-                if (colorIndexToRemove >= 0 && allColors.length > 1) {
-                    allColors.splice(colorIndexToRemove, 1);
-                    Object.keys(colorAssignments).forEach(t => {
-                        if (colorAssignments[t] > colorIndexToRemove) {
-                            colorAssignments[t]--;
-                        } else if (colorAssignments[t] === colorIndexToRemove) {
-                            colorAssignments[t] = Math.min(colorIndexToRemove, allColors.length - 1);
-                        }
-                    });
-                    buildColorPaletteUI();
-                }
-            } else if (id === 'add-color-button') {
-                isEditingColor = false;
-                editingColorIndex = null;
-                colorEditor.show();
-            }
-            break;
-
-        case 'transformIcon':
-            isPlacingTransform = true;
-            placingTransformType = element.type;
-            break;
-
-        case 'displayIcon':
-            if (element.group === 'coords') {
-                const coordsModes = [C.COORDS_DISPLAY_MODE_NONE, C.COORDS_DISPLAY_MODE_REGULAR, C.COORDS_DISPLAY_MODE_COMPLEX, C.COORDS_DISPLAY_MODE_POLAR];
-                coordsDisplayMode = coordsModes[(coordsModes.indexOf(coordsDisplayMode) + 1) % coordsModes.length];
-            } else if (element.group === 'grid') {
-                const gridModes = [C.GRID_DISPLAY_MODE_LINES, C.GRID_DISPLAY_MODE_POINTS, C.GRID_DISPLAY_MODE_TRIANGULAR, C.GRID_DISPLAY_MODE_POLAR, C.GRID_DISPLAY_MODE_NONE];
-                gridDisplayMode = gridModes[(gridModes.indexOf(gridDisplayMode) + 1) % gridModes.length];
-            }
-            break;
-        
-        case 'visibilityIcon':
-             if (element.group === 'angles') {
-                const angleModes = [C.ANGLE_DISPLAY_MODE_DEGREES, C.ANGLE_DISPLAY_MODE_RADIANS, C.ANGLE_DISPLAY_MODE_NONE];
-                angleDisplayMode = angleModes[(angleModes.indexOf(angleDisplayMode) + 1) % angleModes.length];
-                showAngles = angleDisplayMode !== C.ANGLE_DISPLAY_MODE_NONE;
-            } else if (element.group === 'distances') {
-                const distModes = [C.DISTANCE_DISPLAY_MODE_ON, C.DISTANCE_DISPLAY_MODE_NONE];
-                distanceDisplayMode = distModes[(distModes.indexOf(distanceDisplayMode) + 1) % distModes.length];
-                showDistances = distanceDisplayMode === C.DISTANCE_DISPLAY_MODE_ON;
-            }
-            break;
-    }
-}
 
 function handleMouseDown(event) {
     const targetElement = event.target;
@@ -7599,28 +7571,59 @@ function handleMouseDown(event) {
     actionStartPos = { ...mousePos }; 
     
     if (isColorPaletteExpanded) {
-        for (const icon of (canvasUI.colorTargetIcons || [])) {
-            if (mousePos.x >= icon.x && mousePos.x <= icon.x + icon.width && mousePos.y >= icon.y && mousePos.y <= icon.y + icon.height) {
-                actionContext = { target: 'ui_icon_drag', element: icon, shiftKey: event.shiftKey, ctrlKey: event.ctrlKey || event.metaKey };
+        // Check for swatches first
+        for (const swatch of canvasUI.colorSwatches) {
+            if (mousePos.x >= swatch.x && mousePos.x <= swatch.x + swatch.width &&
+                mousePos.y >= swatch.y && mousePos.y <= swatch.y + swatch.height) {
+                actionContext = { target: 'ui_swatch', element: { ...swatch } };
                 isActionInProgress = true;
                 return;
             }
         }
-        for (const swatch of (canvasUI.colorSwatches || [])) {
-            if (mousePos.x >= swatch.x && mousePos.x <= swatch.x + swatch.width && mousePos.y >= swatch.y && mousePos.y <= swatch.y + swatch.height) {
-                actionContext = { target: 'ui_swatch', element: swatch, shiftKey: event.shiftKey, ctrlKey: event.ctrlKey || event.metaKey };
-                draggedSwatchInfo = {
-                    index: swatch.index,
-                    item: swatch.item,
-                    offsetX: mousePos.x - swatch.x
-                };
-                isActionInProgress = true;
-                return;
+
+        // Check for icons (they're on top)
+        const iconsUnderMouse = (canvasUI.colorTargetIcons || []).filter(icon => 
+            mousePos.x >= icon.x && mousePos.x <= icon.x + icon.width &&
+            mousePos.y >= icon.y && mousePos.y <= icon.y + icon.height
+        );
+        
+        if (iconsUnderMouse.length > 0) {
+            const topIcon = iconsUnderMouse[iconsUnderMouse.length - 1];
+            
+            // Perform selection immediately on mousedown
+            const { element, shiftKey, ctrlKey } = { element: topIcon, shiftKey: event.shiftKey, ctrlKey: event.ctrlKey || event.metaKey };
+            if (shiftKey) {
+                if (!activeColorTargets.includes(element.target)) {
+                    activeColorTargets.push(element.target);
+                }
+            } else if (ctrlKey) {
+                if (activeColorTargets.includes(element.target)) {
+                    activeColorTargets = activeColorTargets.filter(t => t !== element.target);
+                } else {
+                    activeColorTargets.push(element.target);
+                }
+            } else {
+                activeColorTargets = [element.target];
             }
+            buildColorPaletteUI();
+
+            // Prepare for a potential drag
+            actionContext = { target: 'ui_icon_click', element: { ...topIcon, type: 'colorTargetIcon' } };
+            isActionInProgress = true;
+            return;
         }
     }
 
     isDraggingCenter = false;
+
+    for (const swatch of canvasUI.colorSwatches) {
+            if (mousePos.x >= swatch.x && mousePos.x <= swatch.x + swatch.width &&
+                mousePos.y >= swatch.y && mousePos.y <= swatch.y + swatch.height) {
+                actionContext = { target: 'ui_swatch', element: { ...swatch } };
+                isActionInProgress = true;
+                return;
+            }
+        }
 
     if (handleCanvasUIClick(mousePos, event.shiftKey, event.ctrlKey || event.metaKey)) {
         return;
@@ -7631,6 +7634,17 @@ function handleMouseDown(event) {
     }
 
     if (isPlacingTransform) {
+        if (event.button === 2) {
+            // Right-click cancels placement
+            isPlacingTransform = false;
+            placingTransformType = null;
+            placingSnapPos = null;
+            ghostVertexPosition = null;
+            canvas.style.cursor = 'crosshair';
+            event.preventDefault();
+            return;
+        }
+        
         saveStateForUndo();
         const mouseDataPos = screenToData(mousePos);
         const snappedPos = currentShiftPressed ? getBestSnapPosition(mouseDataPos) : mouseDataPos;
@@ -7647,6 +7661,7 @@ function handleMouseDown(event) {
         placingTransformType = null;
         placingSnapPos = null;
         ghostVertexPosition = null;
+        canvas.style.cursor = 'crosshair';
         
         event.preventDefault();
         return;
@@ -7658,28 +7673,41 @@ function handleMouseDown(event) {
     }
 
     if (event.altKey && !isDrawingMode && (findClickedVertex(mousePos) || findClickedEdge(mousePos))) {
+        const clickedVertex = findClickedVertex(mousePos);
         const clickedEdge = findClickedEdge(mousePos);
+        
         saveStateForUndo();
         performEscapeAction();
-        isActionInProgress = true;
-        currentMouseButton = 0;
-        actionContext = { target: null, shiftKey: false, ctrlKey: false };
-
-        const clickedVertex = findClickedVertex(mousePos);
+        
         if (clickedVertex && clickedVertex.type === 'regular') {
+            // Start drawing from existing vertex
             isDrawingMode = true;
             previewLineStartVertexId = clickedVertex.id;
+            drawingSequence = [];
+            currentSequenceIndex = 0;
+            currentDrawingPath = [clickedVertex.id];
+            window.currentDrawingPath = currentDrawingPath;
         } else if (clickedEdge) {
+            // Insert vertex on edge and start drawing from there
             const p1 = findVertexById(clickedEdge.id1);
             const p2 = findVertexById(clickedEdge.id2);
             if (p1 && p2) {
-                const closest = U.getClosestPointOnLineSegment(screenToData(actionStartPos), p1, p2);
-                insertVertexOnEdgeWithFaces(clickedEdge, closest);
-                const newVertex = allVertices[allVertices.length - 1];
-                isDrawingMode = true;
-                previewLineStartVertexId = newVertex.id;
+                const closest = U.getClosestPointOnLineSegment(screenToData(mousePos), p1, p2);
+                const newVertex = insertVertexOnEdgeWithFaces(clickedEdge, closest);
+                if (newVertex) {
+                    isDrawingMode = true;
+                    previewLineStartVertexId = newVertex.id;
+                    drawingSequence = [];
+                    currentSequenceIndex = 0;
+                    currentDrawingPath = [newVertex.id];
+                    window.currentDrawingPath = currentDrawingPath;
+                }
             }
         }
+        
+        // Prevent further processing of this event
+        isActionInProgress = false;
+        event.preventDefault();
         return;
     }
 
@@ -7727,54 +7755,108 @@ function handleMouseMove(event) {
             const closestTarget = U.findClosestUIElement(mousePos, dropTargets);
             if (closestTarget) {
                 icon.x = closestTarget.x + (closestTarget.width - icon.width) / 2;
+                // Update the color assignment preview
+                const newIndex = closestTarget.id === 'random-color-button' ? -1 : closestTarget.index;
+                draggedColorTargetInfo.previewColorIndex = newIndex;
             } else {
                 icon.x = mousePos.x - draggedColorTargetInfo.offsetX;
+                draggedColorTargetInfo.previewColorIndex = draggedColorTargetInfo.originalColorIndex;
             }
         }
         return;
     }
 
     if (isDraggingColorSwatch) {
-        // Find the index of the swatch being dragged
-        const fromIndex = allColors.indexOf(draggedSwatchInfo.item);
+        const removeBtn = canvasUI.removeColorButton;
+        const isOverRemoveButton = removeBtn && 
+            mousePos.x >= removeBtn.x && mousePos.x <= removeBtn.x + removeBtn.width &&
+            mousePos.y >= removeBtn.y && mousePos.y <= removeBtn.y + removeBtn.height;
 
-        // Find the target drop position based on the mouse
-        const dropTargets = canvasUI.colorSwatches;
-        const closestTarget = U.findClosestUIElement(mousePos, dropTargets);
-        let toIndex = -1;
-        if (closestTarget) {
-            toIndex = allColors.indexOf(closestTarget.item);
-            if (mousePos.x > closestTarget.x + closestTarget.width / 2) {
-                toIndex++;
+        if (isOverRemoveButton && allColors.length > 1 && !draggedSwatchTemporarilyRemoved) {
+            // Temporarily remove the swatch visually
+            const indexToRemove = allColors.indexOf(draggedSwatchInfo.item);
+            if (indexToRemove >= 0) {
+                draggedSwatchTemporarilyRemoved = true;
+                allColors.splice(indexToRemove, 1);
+                
+                // Update color assignments temporarily
+                Object.keys(colorAssignments).forEach(target => {
+                    if (colorAssignments[target] > indexToRemove) {
+                        colorAssignments[target]--;
+                    } else if (colorAssignments[target] === indexToRemove) {
+                        colorAssignments[target] = Math.min(indexToRemove, allColors.length - 1);
+                    }
+                });
+                
+                buildColorPaletteUI();
+            }
+            return;
+        } else if (!isOverRemoveButton && draggedSwatchTemporarilyRemoved) {
+            // Restore the swatch at position 0 (first slot)
+            draggedSwatchTemporarilyRemoved = false;
+            allColors.unshift(draggedSwatchInfo.item);  // Insert at beginning
+            
+            // Shift all existing assignments to the right
+            Object.keys(colorAssignments).forEach(target => {
+                colorAssignments[target]++;
+            });
+            
+            // Set any targets that were originally assigned to this swatch back to position 0
+            Object.keys(draggedSwatchInfo.originalAssignments).forEach(target => {
+                if (draggedSwatchInfo.originalAssignments[target] === draggedSwatchInfo.originalIndex) {
+                    colorAssignments[target] = 0;
+                }
+            });
+            
+            buildColorPaletteUI();
+            return;
+        }
+
+        if (draggedSwatchTemporarilyRemoved) {
+            // Don't do normal reordering when temporarily removed
+            return;
+        }
+
+        const fromIndex = allColors.indexOf(draggedSwatchInfo.item);
+        
+        // Calculate which column position the mouse is over
+        let targetIndex = fromIndex;
+        
+        // Find which swatch column we're hovering over
+        for (let i = 0; i < canvasUI.colorSwatches.length; i++) {
+            const swatch = canvasUI.colorSwatches[i];
+            const swatchLeft = swatch.x;
+            const swatchRight = swatch.x + swatch.width;
+            
+            if (mousePos.x >= swatchLeft && mousePos.x <= swatchRight) {
+                targetIndex = allColors.indexOf(swatch.item);
+                break;
             }
         }
         
-        // Create a temporary visual order
-        const tempOrder = [...allColors];
-        const [movedItem] = tempOrder.splice(fromIndex, 1);
-        if (toIndex !== -1) {
-            tempOrder.splice(toIndex, 0, movedItem);
+        // Only swap if we're over a different swatch
+        if (targetIndex !== fromIndex) {
+            // Swap the colors
+            const temp = allColors[fromIndex];
+            allColors[fromIndex] = allColors[targetIndex];
+            allColors[targetIndex] = temp;
+            
+            // Update color assignments
+            Object.keys(colorAssignments).forEach(target => {
+                if (colorAssignments[target] === fromIndex) {
+                    colorAssignments[target] = targetIndex;
+                } else if (colorAssignments[target] === targetIndex) {
+                    colorAssignments[target] = fromIndex;
+                }
+            });
+            
+            // Update draggedSwatchInfo to track the swapped item
+            draggedSwatchInfo.item = allColors[targetIndex];
+            
+            // Rebuild UI to show new positions
+            buildColorPaletteUI();
         }
-
-        // Re-calculate the UI positions based on the temporary order
-        let currentX = canvasUI.removeColorButton.x + canvasUI.removeColorButton.width + C.UI_BUTTON_PADDING;
-        tempOrder.forEach(item => {
-            const swatchUI = canvasUI.colorSwatches.find(s => s.item === item);
-            const swatchWidth = swatchUI.width;
-            if (item !== draggedSwatchInfo.item) { // Snap non-dragged swatches to their new grid spots
-                swatchUI.x = currentX;
-            }
-            currentX += swatchWidth + C.UI_BUTTON_PADDING;
-        });
-
-        // Make the dragged swatch and its icons follow the mouse
-        const draggedSwatchUI = canvasUI.colorSwatches.find(s => s.item === draggedSwatchInfo.item);
-        draggedSwatchUI.x = mousePos.x - draggedSwatchInfo.offsetX;
-        const iconsOnDragged = canvasUI.colorTargetIcons.filter(i => colorAssignments[i.target] === fromIndex);
-        iconsOnDragged.forEach(icon => {
-            icon.x = draggedSwatchUI.x + (draggedSwatchUI.width - icon.width) / 2;
-        });
-
+        
         return;
     }
     
@@ -7839,30 +7921,38 @@ function handleMouseMove(event) {
     }
 
     if (!isDragConfirmed && U.distance(mousePos, actionStartPos) > C.DRAG_THRESHOLD) {
-        isDragConfirmed = true;
-        isEdgeTransformDrag = false;
+    isDragConfirmed = true;
+    isEdgeTransformDrag = false;
 
-        if (actionContext.target === 'ui_icon_drag') {
-            isDraggingColorTarget = true;
-            draggedColorTargetInfo = {
-                target: actionContext.element.target,
-                offsetX: mousePos.x - actionContext.element.x,
-                offsetY: mousePos.y - actionContext.element.y
-            };
-        } else if (actionContext.target === 'ui_swatch') {
-            isDraggingColorSwatch = true;
-            draggedSwatchInfo = {
-                index: actionContext.element.index,
-                offsetX: mousePos.x - actionContext.element.x,
-                offsetY: mousePos.y - actionContext.element.y
-            };
-        } else if (currentMouseButton === 2) {
-            isRectangleSelecting = true;
-            return;
-        } else if (actionContext.target === 'canvas') {
-            isPanningBackground = true;
-            backgroundPanStartOffset = { x: viewTransform.offsetX, y: viewTransform.offsetY };
-            canvas.style.cursor = 'move';
+    if (actionContext.target === 'ui_icon_click') {
+        isDraggingColorTarget = true;
+        draggedColorTargetInfo = {
+            target: actionContext.element.target,
+            offsetX: mousePos.x - actionContext.element.x,
+            offsetY: mousePos.y - actionContext.element.y,
+            originalColorIndex: colorAssignments[actionContext.element.target],
+            previewColorIndex: colorAssignments[actionContext.element.target]
+        };
+        actionContext.target = 'ui_icon_drag'; // Change to drag mode
+        activeColorTargets = [actionContext.element.target];
+    } else if (actionContext.target === 'ui_swatch') {
+        saveStateForUndo();
+        isDraggingColorSwatch = true;
+        draggedSwatchInfo = {
+            index: actionContext.element.index,
+            item: actionContext.element.item,
+            offsetX: mousePos.x - actionContext.element.x,
+            originalIndex: actionContext.element.index,
+            originalAllColors: JSON.parse(JSON.stringify(allColors)),
+            originalAssignments: JSON.parse(JSON.stringify(colorAssignments))
+        };
+    } else if (currentMouseButton === 2) {
+        isRectangleSelecting = true;
+        return;
+    } else if (actionContext.target === 'canvas') {
+        isPanningBackground = true;
+        backgroundPanStartOffset = { x: viewTransform.offsetX, y: viewTransform.offsetY };
+        canvas.style.cursor = 'move';
         } else {
             canvas.style.cursor = 'grabbing';
             isDraggingCenter = actionContext.targetVertex && actionContext.targetVertex.type !== 'regular';
@@ -8049,93 +8139,108 @@ function handleMouseUp(event) {
         isDraggingColorTarget = false;
         draggedColorTargetInfo = null;
         buildColorPaletteUI();
-        performEscapeAction();
+        isActionInProgress = false;
+        isDragConfirmed = false;
+        actionContext = null;
         return;
     }
 
     if (isDraggingColorSwatch) {
-        const fromIndex = allColors.indexOf(draggedSwatchInfo.item);
-        const dropTargets = canvasUI.colorSwatches;
-        const closestTarget = U.findClosestUIElement(mousePos, dropTargets);
-        let toIndex = fromIndex;
+        const removeBtn = canvasUI.removeColorButton;
+        const isOverRemoveButton = removeBtn && 
+            mousePos.x >= removeBtn.x && mousePos.x <= removeBtn.x + removeBtn.width &&
+            mousePos.y >= removeBtn.y && mousePos.y <= removeBtn.y + removeBtn.height;
 
-        if (closestTarget) {
-            toIndex = allColors.indexOf(closestTarget.item);
-            if (mousePos.x > closestTarget.x + closestTarget.width / 2) {
-                toIndex++;
+        if (isOverRemoveButton && allColors.length > 1) {
+            const currentIndex = allColors.indexOf(draggedSwatchInfo.item);
+            if (currentIndex !== -1) {
+                removeColorAtIndex(currentIndex);
             }
         }
 
-        if (fromIndex !== toIndex) {
-            const item = allColors.splice(fromIndex, 1)[0];
-            allColors.splice(toIndex, 0, item);
-            
-            // Remap color assignments
-            const oldToNew = {};
-            if (fromIndex < toIndex) {
-                for(let i = fromIndex; i < toIndex; i++) { oldToNew[i+1] = i; }
-            } else { 
-                 for(let i = toIndex + 1; i <= fromIndex; i++) { oldToNew[i-1] = i; }
-            }
-            oldToNew[fromIndex] = toIndex;
+        isDraggingColorSwatch = false;
+        draggedSwatchInfo = null;
+        draggedSwatchTemporarilyRemoved = false;
+        
+        buildColorPaletteUI();
+        
+        isActionInProgress = false;
+        isDragConfirmed = false;
+        actionContext = null;
+        return;
+    }
 
-            Object.keys(colorAssignments).forEach(target => {
-                const oldAssignment = colorAssignments[target];
-                if (oldToNew[oldAssignment] !== undefined) {
-                    colorAssignments[target] = oldToNew[oldAssignment];
-                }
-            });
+    if (!isDragConfirmed && actionContext && actionContext.target === 'ui_icon_click' && actionContext.element.type === 'colorTargetIcon') {
+        // This was a click. Selection was handled on mousedown. Just reset the action state.
+        isActionInProgress = false;
+        actionContext = null;
+        return;
+    }
+
+
+    if (!isDragConfirmed && actionContext && actionContext.target === 'ui_swatch') {
+        const { element } = actionContext;
+        const now = Date.now();
+        
+        const swatchId = `swatch-${element.index}`;
+        if (clickData.targetId === swatchId && (now - clickData.timestamp) < C.DOUBLE_CLICK_MS) {
+            isEditingColor = true;
+            editingColorIndex = element.index;
+            const colorToEdit = allColors[element.index];
+            let initialState;
+            if (colorToEdit.type === 'color') {
+                const parsedColor = U.parseColor(colorToEdit.value);
+                initialState = { type: 'colormap', points: [{ pos: 0.5, alpha: parsedColor.a, color: [parsedColor.r, parsedColor.g, parsedColor.b], order: 1 }] };
+            } else if (colorToEdit.type === 'colormap') {
+                initialState = { type: 'colormap', points: colorToEdit.vertices.map(v => ({ pos: v.pos, alpha: v.alpha !== undefined ? v.alpha : 1.0, color: Array.isArray(v.color) ? [...v.color] : [v.color.r || 0, v.color.g || 0, v.color.b || 0], order: v.order || 1 })) };
+            }
+            colorEditor.show(undefined, undefined, initialState);
+            clickData.count = 0;
+        } else {
+            // Single-click re-assigns active targets and colors selection
+            if (activeColorTargets.length > 0) {
+                saveStateForUndo(); // Save state BEFORE making changes
+                activeColorTargets.forEach(target => colorAssignments[target] = element.index);
+                applyColorsToSelection();
+                buildColorPaletteUI();
+            }
         }
+        clickData.targetId = swatchId;
+        clickData.timestamp = now;
+        isActionInProgress = false;
+        actionContext = null;
+        return;
+    }
+
+    if (!isDragConfirmed && isDraggingColorSwatch) {
+        const swatchIndex = allColors.indexOf(draggedSwatchInfo.item);
+        const swatchId = `swatch-${swatchIndex}`;
+        const now = Date.now();
+        
+        if (clickData.targetId === swatchId && (now - clickData.timestamp) < C.DOUBLE_CLICK_MS) {
+            isEditingColor = true;
+            editingColorIndex = swatchIndex;
+            const colorToEdit = allColors[swatchIndex];
+            let initialState;
+            if (colorToEdit.type === 'color') {
+                const parsedColor = U.parseColor(colorToEdit.value);
+                initialState = { type: 'colormap', points: [{ pos: 0.5, alpha: parsedColor.a, color: [parsedColor.r, parsedColor.g, parsedColor.b], order: 1 }] };
+            } else if (colorToEdit.type === 'colormap') {
+                initialState = { type: 'colormap', points: colorToEdit.vertices.map(v => ({ pos: v.pos, alpha: v.alpha !== undefined ? v.alpha : 1.0, color: Array.isArray(v.color) ? [...v.color] : [v.color.r || 0, v.color.g || 0, v.color.b || 0], order: v.order || 1 })) };
+            }
+            colorEditor.show(undefined, undefined, initialState);
+            clickData.count = 0;
+        } else {
+            activeColorTargets.forEach(t => colorAssignments[t] = swatchIndex);
+            applyColorsToSelection();
+            buildColorPaletteUI();
+        }
+        clickData.targetId = swatchId;
+        clickData.timestamp = now;
         
         isDraggingColorSwatch = false;
         draggedSwatchInfo = null;
         saveStateForUndo();
-        buildColorPaletteUI();
-        performEscapeAction();
-        return;
-    }
-
-    if (!isDragConfirmed && actionContext && (actionContext.target === 'ui_icon_drag' || actionContext.target === 'ui_swatch')) {
-        const { element, shiftKey } = actionContext;
-        const now = Date.now();
-
-        if (element.type === 'colorTargetIcon') {
-            if (shiftKey) {
-                if (activeColorTargets.includes(element.target)) {
-                    if (activeColorTargets.length > 1) {
-                         activeColorTargets = activeColorTargets.filter(t => t !== element.target);
-                    }
-                } else {
-                    activeColorTargets.push(element.target);
-                }
-            } else {
-                activeColorTargets = [element.target];
-            }
-            buildColorPaletteUI();
-        } else if (element.type === 'colorSwatch') {
-            const swatchId = `swatch-${element.index}`;
-            if (clickData.targetId === swatchId && (now - clickData.timestamp) < C.DOUBLE_CLICK_MS) {
-                isEditingColor = true;
-                editingColorIndex = element.index;
-                const colorToEdit = allColors[element.index];
-                let initialState;
-                if (colorToEdit.type === 'color') {
-                    const parsedColor = U.parseColor(colorToEdit.value);
-                    initialState = { type: 'colormap', points: [{ pos: 0.5, alpha: parsedColor.a, color: [parsedColor.r, parsedColor.g, parsedColor.b], order: 1 }] };
-                } else if (colorToEdit.type === 'colormap') {
-                    initialState = { type: 'colormap', points: colorToEdit.vertices.map(v => ({ pos: v.pos, alpha: v.alpha !== undefined ? v.alpha : 1.0, color: Array.isArray(v.color) ? [...v.color] : [v.color.r || 0, v.color.g || 0, v.color.b || 0], order: v.order || 1 })) };
-                }
-                colorEditor.show(undefined, undefined, initialState);
-                clickData.count = 0;
-            } else {
-                activeColorTargets.forEach(t => colorAssignments[t] = element.index);
-                applyColorsToSelection();
-                buildColorPaletteUI();
-            }
-            clickData.targetId = swatchId;
-            clickData.timestamp = now;
-        }
-        performEscapeAction();
         return;
     }
 
@@ -8154,8 +8259,6 @@ function handleMouseUp(event) {
 
     if (isDragConfirmed) {
         saveStateForUndo();
-        const edgesBefore = JSON.parse(JSON.stringify(allEdges));
-        let topologyChanged = false;
 
         if (isPanningBackground) {
             // No geometry change
@@ -8171,9 +8274,20 @@ function handleMouseUp(event) {
             const allVerticesInRect = new Set(verticesInRect);
             const facesInRect = allFaces.filter(f => f.vertexIds.every(vId => allVerticesInRect.has(vId))).map(f => U.getFaceId(f));
             applySelectionLogic(verticesInRect, edgesInRect, facesInRect, shiftKey, ctrlKey);
+
+            const newActiveTargets = [];
+            if (facesInRect.length > 0) newActiveTargets.push(C.COLOR_TARGET_FACE);
+            if (edgesInRect.length > 0) newActiveTargets.push(C.COLOR_TARGET_EDGE);
+            if (verticesInRect.length > 0) newActiveTargets.push(C.COLOR_TARGET_VERTEX);
+
+            if (newActiveTargets.length > 0) {
+                activeColorTargets = newActiveTargets;
+                if (isColorPaletteExpanded) {
+                    buildColorPaletteUI();
+                }
+            }
         } else if (dragPreviewVertices.length > 0) {
             if (copyCount > 1) {
-                topologyChanged = true;
                 const verticesToCopy = initialDragVertexStates.filter(p => p.type === 'regular');
                 const originalIds = new Set(verticesToCopy.map(p => p.id));
                 const internalEdges = allEdges.filter(edge => originalIds.has(edge.id1) && originalIds.has(edge.id2));
@@ -8184,6 +8298,11 @@ function handleMouseUp(event) {
                 });
                 const allNewVertices = [];
                 const allNewEdges = [];
+                const allNewFaces = [];
+
+                const affectedFaces = allFaces.filter(face => 
+                    face.vertexIds && face.vertexIds.some(vId => originalIds.has(vId))
+                );
 
                 for (let i = 1; i < copyCount; i++) {
                     const newIdMapForThisCopy = new Map();
@@ -8201,6 +8320,7 @@ function handleMouseUp(event) {
                         allNewVertices.push(newVertex);
                         newIdMapForThisCopy.set(p.id, newVertex.id);
                     });
+                    
                     internalEdges.forEach(edge => {
                         const newId1 = newIdMapForThisCopy.get(edge.id1);
                         const newId2 = newIdMapForThisCopy.get(edge.id2);
@@ -8210,6 +8330,7 @@ function handleMouseUp(event) {
                             allNewEdges.push(newEdge);
                         }
                     });
+                    
                     externalEdges.forEach(edge => {
                         const originalDraggedId = originalIds.has(edge.id1) ? edge.id1 : edge.id2;
                         const staticId = originalIds.has(edge.id1) ? edge.id2 : edge.id1;
@@ -8220,9 +8341,34 @@ function handleMouseUp(event) {
                             allNewEdges.push(newEdge);
                         }
                     });
+
+                    affectedFaces.forEach(originalFace => {
+                        const newVertexIds = [];
+                        originalFace.vertexIds.forEach(originalVertexId => {
+                            if (originalIds.has(originalVertexId)) {
+                                const newId = newIdMapForThisCopy.get(originalVertexId);
+                                if (newId) {
+                                    newVertexIds.push(newId);
+                                }
+                            } else {
+                                newVertexIds.push(originalVertexId);
+                            }
+                        });
+
+                        if (newVertexIds.length >= 3) {
+                            const newFace = {
+                                id: U.getFaceId({ vertexIds: newVertexIds }),
+                                vertexIds: newVertexIds,
+                                color: originalFace.color || getColorForTarget(C.COLOR_TARGET_FACE)
+                            };
+                            allNewFaces.push(newFace);
+                        }
+                    });
                 }
+                
                 allVertices.push(...allNewVertices);
                 allEdges.push(...allNewEdges);
+                allFaces.push(...allNewFaces);
                 selectedVertexIds = allNewVertices.map(p => p.id);
                 selectedEdgeIds = allNewEdges.map(e => U.getEdgeId(e));
             } else {
@@ -8274,12 +8420,36 @@ function handleMouseUp(event) {
             });
 
             if (verticesToDelete.size > 0) {
-                topologyChanged = true;
-                allVertices = allVertices.filter(p => !verticesToDelete.has(p.id));
                 allEdges.forEach(edge => {
                     edge.id1 = findRoot(edge.id1);
                     edge.id2 = findRoot(edge.id2);
                 });
+
+                const newFaces = [];
+                const seenFaceIds = new Set();
+                allFaces.forEach(face => {
+                    const remappedVertexIds = face.vertexIds.map(vId => findRoot(vId))
+                                                         .filter((vId, index, self) => self.indexOf(vId) === index);
+
+                    if (remappedVertexIds.length < 3) {
+                        return;
+                    }
+
+                    const newFaceId = U.getFaceId({ vertexIds: remappedVertexIds });
+
+                    if (!seenFaceIds.has(newFaceId)) {
+                        const newFace = {
+                            ...face,
+                            vertexIds: remappedVertexIds,
+                            id: newFaceId
+                        };
+                        newFaces.push(newFace);
+                        seenFaceIds.add(newFaceId);
+                    }
+                });
+                allFaces = newFaces;
+
+                allVertices = allVertices.filter(p => !verticesToDelete.has(p.id));
                 allEdges = allEdges.filter((e, index, self) =>
                     e.id1 !== e.id2 &&
                     index === self.findIndex(t => U.getEdgeId(t) === U.getEdgeId(e))
@@ -8287,11 +8457,6 @@ function handleMouseUp(event) {
                 selectedVertexIds = Array.from(new Set(selectedVertexIds.map(id => findRoot(id)).filter(id => !verticesToDelete.has(id))));
             }
         }
-
-        if (topologyChanged) {
-            updateFaces(edgesBefore, allEdges);
-        }
-
     } else { // This is a CLICK action
         if (currentMouseButton === 0) {
             if (actionContext.target === 'ui-icon') {
@@ -8306,7 +8471,7 @@ function handleMouseUp(event) {
                     let newVertex = null;
     
                     if (snappedData.snapType === 'vertex' && snappedData.targetVertex) {
-                        newVertex = snappedData.targetVertex;
+    newVertex = snappedData.targetVertex;
                     } else if (snappedData.snapType === 'edge' && snappedData.targetEdge) {
                         newVertex = insertVertexOnEdgeWithFaces(snappedData.targetEdge, { x: snappedData.x, y: snappedData.y });
                     } else {
@@ -8315,7 +8480,7 @@ function handleMouseUp(event) {
                         if (colorIndex !== -1) {
                             const colorItem = allColors[colorIndex];
                             if (colorItem && colorItem.type === 'colormap') {
-                                newVertexColor = U.sampleColormap(colorItem, 0.5); // Temporary color
+                                newVertexColor = U.sampleColormap(colorItem, 0.5);
                             }
                         }
 
@@ -8328,6 +8493,7 @@ function handleMouseUp(event) {
                         if (!edgeExists) {
                             const newEdge = { id1: startVertex.id, id2: newVertex.id };
                             applyColormapToEdge(newEdge);
+                            
                             allEdges.push(newEdge);
                             updateFaces(edgesBefore, allEdges);
 
@@ -8414,6 +8580,7 @@ function handleMouseUp(event) {
                     window.currentDrawingPath = currentDrawingPath;
                 } else {
                     if (targetVertex || targetEdge || targetFace) {
+                        saveStateForUndo();    
                         const targetId = targetFace ? U.getFaceId(targetFace) : (targetEdge ? U.getEdgeId(targetEdge) : targetVertex.id);
                         let targetType;
                         if (targetFace) targetType = 'face';
@@ -8987,70 +9154,7 @@ export function findCoordinateSystemElement(screenPos, face, dataToScreen) {
            checkArm(0, -1, 'y_axis');
 }
 
-export function detectClosedPolygons(allEdges, findPointById) {
-    const adjacencyMap = new Map();
-    const vertices = new Map();
 
-    // Build adjacency map
-    allEdges.forEach(edge => {
-        const p1 = findPointById(edge.id1);
-        const p2 = findPointById(edge.id2);
-        if (!p1 || !p2 || p1.type !== 'regular' || p2.type !== 'regular') return;
-
-        if (!vertices.has(p1.id)) vertices.set(p1.id, p1);
-        if (!vertices.has(p2.id)) vertices.set(p2.id, p2);
-
-        if (!adjacencyMap.has(edge.id1)) adjacencyMap.set(edge.id1, []);
-        if (!adjacencyMap.has(edge.id2)) adjacencyMap.set(edge.id2, []);
-
-        adjacencyMap.get(edge.id1).push(edge.id2);
-        adjacencyMap.get(edge.id2).push(edge.id1);
-    });
-
-    // Sort neighbors by angle
-    for (const [vertexId, neighbors] of adjacencyMap.entries()) {
-        const centerPoint = vertices.get(vertexId);
-        if (!centerPoint) continue;
-        
-        neighbors.sort((a, b) => {
-            const pA = vertices.get(a);
-            const pB = vertices.get(b);
-            if (!pA || !pB) return 0;
-            
-            const angleA = Math.atan2(pA.y - centerPoint.y, pA.x - centerPoint.x);
-            const angleB = Math.atan2(pB.y - centerPoint.y, pB.x - centerPoint.x);
-            return angleA - angleB;
-        });
-    }
-
-    // Simple face finding: only keep minimal faces
-    const allCycles = findAllSimpleCycles(adjacencyMap, vertices);
-    const minimalFaces = filterToMinimalFaces(allCycles, vertices);
-    
-    return minimalFaces.map(face => ({
-        vertexIds: face,
-        id: `face_${[...face].sort().join('_')}`
-    }));
-}
-
-function findAllSimpleCycles(adjacencyMap, vertices) {
-    const visitedEdges = new Set();
-    const cycles = [];
-
-    for (const [start, neighbors] of adjacencyMap.entries()) {
-        for (const next of neighbors) {
-            const edgeKey = `${start}-${next}`;
-            if (visitedEdges.has(edgeKey)) continue;
-
-            const cycle = findCycleFromEdge(start, next, adjacencyMap, visitedEdges);
-            if (cycle && cycle.length >= 3 && cycle.length <= 6) {
-                cycles.push(cycle);
-            }
-        }
-    }
-
-    return cycles;
-}
 
 export function getClickedUIElement(screenPos, canvasUI, { isToolbarExpanded, isColorPaletteExpanded, isTransformPanelExpanded, isDisplayPanelExpanded, isVisibilityPanelExpanded }) {
     const isInside = (pos, rect) => {
@@ -9103,146 +9207,6 @@ export function getClickedUIElement(screenPos, canvasUI, { isToolbarExpanded, is
     return null;
 }
 
-function filterToMinimalFaces(cycles, vertices) {
-    if (cycles.length <= 1) return cycles;
-
-    // Calculate areas and sort by area (smallest first)
-    const cyclesWithAreas = cycles.map(cycle => {
-        const cycleVertices = cycle.map(id => vertices.get(id));
-        const area = Math.abs(shoelaceArea(cycleVertices));
-        return { cycle, area };
-    }).filter(c => c.area > 0.001) // Remove degenerate faces
-    .sort((a, b) => a.area - b.area);
-
-    const result = [];
-    
-    // Only keep faces that are not completely contained by other faces
-    for (const candidate of cyclesWithAreas) {
-        const candidateVertices = candidate.cycle.map(id => vertices.get(id));
-        let isContained = false;
-        
-        for (const existing of result) {
-            const existingVertices = existing.cycle.map(id => vertices.get(id));
-            
-            // Check if candidate is completely inside existing face
-            if (candidate.area < existing.area && 
-                candidateVertices.every(v => isVertexInPolygon(v, existingVertices))) {
-                isContained = true;
-                break;
-            }
-        }
-        
-        if (!isContained) {
-            // Also check if this face would contain any existing faces
-            // If so, don't add it (keep the smaller ones)
-            const wouldContainExisting = result.some(existing => {
-                const existingVertices = existing.cycle.map(id => vertices.get(id));
-                return existing.area < candidate.area && 
-                       existingVertices.every(v => isVertexInPolygon(v, candidateVertices));
-            });
-            
-            if (!wouldContainExisting) {
-                result.push(candidate);
-            }
-        }
-    }
-
-    return result.map(r => r.cycle);
-}
-
-function findCycleFromEdge(start, second, adjacencyMap, visitedEdges) {
-    const path = [start];
-    let current = start;
-    let next = second;
-    const maxSteps = 10; // Prevent infinite loops
-    let steps = 0;
-
-    while (steps < maxSteps) {
-        steps++;
-        visitedEdges.add(`${current}-${next}`);
-        path.push(next);
-
-        if (next === start) {
-            path.pop(); // Remove duplicate start
-            return path.length >= 3 ? path : null;
-        }
-
-        const neighbors = adjacencyMap.get(next);
-        if (!neighbors) return null;
-
-        const prevIndex = neighbors.indexOf(current);
-        if (prevIndex === -1) return null;
-
-        // Take next neighbor (counter-clockwise)
-        const nextIndex = (prevIndex + 1) % neighbors.length;
-        current = next;
-        next = neighbors[nextIndex];
-    }
-
-    return null;
-}
-
-
-export function debugFaceDetection(allEdges, findPointById) {
-    console.log('=== FACE DETECTION DEBUG ===');
-    console.log('Edges:', allEdges.map(e => `${e.id1}-${e.id2}`));
-    
-    // Debug the adjacency map
-    const adjacencyMap = new Map();
-    const vertices = new Map();
-
-    allEdges.forEach(edge => {
-        const p1 = findPointById(edge.id1);
-        const p2 = findPointById(edge.id2);
-        if (!p1 || !p2 || p1.type !== 'regular' || p2.type !== 'regular') return;
-
-        if (!vertices.has(p1.id)) vertices.set(p1.id, p1);
-        if (!vertices.has(p2.id)) vertices.set(p2.id, p2);
-
-        if (!adjacencyMap.has(edge.id1)) adjacencyMap.set(edge.id1, []);
-        if (!adjacencyMap.has(edge.id2)) adjacencyMap.set(edge.id2, []);
-
-        adjacencyMap.get(edge.id1).push(edge.id2);
-        adjacencyMap.get(edge.id2).push(edge.id1);
-    });
-
-    console.log('Adjacency map:');
-    for (const [vertexId, neighbors] of adjacencyMap.entries()) {
-        console.log(`  ${vertexId}: [${neighbors.join(', ')}]`);
-    }
-
-    // Sort neighbors and show the result
-    for (const [vertexId, neighbors] of adjacencyMap.entries()) {
-        const centerPoint = vertices.get(vertexId);
-        if (!centerPoint) continue;
-        
-        neighbors.sort((a, b) => {
-            const pA = vertices.get(a);
-            const pB = vertices.get(b);
-            if (!pA || !pB) return 0;
-            
-            const angleA = Math.atan2(pA.y - centerPoint.y, pA.x - centerPoint.x);
-            const angleB = Math.atan2(pB.y - centerPoint.y, pB.x - centerPoint.x);
-            return angleA - angleB;
-        });
-    }
-
-    console.log('Sorted adjacency map:');
-    for (const [vertexId, neighbors] of adjacencyMap.entries()) {
-        console.log(`  ${vertexId}: [${neighbors.join(', ')}]`);
-    }
-
-    const faces = detectClosedPolygons(allEdges, findPointById);
-    console.log('Detected faces:');
-    faces.forEach((face, i) => {
-        console.log(`Face ${i}:`, face.vertexIds);
-        const vertices = face.vertexIds.map(id => findPointById(id));
-        const area = Math.abs(shoelaceArea(vertices));
-        console.log(`  Area: ${area.toFixed(4)}`);
-    });
-    
-    return faces;
-}
 
 export function normalize(v) {
     const mag = Math.hypot(v.x, v.y);
@@ -9269,106 +9233,48 @@ export function getClosestPointOnLineSegment(p, a, b) {
     return { x: closestX, y: closestY, distance: dist, onSegmentStrict: onSegmentStrict, t: clampedT };
 }
 
-export function validateAndFilterFaces(faces, findPointById) {
-    if (faces.length <= 1) return faces;
-    
-    const validFaces = [];
-    const facesByArea = faces.map(face => {
-        const vertices = face.vertexIds.map(id => findPointById(id)).filter(v => v && v.type === 'regular');
-        const area = vertices.length >= 3 ? Math.abs(shoelaceArea(vertices)) : 0;
-        return { face, area, vertices };
-    }).filter(f => f.area > 0).sort((a, b) => a.area - b.area);
-    
-    for (const candidateData of facesByArea) {
-        const candidate = candidateData.face;
-        let isComposite = false;
-        
-        // Check if this face can be decomposed into smaller existing faces
-        const candidateEdges = new Set();
-        for (let i = 0; i < candidate.vertexIds.length; i++) {
-            const v1 = candidate.vertexIds[i];
-            const v2 = candidate.vertexIds[(i + 1) % candidate.vertexIds.length];
-            candidateEdges.add(getEdgeId({ id1: v1, id2: v2 }));
-        }
-        
-        // Look for combinations of existing faces that could form this candidate
-        for (let i = 0; i < validFaces.length && !isComposite; i++) {
-            for (let j = i + 1; j < validFaces.length && !isComposite; j++) {
-                const face1 = validFaces[i].face;
-                const face2 = validFaces[j].face;
-                
-                if (canCombineToForm(face1, face2, candidate)) {
-                    isComposite = true;
-                }
-            }
-        }
-        
-        if (!isComposite) {
-            validFaces.push(candidateData);
-        }
-    }
-    
-    return validFaces.map(f => f.face);
-}
-
-function canCombineToForm(face1, face2, targetFace) {
-    // Get edges for each face
-    const face1Edges = new Set();
-    const face2Edges = new Set();
-    const targetEdges = new Set();
-    
-    for (let i = 0; i < face1.vertexIds.length; i++) {
-        const v1 = face1.vertexIds[i];
-        const v2 = face1.vertexIds[(i + 1) % face1.vertexIds.length];
-        face1Edges.add(getEdgeId({ id1: v1, id2: v2 }));
-    }
-    
-    for (let i = 0; i < face2.vertexIds.length; i++) {
-        const v1 = face2.vertexIds[i];
-        const v2 = face2.vertexIds[(i + 1) % face2.vertexIds.length];
-        face2Edges.add(getEdgeId({ id1: v1, id2: v2 }));
-    }
-    
-    for (let i = 0; i < targetFace.vertexIds.length; i++) {
-        const v1 = targetFace.vertexIds[i];
-        const v2 = targetFace.vertexIds[(i + 1) % targetFace.vertexIds.length];
-        targetEdges.add(getEdgeId({ id1: v1, id2: v2 }));
-    }
-    
-    // Find shared edges (internal edges that should be removed)
-    const sharedEdges = new Set();
-    for (const edge of face1Edges) {
-        if (face2Edges.has(edge)) {
-            sharedEdges.add(edge);
-        }
-    }
-    
-    // Union of boundary edges (removing shared internal edges)
-    const unionBoundary = new Set();
-    for (const edge of face1Edges) {
-        if (!sharedEdges.has(edge)) {
-            unionBoundary.add(edge);
-        }
-    }
-    for (const edge of face2Edges) {
-        if (!sharedEdges.has(edge)) {
-            unionBoundary.add(edge);
-        }
-    }
-    
-    // Check if union boundary matches target
-    if (unionBoundary.size !== targetEdges.size) return false;
-    
-    for (const edge of targetEdges) {
-        if (!unionBoundary.has(edge)) return false;
-    }
-    
-    return true;
-}
-
 export function getMousePosOnCanvas(event, canvasElement) {
     const rect = canvasElement.getBoundingClientRect();
     return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+}
+
+function linesIntersectStrict(a1, a2, b1, b2) {
+    const denom = (b2.y - b1.y) * (a2.x - a1.x) - (b2.x - b1.x) * (a2.y - a1.y);
+    if (Math.abs(denom) < 1e-10) return false;
+    
+    const ua = ((b2.x - b1.x) * (a1.y - b1.y) - (b2.y - b1.y) * (a1.x - b1.x)) / denom;
+    const ub = ((a2.x - a1.x) * (a1.y - b1.y) - (a2.y - a1.y) * (a1.x - b1.x)) / denom;
+    
+    return ua > 0 && ua < 1 && ub > 0 && ub < 1;
+}
+
+export function findFacesToSplit(vertexId1, vertexId2, allFaces, findVertexById) {
+    const facesToSplit = [];
+    
+    allFaces.forEach(face => {
+        if (!face.vertexIds || face.vertexIds.length < 3) return;
+        
+        const hasVertex1 = face.vertexIds.includes(vertexId1);
+        const hasVertex2 = face.vertexIds.includes(vertexId2);
+        
+        
+        if (hasVertex1 && hasVertex2) {
+            const index1 = face.vertexIds.indexOf(vertexId1);
+            const index2 = face.vertexIds.indexOf(vertexId2);
+            const faceLength = face.vertexIds.length;
+            
+            const areAdjacent = 
+                (index1 === (index2 + 1) % faceLength) || 
+                (index2 === (index1 + 1) % faceLength);
+            
+            
+            if (!areAdjacent) {
+                facesToSplit.push(face);
+            }
+        }
+    });
+    
+    return facesToSplit;
 }
 
 function rgbToHsl(r, g, b) {
@@ -9463,27 +9369,6 @@ export function computeAngle(prev, curr, next) {
     return Math.acos(clamp(cos_theta, -1, 1));
 }
 
-export function isSelfIntersecting(vertices) {
-    const n = vertices.length;
-    for (let i = 0; i < n; i++) {
-        const p1 = vertices[i];
-        const p2 = vertices[(i + 1) % n];
-        for (let j = i + 2; j < n; j++) {
-            const q1 = vertices[j];
-            const q2 = vertices[(j + 1) % n];
-            if ((j + 1) % n === i || j === (i + 1) % n) continue;
-            if (linesIntersect(p1, p2, q1, q2)) return true;
-        }
-    }
-    return false;
-}
-
-function linesIntersect(a, b, c, d) {
-    function ccw(A, B, C) {
-        return (C.y - A.y) * (B.x - A.x) > (B.y - A.y) * (C.x - A.x);
-    }
-    return ccw(a, c, d) !== ccw(b, c, d) && ccw(a, b, c) !== ccw(a, b, d);
-}
 
 export function triangulatePolygon(vertices) {
     let n = vertices.length;
@@ -9784,6 +9669,238 @@ export function updateFaceLocalCoordinateSystems(allFaces, findPointById) {
     });
 }
 
+function walkMinimalFaceDirected(startVertex, secondVertex, adjacencyMap) {
+    const facePath = [startVertex];
+    let prevNode = startVertex;
+    let currentNode = secondVertex;
+    
+    const maxSteps = adjacencyMap.size + 2;
+    for (let stepCount = 0; stepCount < maxSteps; stepCount++) {
+        facePath.push(currentNode);
+
+        if (currentNode === startVertex) {
+            facePath.pop();
+            return facePath;
+        }
+
+        const neighbors = adjacencyMap.get(currentNode);
+        if (!neighbors || neighbors.length < 1) return null; 
+
+        const prevNodeIndex = neighbors.indexOf(prevNode);
+        if (prevNodeIndex === -1) return null;
+
+        const nextNodeIndex = (prevNodeIndex + 1) % neighbors.length;
+        const nextNode = neighbors[nextNodeIndex];
+        
+        prevNode = currentNode;
+        currentNode = nextNode;
+    }
+    return null;
+}
+
+function findAllTriangularFaces(adjacencyMap, vertices) {
+    const triangularFaces = [];
+    const processedTriangles = new Set();
+    
+    for (const [v1, neighbors1] of adjacencyMap.entries()) {
+        for (let i = 0; i < neighbors1.length; i++) {
+            const v2 = neighbors1[i];
+            const neighbors2 = adjacencyMap.get(v2) || [];
+            
+            for (let j = 0; j < neighbors2.length; j++) {
+                const v3 = neighbors2[j];
+                if (v3 === v1) continue;
+                
+                const neighbors3 = adjacencyMap.get(v3) || [];
+                
+                if (neighbors3.includes(v1)) {
+                    if (v1 !== v2 && v2 !== v3 && v3 !== v1) {
+                        const triangle = [v1, v2, v3];
+                        const triangleKey = triangle.slice().sort().join('_');
+                        
+                        if (!processedTriangles.has(triangleKey)) {
+                            processedTriangles.add(triangleKey);
+                            triangularFaces.push(triangle);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    return triangularFaces;
+}
+
+function filterCompositeFaces(allFaces, allEdges, findPointById) {
+    if (allFaces.length <= 1) return allFaces;
+
+    const allVertexIdsInComponent = new Set();
+    const edgeSet = new Set();
+    
+    allEdges.forEach(edge => {
+        allVertexIdsInComponent.add(edge.id1);
+        allVertexIdsInComponent.add(edge.id2);
+        const edgeKey = [edge.id1, edge.id2].sort().join('_');
+        edgeSet.add(edgeKey);
+    });
+
+    return allFaces.filter(face => {
+        const faceVertexSet = new Set(face.vertexIds);
+
+        for (const vertexId of allVertexIdsInComponent) {
+            if (!faceVertexSet.has(vertexId)) {
+                const vertex = findPointById(vertexId);
+                const faceVertices = face.vertexIds.map(id => findPointById(id));
+                
+                if (vertex && faceVertices.every(v => v) && isVertexInPolygon(vertex, faceVertices)) {
+                    return false;
+                }
+            }
+        }
+
+        const faceBoundaryEdges = new Set();
+        for (let i = 0; i < face.vertexIds.length; i++) {
+            const v1 = face.vertexIds[i];
+            const v2 = face.vertexIds[(i + 1) % face.vertexIds.length];
+            const edgeKey = [v1, v2].sort().join('_');
+            faceBoundaryEdges.add(edgeKey);
+        }
+
+        for (let i = 0; i < face.vertexIds.length; i++) {
+            for (let j = i + 2; j < face.vertexIds.length; j++) {
+                if (j === face.vertexIds.length - 1 && i === 0) continue;
+                
+                const v1 = face.vertexIds[i];
+                const v2 = face.vertexIds[j];
+                const edgeKey = [v1, v2].sort().join('_');
+                
+                if (edgeSet.has(edgeKey)) {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    });
+}
+
+function isSelfIntersectingImproved(vertices) {
+    const n = vertices.length;
+    if (n <= 3) return false;
+    
+    for (let i = 0; i < n; i++) {
+        const p1 = vertices[i];
+        const p2 = vertices[(i + 1) % n];
+        
+        for (let j = i + 2; j < n; j++) {
+            if (j === (i + n - 1) % n || (j + 1) % n === i) continue;
+            
+            const q1 = vertices[j];
+            const q2 = vertices[(j + 1) % n];
+            
+            if (linesIntersectProper(p1, p2, q1, q2)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+function linesIntersectProper(a, b, c, d) {
+    function ccw(A, B, C) {
+        return (C.y - A.y) * (B.x - A.x) > (B.y - A.y) * (C.x - A.x);
+    }
+    
+    const intersect = ccw(a, c, d) !== ccw(b, c, d) && ccw(a, b, c) !== ccw(a, b, d);
+    
+    if (!intersect) return false;
+    
+    const samePoint = (p1, p2) => Math.abs(p1.x - p2.x) < 1e-10 && Math.abs(p1.y - p2.y) < 1e-10;
+    
+    return !(samePoint(a, c) || samePoint(a, d) || samePoint(b, c) || samePoint(b, d));
+}
+
+export function detectClosedPolygons(allEdges, findPointById) {
+    const adjacencyMap = new Map();
+    const vertices = new Map();
+
+    allEdges.forEach(edge => {
+        const p1 = findPointById(edge.id1);
+        const p2 = findPointById(edge.id2);
+        if (!p1 || !p2 || p1.type !== 'regular' || p2.type !== 'regular') return;
+        if (!vertices.has(p1.id)) vertices.set(p1.id, p1);
+        if (!vertices.has(p2.id)) vertices.set(p2.id, p2);
+        if (!adjacencyMap.has(edge.id1)) adjacencyMap.set(edge.id1, []);
+        if (!adjacencyMap.has(edge.id2)) adjacencyMap.set(edge.id2, []);
+        adjacencyMap.get(edge.id1).push(edge.id2);
+        adjacencyMap.get(edge.id2).push(edge.id1);
+    });
+
+    for (const [vertexId, neighbors] of adjacencyMap.entries()) {
+        const centerPoint = vertices.get(vertexId);
+        if (!centerPoint) continue;
+        neighbors.sort((a, b) => {
+            const pA = vertices.get(a);
+            const pB = vertices.get(b);
+            if (!pA || !pB) return 0;
+            const angleA = Math.atan2(pA.y - centerPoint.y, pA.x - centerPoint.x);
+            const angleB = Math.atan2(pB.y - centerPoint.y, pB.x - centerPoint.x);
+            return angleA - angleB;
+        });
+    }
+
+    const triangularFaces = findAllTriangularFaces(adjacencyMap, vertices);
+    
+    const allPossibleFaces = triangularFaces.map(triangle => ({
+        vertexIds: triangle,
+        id: `face_${triangle.join('_')}`
+    }));
+
+    const processedDirectedEdges = new Set();
+    for (const [startVertex, neighbors] of adjacencyMap.entries()) {
+        for (const nextVertex of neighbors) {
+            const directedEdgeKey = `${startVertex}->${nextVertex}`;
+            if (processedDirectedEdges.has(directedEdgeKey)) continue;
+
+            const facePath = walkMinimalFaceDirected(startVertex, nextVertex, adjacencyMap);
+            
+            if (facePath && facePath.length >= 3) {
+                const uniqueVertices = new Set(facePath);
+                if (uniqueVertices.size === facePath.length) {
+                    for (let i = 0; i < facePath.length; i++) {
+                        const v1 = facePath[i];
+                        const v2 = facePath[(i + 1) % facePath.length];
+                        processedDirectedEdges.add(`${v1}->${v2}`);
+                    }
+                    
+                    if (facePath.length > 3) {
+                        allPossibleFaces.push({
+                            vertexIds: facePath,
+                            id: `face_${facePath.join('_')}`
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    const principleFaces = filterCompositeFaces(allPossibleFaces, allEdges, findPointById);
+
+    const uniqueFaces = [];
+    const seenFaceVertexSets = new Set();
+    
+    principleFaces.forEach(face => {
+        const sortedVertexIds = [...face.vertexIds].sort().join('_');
+        if (!seenFaceVertexSets.has(sortedVertexIds)) {
+            uniqueFaces.push(face);
+            seenFaceVertexSets.add(sortedVertexIds);
+        }
+    });
+
+    return uniqueFaces;
+}
+
+
 export function detectFacesFromNewEdge(newEdge, allEdges, findPointById, deletedFaceIds = new Set()) {
     // Get all possible faces with the current edge set
     const allPossibleFaces = detectClosedPolygons(allEdges, findPointById);
@@ -9993,7 +10110,7 @@ Now please just read the project and the rules for writing code and just wait fo
 Here are the rules:
 1. DONT write comments, placeholders or docstrings if not explicitely told.
 2. Write functions with the correct initial indentation so that if the function is indented so is your code that you write.
-3. Use regular spaces: " " and do NOT use " " for space. MAKE SURE TO FOLLOW THIS!
+3. DO NOT USE NON-TERMINATED SPACES: " ". MAKE SURE TO FOLLOW THIS!
 4. For changes that require multiple replacements please tell me what to replace with what instead of rewriting large portions of text. You can use vscode valid regexp for instance.
 5. For small functions less than 100 lines of code pleae rewrite the full function. For larger functions than that please only write complete control statements if/while/case.
 6. Never omit/change working logic if not explicitely statet that it should be removed/change
