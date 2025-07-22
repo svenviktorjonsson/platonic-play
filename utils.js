@@ -337,29 +337,53 @@ export function findCoordinateSystemElement(screenPos, face, dataToScreen) {
     if (!coordSystem) return null;
 
     const centerScreen = dataToScreen(coordSystem.origin);
-    const centerSelectRadius = 10; // in screen pixels
+    const centerSelectRadius = 8; // Smaller radius for center
 
+    // Check center first (higher priority)
     if (distance(screenPos, centerScreen) < centerSelectRadius) {
         return { face, type: 'center' };
     }
 
-    const armEndSelectRadius = 10; // in screen pixels
+    const armEndSelectRadius = 12; // Larger radius for arm ends
 
     const checkArm = (x, y, type) => {
         const armEndGlobal = localToGlobal({ x, y }, coordSystem);
-        if (distance(screenPos, dataToScreen(armEndGlobal)) < armEndSelectRadius) {
+        const armEndScreen = dataToScreen(armEndGlobal);
+        if (distance(screenPos, armEndScreen) < armEndSelectRadius) {
             return { face, type };
         }
         return null;
     };
 
+    // Check positive direction arms first (more common to grab)
     return checkArm(1, 0, 'x_axis') ||
-           checkArm(-1, 0, 'x_axis') ||
            checkArm(0, 1, 'y_axis') ||
+           checkArm(-1, 0, 'x_axis') ||
            checkArm(0, -1, 'y_axis');
 }
 
-
+export function clampPointToPolygon(point, vertices) {
+    if (isVertexInPolygon(point, vertices)) {
+        return point;
+    }
+    
+    let closestPoint = point;
+    let minDistance = Infinity;
+    
+    // Check distance to each edge and find closest point
+    for (let i = 0; i < vertices.length; i++) {
+        const v1 = vertices[i];
+        const v2 = vertices[(i + 1) % vertices.length];
+        const edgeClosest = getClosestPointOnLineSegment(point, v1, v2);
+        
+        if (edgeClosest.distance < minDistance) {
+            minDistance = edgeClosest.distance;
+            closestPoint = { x: edgeClosest.x, y: edgeClosest.y };
+        }
+    }
+    
+    return closestPoint;
+}
 
 export function getClickedUIElement(screenPos, canvasUI, { isToolbarExpanded, isColorPaletteExpanded, isTransformPanelExpanded, isDisplayPanelExpanded, isVisibilityPanelExpanded }) {
     const isInside = (pos, rect) => {
@@ -506,6 +530,109 @@ function rgbToHsl(r, g, b) {
     }
 
     return [h, s, l];
+}
+
+export function getCoordinateSystemSnapPosition(mouseDataPos, snapTargets, isShiftPressed, gridDisplayMode, lastGridState, lastAngularGridState) {
+    if (!isShiftPressed) {
+        return mouseDataPos;
+    }
+    
+    let closestSnap = null;
+    let minDistance = Infinity;
+    
+    if (snapTargets) {
+        // Check vertex snaps
+        snapTargets.vertices.forEach(vertex => {
+            const dist = distance(mouseDataPos, vertex);
+            if (dist < minDistance) {
+                minDistance = dist;
+                closestSnap = vertex;
+            }
+        });
+        
+        // Check edge midpoints
+        snapTargets.edgeMidvertices.forEach(midpoint => {
+            const dist = distance(mouseDataPos, midpoint);
+            if (dist < minDistance) {
+                minDistance = dist;
+                closestSnap = midpoint;
+            }
+        });
+        
+        // Check other face centers
+        snapTargets.faceCenters.forEach(center => {
+            const dist = distance(mouseDataPos, center);
+            if (dist < minDistance) {
+                minDistance = dist;
+                closestSnap = center;
+            }
+        });
+    }
+    
+    // Check grid snaps
+    if (gridDisplayMode && gridDisplayMode !== 'none' && lastGridState && lastGridState.interval1) {
+        const gridInterval = (lastGridState.alpha2 > lastGridState.alpha1 && lastGridState.interval2) 
+            ? lastGridState.interval2 
+            : lastGridState.interval1;
+        
+        const gridCandidates = getGridSnapCandidates(mouseDataPos, gridDisplayMode, gridInterval, lastAngularGridState, true);
+        gridCandidates.forEach(gridPoint => {
+            const dist = distance(mouseDataPos, gridPoint);
+            if (dist < minDistance) {
+                minDistance = dist;
+                closestSnap = gridPoint;
+            }
+        });
+    }
+    
+    return closestSnap || mouseDataPos;
+}
+
+export function getAxisSnapAngle(mouseDataPos, origin, isShiftPressed, snapTargets) {
+    const rawAngle = Math.atan2(mouseDataPos.y - origin.y, mouseDataPos.x - origin.x);
+    
+    if (!isShiftPressed || !snapTargets) {
+        return { angle: rawAngle, edgeIndex: null, snapType: null };
+    }
+    
+    const snapThreshold = Math.PI / 24;
+    let closestAngle = rawAngle;
+    let minDifference = Infinity;
+    let bestEdgeIndex = null;
+    let bestSnapType = null;
+    
+    const cardinalAngles = [0, Math.PI/4, Math.PI/2, 3*Math.PI/4, Math.PI, -3*Math.PI/4, -Math.PI/2, -Math.PI/4];
+    cardinalAngles.forEach(angle => {
+        const diff = Math.abs(normalizeAngleToPi(rawAngle - angle));
+        if (diff < snapThreshold && diff < minDifference) {
+            minDifference = diff;
+            closestAngle = angle;
+            bestEdgeIndex = null;
+            bestSnapType = 'cardinal';
+        }
+    });
+    
+    if (snapTargets.edgeAngles) {
+        snapTargets.edgeAngles.forEach((angle, edgeIndex) => {
+            [angle, angle + Math.PI/2, angle - Math.PI/2, angle + Math.PI].forEach(checkAngle => {
+                const normalizedCheck = normalizeAngleToPi(checkAngle);
+                const diff = Math.abs(normalizeAngleToPi(rawAngle - normalizedCheck));
+                if (diff < snapThreshold && diff < minDifference) {
+                    minDifference = diff;
+                    closestAngle = normalizedCheck;
+                    bestEdgeIndex = edgeIndex;
+                    bestSnapType = 'edge';
+                }
+            });
+        });
+    }
+    
+    return {
+        angle: closestAngle,
+        edgeIndex: bestEdgeIndex,
+        snapType: bestSnapType,
+        snapped: minDifference < snapThreshold
+    };
 }
 
 export function invertGrayscaleValue(value) {

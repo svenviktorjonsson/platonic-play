@@ -3109,11 +3109,52 @@ function drawTriangleIcon(ctx, rect, options, colors, isActive = false) {
     ctx.restore();
 }
 
-export function drawFace(ctx, screenVertices, color, colors) {
+export function drawFace(ctx, screenVertices, face, colors, dataToScreen, findVertexById) {
     if (!screenVertices || screenVertices.length < 3) return;
 
     ctx.save();
-    ctx.fillStyle = color || colors.face;
+    
+    if (face && face.colormapItem && face.localCoordSystem) {
+        // Create gradient based on face coordinate system
+        const vertices = face.vertexIds.map(id => findVertexById(id)).filter(p => p && p.type === 'regular');
+        if (vertices.length >= 3) {
+            // Find bounding box in local coordinates
+            let minX = Infinity, maxX = -Infinity;
+            vertices.forEach(vertex => {
+                const localPos = U.globalToLocal(vertex, face.localCoordSystem);
+                minX = Math.min(minX, localPos.x);
+                maxX = Math.max(maxX, localPos.x);
+            });
+            
+            // Convert local bounds to global coordinates
+            const localMin = { x: minX, y: 0 };
+            const localMax = { x: maxX, y: 0 };
+            const globalMin = U.localToGlobal(localMin, face.localCoordSystem);
+            const globalMax = U.localToGlobal(localMax, face.localCoordSystem);
+            
+            // Convert to screen coordinates
+            const screenMin = dataToScreen(globalMin);
+            const screenMax = dataToScreen(globalMax);
+            
+            // Create gradient
+            const gradient = ctx.createLinearGradient(screenMin.x, screenMin.y, screenMax.x, screenMax.y);
+            face.colormapItem.vertices.forEach(vertex => {
+                let colorValue = vertex.color;
+                if (typeof colorValue === 'string') {
+                    gradient.addColorStop(vertex.pos, colorValue);
+                } else {
+                    const alpha = vertex.alpha !== undefined ? vertex.alpha : 1.0;
+                    gradient.addColorStop(vertex.pos, `rgba(${colorValue.join(',')},${alpha})`);
+                }
+            });
+            ctx.fillStyle = gradient;
+        } else {
+            ctx.fillStyle = face.color || colors.face;
+        }
+    } else {
+        ctx.fillStyle = face?.color || colors.face;
+    }
+    
     ctx.beginPath();
     screenVertices.forEach((vertex, index) => {
         if (index === 0) {
@@ -3160,7 +3201,7 @@ export function drawFaces(ctx, { allFaces, facesVisible, isDragConfirmed, dragPr
         const screenVertices = vertices.map(v => dataToScreen(v));
         
         if (screenVertices.every(v => v && typeof v.x === 'number' && typeof v.y === 'number')) {
-            drawFace(ctx, screenVertices, face.color, colors);
+            drawFace(ctx, screenVertices, face, colors, dataToScreen, findVertexById);
         }
     });
 }
@@ -3714,7 +3755,7 @@ export function drawSelectedEdgeAngles(ctx, htmlOverlay, selectedEdgeIds, allEdg
     });
 }
 
-export function drawFaceCoordinateSystems(ctx, { allFaces, selectedFaceIds, colors, isDragConfirmed, dragPreviewVertices }, dataToScreen, findVertexById) {
+export function drawFaceCoordinateSystems(ctx, { allFaces, selectedFaceIds, colors, isDragConfirmed, dragPreviewVertices, highlightedEdgeForSnap, draggedFaceId, coordSystemSnapAngle, coordSystemSnapType }, dataToScreen, findVertexById) {
     const facesToDraw = new Set(selectedFaceIds);
     if (facesToDraw.size === 0) return;
 
@@ -3738,6 +3779,46 @@ export function drawFaceCoordinateSystems(ctx, { allFaces, selectedFaceIds, colo
 
         if (isDragConfirmed && !face.localCoordSystem.isCustom) {
             updateFaceCoordinateSystemForDrag(face, vertices);
+        }
+
+        // Draw snap visualization when dragging this face's coordinate system
+        if (draggedFaceId === faceId && coordSystemSnapAngle !== null) {
+            const origin = face.localCoordSystem.origin;
+            const originScreen = dataToScreen(origin);
+            
+            if (coordSystemSnapType === 'edge' && highlightedEdgeForSnap !== null && highlightedEdgeForSnap < vertices.length) {
+                // Draw highlighted edge in ghost color
+                const edgeStart = vertices[highlightedEdgeForSnap];
+                const edgeEnd = vertices[(highlightedEdgeForSnap + 1) % vertices.length];
+                const startScreen = dataToScreen(edgeStart);
+                const endScreen = dataToScreen(edgeEnd);
+                
+                ctx.save();
+                ctx.strokeStyle = colors.feedbackSnapped;
+                ctx.lineWidth = 3;
+                ctx.beginPath();
+                ctx.moveTo(startScreen.x, startScreen.y);
+                ctx.lineTo(endScreen.x, endScreen.y);
+                ctx.stroke();
+                ctx.restore();
+            } else if (coordSystemSnapType === 'cardinal') {
+                // Draw dashed line for cardinal/45-degree angles
+                const lineLength = 100; // Screen pixels
+                const lineEndX = originScreen.x + Math.cos(-coordSystemSnapAngle) * lineLength;
+                const lineEndY = originScreen.y + Math.sin(-coordSystemSnapAngle) * lineLength;
+                const lineStartX = originScreen.x - Math.cos(-coordSystemSnapAngle) * lineLength;
+                const lineStartY = originScreen.y - Math.sin(-coordSystemSnapAngle) * lineLength;
+                
+                ctx.save();
+                ctx.strokeStyle = colors.feedbackSnapped;
+                ctx.lineWidth = 2;
+                ctx.setLineDash([8, 4]);
+                ctx.beginPath();
+                ctx.moveTo(lineStartX, lineStartY);
+                ctx.lineTo(lineEndX, lineEndY);
+                ctx.stroke();
+                ctx.restore();
+            }
         }
 
         drawCoordinateSystemCross(ctx, face.localCoordSystem, colors, dataToScreen);

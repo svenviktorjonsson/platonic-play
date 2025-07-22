@@ -26,6 +26,11 @@ const canvasUI = {
     symmetryIcons: []
 };
 
+let coordSystemTransformIndicatorData = null;
+let highlightedEdgeForSnap = null;
+let coordSystemSnapAngle = null;
+let draggedFaceId = null;
+let coordSystemSnapType = null;
 
 let isDraggingColorTarget = false;
 let draggedColorTargetInfo = null;
@@ -305,12 +310,37 @@ function applyColorsToSelection() {
                 });
             }
         } else if (target === C.COLOR_TARGET_FACE) {
-            const color = getColorForTarget(C.COLOR_TARGET_FACE);
-            allFaces.forEach(face => {
-                if (selectedFaceIds.includes(U.getFaceId(face))) {
-                    face.color = color;
+            const colorIndex = colorAssignments[target];
+            if (colorIndex === -1) {
+                const color = getColorForTarget(C.COLOR_TARGET_FACE);
+                allFaces.forEach(face => {
+                    if (selectedFaceIds.includes(U.getFaceId(face))) {
+                        face.color = color;
+                        delete face.colormapItem;
+                        delete face.colormapDistribution;
+                    }
+                });
+            } else {
+                const colorItem = allColors[colorIndex];
+                if (colorItem && colorItem.type === 'colormap') {
+                    allFaces.forEach(face => {
+                        if (selectedFaceIds.includes(U.getFaceId(face))) {
+                            face.colormapItem = colorItem;
+                            face.colormapDistribution = 'x'; // Default to x-direction
+                            delete face.color;
+                        }
+                    });
+                } else {
+                    const color = getColorForTarget(C.COLOR_TARGET_FACE);
+                    allFaces.forEach(face => {
+                        if (selectedFaceIds.includes(U.getFaceId(face))) {
+                            face.color = color;
+                            delete face.colormapItem;
+                            delete face.colormapDistribution;
+                        }
+                    });
                 }
-            });
+            }
         }
     });
 }
@@ -2548,7 +2578,11 @@ function redrawAll() {
                 selectedFaceIds,
                 colors: getColors(),
                 isDragConfirmed,
-                dragPreviewVertices
+                dragPreviewVertices,
+                highlightedEdgeForSnap,
+                draggedFaceId,
+                coordSystemSnapAngle,
+                coordSystemSnapType
             }, dataToScreen, findVertexById);
         }
     }
@@ -2678,6 +2712,10 @@ function redrawAll() {
 
     if (transformIndicatorData) {
         R.drawTransformIndicators(ctx, htmlOverlay, { transformIndicatorData, angleSigFigs, distanceSigFigs, colors }, dataToScreen, updateHtmlLabel);
+    }
+
+    if (coordSystemTransformIndicatorData) {
+        R.drawTransformIndicators(ctx, htmlOverlay, { transformIndicatorData: coordSystemTransformIndicatorData, angleSigFigs, distanceSigFigs, colors }, dataToScreen, updateHtmlLabel);
     }
 
     R.updateMouseCoordinates(htmlOverlay, { coordsDisplayMode, isMouseOverCanvas, currentShiftPressed, ghostVertexPosition, gridDisplayMode, lastGridState, angleDisplayMode, canvas, dpr, mousePos, colors }, screenToData, updateHtmlLabel);
@@ -2916,6 +2954,11 @@ function performEscapeAction() {
     transformIndicatorData = null;
     ghostVertices = [];
     ghostVertexPosition = null;
+    highlightedEdgeForSnap = null;
+    coordSystemSnapAngle = null;
+    draggedFaceId = null;
+    coordSystemSnapType = null;
+    coordSystemTransformIndicatorData = null;
 }
 
 function handleRepeat() {
@@ -3030,41 +3073,6 @@ function gameLoop() {
     requestAnimationFrame(gameLoop);
 }
 
-function buildAdjacencyMap(edges) {
-    const adjMap = new Map();
-    edges.forEach(e => {
-        if (!adjMap.has(e.id1)) adjMap.set(e.id1, []);
-        if (!adjMap.has(e.id2)) adjMap.set(e.id2, []);
-        adjMap.get(e.id1).push(e.id2);
-        adjMap.get(e.id2).push(e.id1);
-    });
-    return adjMap;
-}
-
-function findAllSimplePaths(startId, endId, adjMap) {
-    const allPaths = [];
-    const queue = [[startId, [startId]]];
-
-    while (queue.length > 0) {
-        const [currentId, path] = queue.shift();
-
-        if (path.length > allVertices.length) continue;
-
-        const neighbors = adjMap.get(currentId) || [];
-        for (const neighborId of neighbors) {
-            if (neighborId === endId) {
-                allPaths.push([...path, neighborId]);
-                continue;
-            }
-
-            if (!path.includes(neighborId)) {
-                const newPath = [...path, neighborId];
-                queue.push([neighborId, newPath]);
-            }
-        }
-    }
-    return allPaths;
-}
 
 function handleCoordinateSystemMouseDown(event) {
     if (selectedFaceIds.length === 0) return false;
@@ -3079,7 +3087,7 @@ function handleCoordinateSystemMouseDown(event) {
         if (element) {
             isDraggingCoordSystem = true;
             draggedCoordSystemElement = element;
-
+            draggedFaceId = face.id;
             coordSystemSnapTargets = prepareCoordSystemSnapTargets(face);
 
             if (element.type === 'center') {
@@ -3136,16 +3144,43 @@ function handleCoordinateSystemMouseMove(event) {
     const face = element.face;
     const coordSystem = face.localCoordSystem;
 
-    if (element.type === 'center') {
-        const snappedPos = U.getCoordinateSystemSnapPosition(
-            mouseDataPos,
-            coordSystemSnapTargets,
-            event.shiftKey
-        );
+    // Get face vertices for boundary clamping
+    const faceVertices = face.vertexIds.map(id => findVertexById(id)).filter(p => p && p.type === 'regular');
 
-        coordSystem.origin.x = snappedPos.x;
-        coordSystem.origin.y = snappedPos.y;
-        coordSystem.isCustom = true;
+    if (element.type === 'center') {
+        // Dragging center = translate the entire coordinate system
+        let targetPos;
+        
+        if (event.shiftKey) {
+            // When shift is held, always snap to closest valid position
+            const snapPos = U.getCoordinateSystemSnapPosition(
+                mouseDataPos,
+                coordSystemSnapTargets,
+                true,
+                gridDisplayMode,
+                lastGridState,
+                lastAngularGridState
+            );
+            
+            targetPos = U.clampPointToPolygon(snapPos, faceVertices);
+            
+            // Update coordinate system position
+            coordSystem.origin.x = targetPos.x;
+            coordSystem.origin.y = targetPos.y;
+            coordSystem.isCustom = true;
+            
+            // Update ghost position to show where we're snapping
+            ghostVertexPosition = targetPos;
+        } else {
+            // Free dragging but clamp to face interior
+            targetPos = U.clampPointToPolygon(mouseDataPos, faceVertices);
+            coordSystem.origin.x = targetPos.x;
+            coordSystem.origin.y = targetPos.y;
+            coordSystem.isCustom = true;
+            
+            // No ghost for free dragging
+            ghostVertexPosition = null;
+        }
 
     } else if (element.type === 'x_axis' || element.type === 'y_axis') {
         const vectorFromOrigin = {
@@ -3156,26 +3191,55 @@ function handleCoordinateSystemMouseMove(event) {
         const newScale = Math.hypot(vectorFromOrigin.x, vectorFromOrigin.y);
         let newAngle = Math.atan2(vectorFromOrigin.y, vectorFromOrigin.x);
 
-        // Snap angle
-        const snappedAngle = U.getAxisSnapAngle(
-            mouseDataPos,
-            coordSystem.origin,
-            event.shiftKey,
-            coordSystemSnapTargets
-        );
-        newAngle = snappedAngle;
+        const originalAngle = element.type === 'y_axis' ? coordSystem.angle + Math.PI / 2 : coordSystem.angle;
+        const originalScale = coordSystem.scale;
+        const referencePoint = {
+            x: coordSystem.origin.x + originalScale * Math.cos(originalAngle),
+            y: coordSystem.origin.y + originalScale * Math.sin(originalAngle)
+        };
 
-        // Apply rotation based on which axis is dragged
+        highlightedEdgeForSnap = null;
+        coordSystemSnapAngle = null;
+        coordSystemSnapType = null;
+        ghostVertices = [];
+        ghostVertexPosition = null;
+
+        if (event.shiftKey) {
+            const snapResult = U.getAxisSnapAngle(mouseDataPos, coordSystem.origin, true, coordSystemSnapTargets);
+            if (snapResult.snapped) {
+                newAngle = snapResult.angle;
+                highlightedEdgeForSnap = snapResult.edgeIndex;
+                coordSystemSnapAngle = snapResult.angle;
+                coordSystemSnapType = snapResult.snapType;
+            }
+        }
+
         if (element.type === 'y_axis') {
             coordSystem.angle = newAngle - Math.PI / 2;
-        } else { // x_axis
+        } else {
             coordSystem.angle = newAngle;
         }
         
-        // Apply scale
-        coordSystem.scale = newScale;
-
+        if (newScale > 0.01) {
+            coordSystem.scale = newScale;
+        }
+        
         coordSystem.isCustom = true;
+        
+        const currentPoint = {
+            x: coordSystem.origin.x + coordSystem.scale * Math.cos(newAngle),
+            y: coordSystem.origin.y + coordSystem.scale * Math.sin(newAngle)
+        };
+        
+        coordSystemTransformIndicatorData = {
+            center: coordSystem.origin,
+            startPos: referencePoint,
+            currentPos: currentPoint,
+            rotation: U.normalizeAngleToPi(newAngle - originalAngle),
+            scale: coordSystem.scale / originalScale,
+            isSnapping: event.shiftKey && snapResult && snapResult.snapped,
+            transformType: 'coordinate_system'
+        };
     }
 
     return true;
@@ -3186,59 +3250,21 @@ function handleCoordinateSystemMouseUp() {
         isDraggingCoordSystem = false;
         draggedCoordSystemElement = null;
         coordSystemSnapTargets = null;
+        highlightedEdgeForSnap = null;
+        coordSystemSnapAngle = null;
+        coordSystemSnapType = null;
+        draggedFaceId = null; // Add this line
+        ghostVertexPosition = null;
+        ghostVertices = [];
+        coordSystemTransformIndicatorData = null;
         return true;
     }
-    return false;
-}
-
-function handleCoordinateSystemKeyDown(event) {
-    if (selectedFaceIds.length === 0) return false;
-
-    if (event.key === 'r' && !event.ctrlKey && !event.shiftKey) {
-        saveStateForUndo();
-        selectedFaceIds.forEach(faceId => {
-            const face = allFaces.find(f => f.id === faceId);
-            if (face && face.localCoordSystem) {
-                face.localCoordSystem.isCustom = false;
-                face.localCoordSystem.angle = 0;
-                U.updateFaceLocalCoordinateSystems([face], findVertexById);
-            }
-        });
-        event.preventDefault();
-        return true;
-    }
-
-    return false;
-}
-
-
-
-function handleCoordSystemKeyDown(event) {
-    if (selectedFaceIds.length === 0) return false;
-
-    if (event.key === 'r' && !event.ctrlKey && !event.shiftKey) {
-        saveStateForUndo();
-        selectedFaceIds.forEach(faceId => {
-            const face = allFaces.find(f => f.id === faceId);
-            if (face && face.localCoordSystem) {
-                face.localCoordSystem.isCustom = false;
-                face.localCoordSystem.angle = 0;
-                U.updateFaceLocalCoordinateSystems([face], findVertexById);
-            }
-        });
-        event.preventDefault();
-        return true;
-    }
-
     return false;
 }
 
 function handleKeyDown(event) {
     const isCtrlOrCmd = event.ctrlKey || event.metaKey;
     const colors = getColors();
-    if (handleCoordSystemKeyDown(event)) {
-        return;
-    }
 
     if (event.key === 'Shift' && !currentShiftPressed) {
         currentShiftPressed = true;
@@ -3279,7 +3305,25 @@ function handleKeyDown(event) {
                 R.prepareSnapInfoTexts(ctx, htmlOverlay, startVertex, snappedData, snappedData, stateForSnapInfo, dataToScreen, currentPreviewDrawingContext, updateHtmlLabel);
             }
         } else if (!isActionInProgress) {
-            ghostVertexPosition = getBestSnapPosition(mouseDataPos);
+            if (isDraggingCoordSystem && draggedCoordSystemElement && draggedCoordSystemElement.type === 'center') {
+                const potentialSnapPos = getBestSnapPosition(mouseDataPos);
+                if (potentialSnapPos) {
+                    ghostVertexPosition = potentialSnapPos;
+                    // Apply the snap to the coordinate system
+                    const face = draggedCoordSystemElement.face;
+                    const coordSystem = face.localCoordSystem;
+                    const faceVertices = face.vertexIds.map(id => findVertexById(id)).filter(p => p && p.type === 'regular');
+                    const clampedPos = U.clampPointToPolygon(potentialSnapPos, faceVertices);
+                    coordSystem.origin.x = clampedPos.x;
+                    coordSystem.origin.y = clampedPos.y;
+                    coordSystem.isCustom = true;
+                }
+            } else {
+                const clickedFace = findClickedFace(mousePos);
+                if (!clickedFace) {
+                    ghostVertexPosition = getBestSnapPosition(mouseDataPos);
+                }
+            }
         }
     }
 
@@ -3372,8 +3416,6 @@ function handleKeyDown(event) {
         }
     }
 }
-
-
 
 function handleColorToolButtonClick() {
     isColorPaletteExpanded = !isColorPaletteExpanded;
@@ -3729,8 +3771,17 @@ function handleMouseMove(event) {
                 const snappedData = getSnappedPosition(startVertex, mousePos, currentShiftPressed);
                 ghostVertexPosition = { x: snappedData.x, y: snappedData.y };
             }
-        } else {
+        } else if (isDraggingCoordSystem && draggedCoordSystemElement && draggedCoordSystemElement.type === 'center') {
+            // Show ghost when dragging coordinate system center
             ghostVertexPosition = getBestSnapPosition(mouseDataPos);
+        } else {
+            // Don't show ghost vertex if cursor is inside a face (would select face, not start drawing)
+            const clickedFace = findClickedFace(mousePos);
+            if (!clickedFace) {
+                ghostVertexPosition = getBestSnapPosition(mouseDataPos);
+            } else {
+                ghostVertexPosition = null;
+            }
         }
     } else if (!currentShiftPressed && isDrawingMode && previewLineStartVertexId) {
         const startVertex = findVertexById(previewLineStartVertexId);
@@ -4535,6 +4586,26 @@ function handleMouseUp(event) {
     if (!currentShiftPressed) ghostVertexPosition = null;
 }
 
+function handleKeyUp(event) {
+    if (event.key === 'Shift') {
+        currentShiftPressed = false;
+        ghostVertexPosition = null;
+        placingSnapPos = null;
+        ghostVertices = [];
+        
+        if (isDraggingCoordSystem && draggedCoordSystemElement && draggedCoordSystemElement.type === 'center') {
+            const mouseDataPos = screenToData(mousePos);
+            const face = draggedCoordSystemElement.face;
+            const coordSystem = face.localCoordSystem;
+            const faceVertices = face.vertexIds.map(id => findVertexById(id)).filter(p => p && p.type === 'regular');
+            const clampedPos = U.clampPointToPolygon(mouseDataPos, faceVertices);
+            coordSystem.origin.x = clampedPos.x;
+            coordSystem.origin.y = clampedPos.y;
+            coordSystem.isCustom = true;
+        }
+    }
+}
+
 
 // Event listeners setup
 canvas.addEventListener('wheel', (event) => {
@@ -4561,14 +4632,7 @@ canvas.addEventListener("mouseup", handleMouseUp);
 
 canvas.addEventListener('mousedown', handleMouseDown);
 
-window.addEventListener('keyup', (event) => {
-    if (event.key === 'Shift') {
-        currentShiftPressed = false;
-        ghostVertexPosition = null;
-        placingSnapPos = null;
-        ghostVertices = [];
-    }
-});
+window.addEventListener('keyup', handleKeyUp);
 
 window.addEventListener('keydown', handleKeyDown);
 
