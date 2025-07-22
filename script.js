@@ -183,7 +183,8 @@ function createFaceWithCoordinateSystem(vertexIds) {
     const newFace = {
         id: U.getFaceId({ vertexIds }),
         vertexIds: vertexIds,
-        localCoordSystem: null
+        localCoordSystem: null,
+        color: getColorForTarget(C.COLOR_TARGET_FACE)
     };
 
     if (!allFaces.some(f => f.id === newFace.id)) {
@@ -2012,14 +2013,31 @@ function updateFaces(edgesBefore, edgesAfter) {
 
     facesToAdd.forEach(newFace => {
         if (deletedFaceIds.has(newFace.id)) {
-            // If user is manually recreating edges, allow face recreation for added edges
             if (addedEdges.length > 0) {
                 deletedFaceIds.delete(newFace.id);
             } else {
-                return; // Skip if no new edges were added
+                return;
             }
         }
-        newFace.color = getColorForTarget(C.COLOR_TARGET_FACE);
+        
+        const colorIndex = colorAssignments[C.COLOR_TARGET_FACE];
+        if (colorIndex !== -1) {
+            const colorItem = allColors[colorIndex];
+            if (colorItem && colorItem.type === 'colormap') {
+                newFace.colormapItem = colorItem;
+                newFace.colormapDistribution = 'x';
+                delete newFace.color;
+            } else {
+                newFace.color = getColorForTarget(C.COLOR_TARGET_FACE);
+                delete newFace.colormapItem;
+                delete newFace.colormapDistribution;
+            }
+        } else {
+            newFace.color = getColorForTarget(C.COLOR_TARGET_FACE);
+            delete newFace.colormapItem;
+            delete newFace.colormapDistribution;
+        }
+        
         allFaces.push(newFace);
     });
 
