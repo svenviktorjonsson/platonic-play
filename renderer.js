@@ -2,6 +2,7 @@ import * as U from './utils.js';
 import * as C from './constants.js';
 
 let colorWheelIcon = null
+const patternCache = new Map();
 
 export function calculateGridIntervals(viewTransformScale) {
     const effectiveDataInterval = C.GRID_TARGET_SPACING / viewTransformScale;
@@ -312,19 +313,63 @@ export function clearCanvas(ctx, { canvas, dpr, colors }) {
     ctx.fillRect(0, 0, actualCanvasWidth, actualCanvasHeight);
 }
 
-export function drawCopyPreviews(ctx, {
-    copyCount,
-    isDragConfirmed,
-    initialDragVertexStates,
-    dragPreviewVertices,
-    transformIndicatorData,
-    allEdges,
-    allFaces,
-    findVertexById,
-    findNeighbors,
-    colors
-}, dataToScreen) {
+export function drawFaces(ctx, { allFaces, facesVisible, isDragConfirmed, dragPreviewVertices, transformIndicatorData, initialDragVertexStates, colors }, dataToScreen, findVertexById) {
+    if (!facesVisible || !allFaces || !colors || !ctx) return;
 
+    const getLiveVertex = (vertexId) => {
+        if (isDragConfirmed && dragPreviewVertices) {
+            const previewVertex = dragPreviewVertices.find(p => p && p.id === vertexId);
+            if (previewVertex) return previewVertex;
+        }
+        return findVertexById(vertexId);
+    };
+
+    allFaces.forEach((face) => {
+        if (!face || !face.vertexIds || face.vertexIds.length < 3) return;
+        
+        const liveVertices = face.vertexIds.map(id => getLiveVertex(id)).filter(p => p && p.type === 'regular');
+        if (liveVertices.length < 3) return;
+
+        const screenVertices = liveVertices.map(v => dataToScreen(v));
+
+        let faceToDraw = face;
+        if (isDragConfirmed && face.localCoordSystem && face.vertexIds.some(vid => dragPreviewVertices.some(pv => pv.id === vid))) {
+            const previewSystem = JSON.parse(JSON.stringify(face.localCoordSystem));
+
+            if (previewSystem.isCustom) {
+                if (transformIndicatorData) {
+                    const { center, rotation, scale, directionalScale, startPos } = transformIndicatorData;
+                    const startVector = { x: startPos.x - center.x, y: startPos.y - center.y };
+                    previewSystem.origin = U.applyTransformToVertex(previewSystem.origin, center, rotation, scale, directionalScale, startVector);
+                    previewSystem.angle = U.normalizeAngle(previewSystem.angle + rotation);
+                    if (!directionalScale) previewSystem.scale *= scale;
+                } else if (initialDragVertexStates && initialDragVertexStates.length > 0) {
+                    const refInitial = initialDragVertexStates[0];
+                    const refFinal = dragPreviewVertices.find(v => v.id === refInitial.id);
+                    if (refInitial && refFinal) {
+                        const deltaX = refFinal.x - refInitial.x;
+                        const deltaY = refFinal.y - refInitial.y;
+                        previewSystem.origin.x += deltaX;
+                        previewSystem.origin.y += deltaY;
+                    }
+                }
+            } else {
+                const incircle = U.calculateIncenter(liveVertices);
+                if (incircle) {
+                    previewSystem.origin = incircle.center;
+                    previewSystem.scale = incircle.radius;
+                }
+            }
+            faceToDraw = { ...face, localCoordSystem: previewSystem };
+        }
+        
+        if (screenVertices.every(v => v && typeof v.x === 'number' && typeof v.y === 'number')) {
+            drawFace(ctx, screenVertices, faceToDraw, colors, dataToScreen, findVertexById);
+        }
+    });
+}
+
+export function drawCopyPreviews(ctx, { copyCount, isDragConfirmed, initialDragVertexStates, dragPreviewVertices, transformIndicatorData, allEdges, allFaces, findVertexById, findNeighbors, colors }, dataToScreen) {
     const verticesToCopy = initialDragVertexStates.filter(p => p.type === 'regular');
     const vertexIdsToCopy = new Set(verticesToCopy.map(p => p.id));
     const incidentEdges = allEdges.filter(edge =>
@@ -373,36 +418,43 @@ export function drawCopyPreviews(ctx, {
         });
 
         affectedFaces.forEach(originalFace => {
-            const faceVerticesForThisCopy = [];
-            
-            originalFace.vertexIds.forEach(originalVertexId => {
+            const faceVerticesForThisCopy = originalFace.vertexIds.map(originalVertexId => {
                 if (vertexIdsToCopy.has(originalVertexId)) {
-                    const previewVertex = newIdMapForThisCopy.get(originalVertexId);
-                    if (previewVertex) {
-                        faceVerticesForThisCopy.push(previewVertex);
-                    }
-                } else {
-                    const staticVertex = findVertexById(originalVertexId);
-                    if (staticVertex && staticVertex.type === 'regular') {
-                        faceVerticesForThisCopy.push(staticVertex);
-                    }
+                    return newIdMapForThisCopy.get(originalVertexId);
                 }
-            });
+                const staticVertex = findVertexById(originalVertexId);
+                return (staticVertex && staticVertex.type === 'regular') ? staticVertex : null;
+            }).filter(Boolean);
 
             if (faceVerticesForThisCopy.length >= 3) {
                 const screenVertices = faceVerticesForThisCopy.map(v => dataToScreen(v));
                 if (screenVertices.every(v => v && typeof v.x === 'number' && typeof v.y === 'number')) {
-                    ctx.fillStyle = originalFace.color || colors.face;
-                    ctx.beginPath();
-                    screenVertices.forEach((vertex, index) => {
-                        if (index === 0) {
-                            ctx.moveTo(vertex.x, vertex.y);
+                    let faceToDraw = originalFace;
+                    if (originalFace.localCoordSystem) {
+                        const previewSystem = JSON.parse(JSON.stringify(originalFace.localCoordSystem));
+                        if (previewSystem.isCustom) {
+                            if (transformIndicatorData && i > 0) {
+                                const { center, rotation, scale, directionalScale, startPos } = transformIndicatorData;
+                                const startVector = { x: startPos.x - center.x, y: startPos.y - center.y };
+                                previewSystem.origin = U.applyTransformToVertex(previewSystem.origin, center, rotation * i, Math.pow(scale, i), directionalScale, startVector);
+                                previewSystem.angle = U.normalizeAngle(previewSystem.angle + (rotation * i));
+                                if(!directionalScale) previewSystem.scale *= Math.pow(scale, i);
+                            } else if (i > 0) {
+                                const deltaX = dragPreviewVertices[0].x - initialDragVertexStates[0].x;
+                                const deltaY = dragPreviewVertices[0].y - initialDragVertexStates[0].y;
+                                previewSystem.origin.x += deltaX * i;
+                                previewSystem.origin.y += deltaY * i;
+                            }
                         } else {
-                            ctx.lineTo(vertex.x, vertex.y);
+                            const incircle = U.calculateIncenter(faceVerticesForThisCopy);
+                            if(incircle) {
+                                previewSystem.origin = incircle.center;
+                                previewSystem.scale = incircle.radius;
+                            }
                         }
-                    });
-                    ctx.closePath();
-                    ctx.fill();
+                        faceToDraw = {...originalFace, localCoordSystem: previewSystem};
+                    }
+                    drawFace(ctx, screenVertices, faceToDraw, colors, dataToScreen, findVertexById);
                 }
             }
         });
@@ -2777,7 +2829,7 @@ export function drawVisibilityIcon(ctx, rect, colors) {
 }
 
 function drawColorPalette(ctx, htmlOverlay, state, updateHtmlLabel) {
-    const { canvasUI, colors, allColors, namedColors, colorAssignments, activeColorTargets, verticesVisible, edgesVisible, facesVisible, isDraggingColorTarget, draggedColorTargetInfo } = state;
+    const { canvasUI, colors, allColors, namedColors, colorAssignments, activeColorTargets, verticesVisible, edgesVisible, facesVisible, isDraggingColorTarget, draggedColorTargetInfo, mousePos } = state;
 
     const checkerboardColor1 = '#808080';
     const checkerboardColor2 = '#c0c0c0';
@@ -2875,7 +2927,6 @@ function drawColorPalette(ctx, htmlOverlay, state, updateHtmlLabel) {
 
     if (canvasUI.colorTargetIcons) {
         const getIconOptions = (target) => {
-            // Check if this target is being dragged and use preview color
             let targetColorIndex = colorAssignments[target];
             if (isDraggingColorTarget && draggedColorTargetInfo && draggedColorTargetInfo.target === target && draggedColorTargetInfo.previewColorIndex !== undefined) {
                 targetColorIndex = draggedColorTargetInfo.previewColorIndex;
@@ -2908,6 +2959,8 @@ function drawColorPalette(ctx, htmlOverlay, state, updateHtmlLabel) {
                     options.faceColor = 'rgba(128, 128, 128, 1)';
                 } else if (colorItem && colorItem.type === 'color') {
                     options.faceColor = colorItem.value;
+                } else if (colorItem && colorItem.type === 'colormap') {
+                    options.faceColormapItem = colorItem;
                 }
             }
             return options;
@@ -2918,12 +2971,26 @@ function drawColorPalette(ctx, htmlOverlay, state, updateHtmlLabel) {
             const icon = canvasUI.colorTargetIcons.find(i => i.target === targetToDraw);
             if (icon) {
                 const isActive = activeColorTargets.includes(targetToDraw);
-                drawTriangleIcon(ctx, icon, getIconOptions(targetToDraw), colors, isActive);
+                const iconOptions = getIconOptions(targetToDraw);
+
+                if (isDraggingColorTarget && draggedColorTargetInfo && draggedColorTargetInfo.target === C.COLOR_TARGET_FACE && targetToDraw === C.COLOR_TARGET_FACE) {
+                    const swatchUnderMouse = canvasUI.colorSwatches.find(swatch =>
+                        mousePos.x >= swatch.x && mousePos.x <= swatch.x + swatch.width &&
+                        mousePos.y >= swatch.y && mousePos.y <= swatch.y + swatch.height
+                    );
+
+                    if (swatchUnderMouse && swatchUnderMouse.item.type === 'colormap') {
+                        const t = U.clamp((mousePos.x - swatchUnderMouse.x) / swatchUnderMouse.width, 0, 1);
+                        iconOptions.faceColor = U.sampleColormap(swatchUnderMouse.item, t);
+                        iconOptions.faceState = 'filled';
+                    }
+                }
+
+                drawTriangleIcon(ctx, icon, iconOptions, colors, isActive);
             }
         });
     }
 
-    // Draw combined selection boxes
     const drawnBoxesForSwatches = new Set();
     activeColorTargets.forEach(target => {
         let targetColorIndex = colorAssignments[target];
@@ -2963,10 +3030,13 @@ function drawColorPalette(ctx, htmlOverlay, state, updateHtmlLabel) {
 }
 
 function drawColorToolbarPreview(ctx, rect, { verticesVisible, edgesVisible, facesVisible, colorAssignments, allColors }, colors) {
+    const allDisabled = !verticesVisible && !edgesVisible && !facesVisible;
+
     const options = {
-        vertexState: verticesVisible ? 'filled' : 'hidden',
-        edgeState: edgesVisible ? 'solid' : 'hidden',
-        faceState: facesVisible ? 'filled' : 'hidden'
+        vertexState: (verticesVisible || allDisabled) ? 'filled' : 'hidden',
+        edgeState: (edgesVisible || allDisabled) ? 'solid' : 'hidden',
+        faceState: (facesVisible || allDisabled) ? 'filled' : 'hidden',
+        showAllDisabled: allDisabled
     };
     
     const vertexColorIndex = colorAssignments[C.COLOR_TARGET_VERTEX];
@@ -2998,6 +3068,8 @@ function drawColorToolbarPreview(ctx, rect, { verticesVisible, edgesVisible, fac
         const faceColorItem = allColors[faceColorIndex];
         if (faceColorItem && faceColorItem.type === 'color') {
             options.faceColor = faceColorItem.value;
+        } else if (faceColorItem && faceColorItem.type === 'colormap') {
+            options.faceColormapItem = faceColorItem;
         }
     } else {
         options.faceColor = colors.face;
@@ -3007,7 +3079,7 @@ function drawColorToolbarPreview(ctx, rect, { verticesVisible, edgesVisible, fac
 }
 
 function drawTriangleIcon(ctx, rect, options, colors, isActive = false) {
-    const { vertexState = 'none', edgeState = 'none', faceState = 'none', faceColor, edgeColor, vertexColor: optionsVertexColor } = options;
+    const { vertexState = 'none', edgeState = 'none', faceState = 'none', faceColor, edgeColor, vertexColor: optionsVertexColor, faceColormapItem, showAllDisabled = false } = options;
     
     ctx.save();
     
@@ -3034,7 +3106,18 @@ function drawTriangleIcon(ctx, rect, options, colors, isActive = false) {
     facePath.closePath();
     
     if (faceState === 'filled') {
-        ctx.fillStyle = faceColor || colors.face;
+        if (faceColormapItem && faceColormapItem.type === 'colormap') {
+            const gradient = ctx.createLinearGradient(vertices[1].x, 0, vertices[2].x, 0);
+            faceColormapItem.vertices.forEach(vertex => {
+                const colorValue = vertex.color;
+                const alpha = vertex.alpha !== undefined ? vertex.alpha : 1.0;
+                const colorString = `rgba(${colorValue.join(',')},${alpha})`;
+                gradient.addColorStop(vertex.pos, colorString);
+            });
+            ctx.fillStyle = gradient;
+        } else {
+            ctx.fillStyle = faceColor || colors.face;
+        }
         ctx.fill(facePath);
     } else if (faceState === 'disabled') {
         ctx.fillStyle = '#808080';
@@ -3096,7 +3179,16 @@ function drawTriangleIcon(ctx, rect, options, colors, isActive = false) {
     }
 
     const hasDisabledElements = vertexState === 'disabled' || edgeState === 'disabled' || faceState === 'disabled';
-    if (hasDisabledElements) {
+    
+    if (showAllDisabled) {
+        ctx.strokeStyle = '#ff0000';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([]);
+        ctx.beginPath();
+        ctx.moveTo(2, 2);
+        ctx.lineTo(30, 30);
+        ctx.stroke();
+    } else if (hasDisabledElements) {
         ctx.strokeStyle = '#ff0000';
         ctx.lineWidth = 2;
         ctx.setLineDash([]);
@@ -3113,31 +3205,81 @@ export function drawFace(ctx, screenVertices, face, colors, dataToScreen, findVe
     if (!screenVertices || screenVertices.length < 3) return;
 
     ctx.save();
-    
+
+    // Create the path for the face first.
+    ctx.beginPath();
+    screenVertices.forEach((vertex, index) => {
+        if (index === 0) {
+            ctx.moveTo(vertex.x, vertex.y);
+        } else {
+            ctx.lineTo(vertex.x, vertex.y);
+        }
+    });
+    ctx.closePath();
+
     if (face && face.colormapItem && face.localCoordSystem) {
-        // Create gradient based on face coordinate system
-        const vertices = face.vertexIds.map(id => findVertexById(id)).filter(p => p && p.type === 'regular');
-        if (vertices.length >= 3) {
-            // Find bounding box in local coordinates
-            let minX = Infinity, maxX = -Infinity;
-            vertices.forEach(vertex => {
-                const localPos = U.globalToLocal(vertex, face.localCoordSystem);
-                minX = Math.min(minX, localPos.x);
-                maxX = Math.max(maxX, localPos.x);
-            });
+        const isCycled = face.colormapItem.isCyclic === true;
+
+        if (isCycled) {
+            // --- Logic for REPEATING (Cycled) Colormaps ---
+            const cacheKey = JSON.stringify(face.colormapItem.vertices);
+            let patternCanvas = patternCache.get(cacheKey);
+
+            if (!patternCanvas) {
+                patternCanvas = document.createElement('canvas');
+                patternCanvas.width = 256;
+                patternCanvas.height = 1;
+                const patternCtx = patternCanvas.getContext('2d');
+                const grad = patternCtx.createLinearGradient(0, 0, 256, 0);
+                
+                face.colormapItem.vertices.forEach(vertex => {
+                    const colorValue = vertex.color;
+                    const alpha = vertex.alpha !== undefined ? vertex.alpha : 1.0;
+                    let colorString = `rgba(255,255,255,${alpha})`;
+                    if (typeof colorValue === 'string') {
+                        colorString = colorValue;
+                    } else if (Array.isArray(colorValue)) {
+                        colorString = `rgba(${colorValue.join(',')},${alpha})`;
+                    }
+                    grad.addColorStop(vertex.pos, colorString);
+                });
+                
+                patternCtx.fillStyle = grad;
+                patternCtx.fillRect(0, 0, 256, 1);
+                patternCache.set(cacheKey, patternCanvas);
+            }
             
-            // Convert local bounds to global coordinates
-            const localMin = { x: minX, y: 0 };
-            const localMax = { x: maxX, y: 0 };
-            const globalMin = U.localToGlobal(localMin, face.localCoordSystem);
-            const globalMax = U.localToGlobal(localMax, face.localCoordSystem);
+            const pattern = ctx.createPattern(patternCanvas, 'repeat');
+            const origin_s = dataToScreen(face.localCoordSystem.origin);
+            const unit_vec_global = U.localToGlobal({x: 1, y: 0}, face.localCoordSystem);
+            const unit_vec_s = dataToScreen(unit_vec_global);
             
-            // Convert to screen coordinates
-            const screenMin = dataToScreen(globalMin);
-            const screenMax = dataToScreen(globalMax);
+            const dx = unit_vec_s.x - origin_s.x;
+            const dy = unit_vec_s.y - origin_s.y;
             
-            // Create gradient
-            const gradient = ctx.createLinearGradient(screenMin.x, screenMin.y, screenMax.x, screenMax.y);
+            const screen_dist = Math.hypot(dx, dy);
+            const scale = screen_dist > 0 ? screen_dist / 256 : 0;
+            
+            const matrix = new DOMMatrix();
+            matrix.translateSelf(origin_s.x, origin_s.y);
+            matrix.rotateSelf(0, 0, -face.localCoordSystem.angle * 180 / Math.PI);
+            matrix.scaleSelf(scale, scale);
+            
+            pattern.setTransform(matrix);
+            
+            ctx.fillStyle = pattern;
+            ctx.fill();
+
+        } else {
+            // --- Logic for SATURATING (Regular) Colormaps ---
+            const localStart = { x: 0, y: 0 };
+            const localEnd = { x: 1, y: 0 };
+            const globalStart = U.localToGlobal(localStart, face.localCoordSystem);
+            const globalEnd = U.localToGlobal(localEnd, face.localCoordSystem);
+            const screenStart = dataToScreen(globalStart);
+            const screenEnd = dataToScreen(globalEnd);
+            
+            const gradient = ctx.createLinearGradient(screenStart.x, screenStart.y, screenEnd.x, screenEnd.y);
             face.colormapItem.vertices.forEach(vertex => {
                 let colorValue = vertex.color;
                 if (typeof colorValue === 'string') {
@@ -3148,63 +3290,18 @@ export function drawFace(ctx, screenVertices, face, colors, dataToScreen, findVe
                 }
             });
             ctx.fillStyle = gradient;
-        } else {
-            ctx.fillStyle = face.color || colors.face;
+            ctx.fill();
         }
     } else {
+        // Default solid color fill
         ctx.fillStyle = face?.color || colors.face;
+        ctx.fill();
     }
     
-    ctx.beginPath();
-    screenVertices.forEach((vertex, index) => {
-        if (index === 0) {
-            ctx.moveTo(vertex.x, vertex.y);
-        } else {
-            ctx.lineTo(vertex.x, vertex.y);
-        }
-    });
-    ctx.closePath();
-    ctx.fill();
     ctx.restore();
 }
 
-export function drawFaces(ctx, { allFaces, facesVisible, isDragConfirmed, dragPreviewVertices, colors }, dataToScreen, findVertexById) {
-    if (!facesVisible || !allFaces || !colors || !ctx) return;
 
-    const getLiveVertex = (vertexId) => {
-        if (isDragConfirmed && dragPreviewVertices) {
-            const previewVertex = dragPreviewVertices.find(p => p && p.id === vertexId);
-            if (previewVertex) {
-                return previewVertex;
-            }
-        }
-        return findVertexById(vertexId);
-    };
-
-    allFaces.forEach((face, index) => {
-        if (!face) {
-            console.warn(`Face at index ${index} is null/undefined`);
-            return;
-        }
-        if (!face.vertexIds || !Array.isArray(face.vertexIds)) {
-            console.warn(`Face at index ${index} has invalid vertexIds:`, face);
-            return;
-        }
-        if (face.vertexIds.length < 3) {
-            console.warn(`Face at index ${index} has less than 3 vertices:`, face);
-            return;
-        }
-        
-        const vertices = face.vertexIds.map(id => getLiveVertex(id)).filter(p => p && p.type === 'regular');
-        if (vertices.length < 3) return;
-
-        const screenVertices = vertices.map(v => dataToScreen(v));
-        
-        if (screenVertices.every(v => v && typeof v.x === 'number' && typeof v.y === 'number')) {
-            drawFace(ctx, screenVertices, face, colors, dataToScreen, findVertexById);
-        }
-    });
-}
 
 function drawVisibilityPanelIcon(ctx, icon, state, htmlOverlay, updateHtmlLabel, iconColors) {
     const {angleDisplayMode, distanceDisplayMode, colors } = state;
@@ -3755,7 +3852,9 @@ export function drawSelectedEdgeAngles(ctx, htmlOverlay, selectedEdgeIds, allEdg
     });
 }
 
-export function drawFaceCoordinateSystems(ctx, { allFaces, selectedFaceIds, colors, isDragConfirmed, dragPreviewVertices, highlightedEdgeForSnap, draggedFaceId, coordSystemSnapAngle, coordSystemSnapType }, dataToScreen, findVertexById) {
+export function drawFaceCoordinateSystems(ctx, { allFaces, selectedFaceIds, colors, isDragConfirmed, dragPreviewVertices, initialDragVertexStates, transformIndicatorData, highlightedEdgeForSnap, draggedFaceId, coordSystemSnapAngle, coordSystemSnapType }, dataToScreen, findVertexById) {
+    if (selectedFaceIds.length > C.MAX_FACES_FOR_COORDS) return;
+
     const facesToDraw = new Set(selectedFaceIds);
     if (facesToDraw.size === 0) return;
 
@@ -3771,39 +3870,75 @@ export function drawFaceCoordinateSystems(ctx, { allFaces, selectedFaceIds, colo
         const face = allFaces.find(f => f.id === faceId);
         if (!face || !face.localCoordSystem) return;
 
-        const vertices = face.vertexIds
-            .map(id => getLiveVertex(id))
-            .filter(p => p && p.type === 'regular');
+        let systemToDraw = face.localCoordSystem;
 
-        if (vertices.length < 3) return;
+        if (isDragConfirmed && face.vertexIds.some(vid => dragPreviewVertices.some(pv => pv.id === vid))) {
+            const facePreviewVertices = face.vertexIds
+                .map(id => getLiveVertex(id))
+                .filter(p => p && p.type === 'regular');
 
-        if (isDragConfirmed && !face.localCoordSystem.isCustom) {
-            updateFaceCoordinateSystemForDrag(face, vertices);
+            if (facePreviewVertices.length < 3) return;
+
+            const previewCoordSystem = JSON.parse(JSON.stringify(face.localCoordSystem));
+
+            if (previewCoordSystem.isCustom) {
+                if (transformIndicatorData) {
+                    const { center, rotation, scale, directionalScale, startPos } = transformIndicatorData;
+                    const startVector = { x: startPos.x - center.x, y: startPos.y - center.y };
+                    
+                    const newOrigin = U.applyTransformToVertex(previewCoordSystem.origin, center, rotation, scale, directionalScale, startVector);
+                    previewCoordSystem.origin = newOrigin;
+                    previewCoordSystem.angle = U.normalizeAngle(previewCoordSystem.angle + rotation);
+                    if (!directionalScale) {
+                        previewCoordSystem.scale *= scale;
+                    }
+                } else {
+                    if (initialDragVertexStates && initialDragVertexStates.length > 0) {
+                        const refInitial = initialDragVertexStates[0];
+                        const refFinal = dragPreviewVertices.find(v => v.id === refInitial.id);
+                        if (refInitial && refFinal) {
+                            const deltaX = refFinal.x - refInitial.x;
+                            const deltaY = refFinal.y - refInitial.y;
+                            previewCoordSystem.origin.x += deltaX;
+                            previewCoordSystem.origin.y += deltaY;
+                        }
+                    }
+                }
+                systemToDraw = previewCoordSystem;
+            } else {
+                const incircle = U.calculateIncenter(facePreviewVertices);
+                if (incircle) {
+                    systemToDraw = {
+                        ...previewCoordSystem,
+                        origin: incircle.center,
+                        scale: incircle.radius
+                    };
+                }
+            }
         }
-
-        // Draw snap visualization when dragging this face's coordinate system
+        
         if (draggedFaceId === faceId && coordSystemSnapAngle !== null) {
-            const origin = face.localCoordSystem.origin;
-            const originScreen = dataToScreen(origin);
+            const originScreen = dataToScreen(systemToDraw.origin);
             
-            if (coordSystemSnapType === 'edge' && highlightedEdgeForSnap !== null && highlightedEdgeForSnap < vertices.length) {
-                // Draw highlighted edge in ghost color
-                const edgeStart = vertices[highlightedEdgeForSnap];
-                const edgeEnd = vertices[(highlightedEdgeForSnap + 1) % vertices.length];
-                const startScreen = dataToScreen(edgeStart);
-                const endScreen = dataToScreen(edgeEnd);
-                
-                ctx.save();
-                ctx.strokeStyle = colors.feedbackSnapped;
-                ctx.lineWidth = 3;
-                ctx.beginPath();
-                ctx.moveTo(startScreen.x, startScreen.y);
-                ctx.lineTo(endScreen.x, endScreen.y);
-                ctx.stroke();
-                ctx.restore();
+            if (coordSystemSnapType === 'edge' && highlightedEdgeForSnap !== null) {
+                const faceVertices = face.vertexIds.map(id => getLiveVertex(id)).filter(p => p && p.type === 'regular');
+                if (highlightedEdgeForSnap < faceVertices.length) {
+                    const edgeStart = faceVertices[highlightedEdgeForSnap];
+                    const edgeEnd = faceVertices[(highlightedEdgeForSnap + 1) % faceVertices.length];
+                    const startScreen = dataToScreen(edgeStart);
+                    const endScreen = dataToScreen(edgeEnd);
+                    
+                    ctx.save();
+                    ctx.strokeStyle = colors.feedbackSnapped;
+                    ctx.lineWidth = 3;
+                    ctx.beginPath();
+                    ctx.moveTo(startScreen.x, startScreen.y);
+                    ctx.lineTo(endScreen.x, endScreen.y);
+                    ctx.stroke();
+                    ctx.restore();
+                }
             } else if (coordSystemSnapType === 'cardinal') {
-                // Draw dashed line for cardinal/45-degree angles
-                const lineLength = 100; // Screen pixels
+                const lineLength = 100;
                 const lineEndX = originScreen.x + Math.cos(-coordSystemSnapAngle) * lineLength;
                 const lineEndY = originScreen.y + Math.sin(-coordSystemSnapAngle) * lineLength;
                 const lineStartX = originScreen.x - Math.cos(-coordSystemSnapAngle) * lineLength;
@@ -3821,70 +3956,48 @@ export function drawFaceCoordinateSystems(ctx, { allFaces, selectedFaceIds, colo
             }
         }
 
-        drawCoordinateSystemCross(ctx, face.localCoordSystem, colors, dataToScreen);
+        drawCoordinateSystemCross(ctx, systemToDraw, colors, dataToScreen);
     });
-}
-
-function updateFaceCoordinateSystemForDrag(face, liveVertices) {
-    const incircle = U.calculateIncenter(liveVertices);
-    if (incircle) {
-        face.localCoordSystem.origin = incircle.center;
-        face.localCoordSystem.scale = incircle.radius;
-    }
 }
 
 function drawCoordinateSystemCross(ctx, coordSystem, colors, dataToScreen) {
     const centerScreen = dataToScreen(coordSystem.origin);
 
-    const xAxisEnd = U.localToGlobal({ x: 1, y: 0 }, coordSystem);
-    const yAxisEnd = U.localToGlobal({ x: 0, y: 1 }, coordSystem);
-    const negXAxisEnd = U.localToGlobal({ x: -1, y: 0 }, coordSystem);
-    const negYAxisEnd = U.localToGlobal({ x: 0, y: -1 }, coordSystem);
-
-    const xAxisScreenEnd = dataToScreen(xAxisEnd);
-    const yAxisScreenEnd = dataToScreen(yAxisEnd);
-    const negXAxisScreenEnd = dataToScreen(negXAxisEnd);
-    const negYAxisScreenEnd = dataToScreen(negYAxisEnd);
+    const xAxisEndGlobal = U.localToGlobal({ x: 1, y: 0 }, coordSystem);
+    const yAxisEndGlobal = U.localToGlobal({ x: 0, y: 1 }, coordSystem);
+    const xAxisScreenEnd = dataToScreen(xAxisEndGlobal);
+    const yAxisScreenEnd = dataToScreen(yAxisEndGlobal);
 
     ctx.save();
-
-    // Add glow for visibility
-    ctx.shadowColor = colors.selectionGlow;
-    ctx.shadowBlur = C.SELECTION_GLOW_BLUR_RADIUS;
-    ctx.globalAlpha = C.SELECTION_GLOW_ALPHA;
-
-    ctx.lineWidth = 2;
+    ctx.lineWidth = C.SELECTION_GLOW_LINE_WIDTH;
     ctx.lineCap = 'round';
-    ctx.strokeStyle = colors.uiIcon;
+    ctx.strokeStyle = colors.selectionGlow;
+    ctx.fillStyle = colors.selectionGlow;
 
-    // Draw X-axis
-    ctx.beginPath();
-    ctx.moveTo(negXAxisScreenEnd.x, negXAxisScreenEnd.y);
-    ctx.lineTo(xAxisScreenEnd.x, xAxisScreenEnd.y);
-    ctx.stroke();
+    const drawArrow = (p1, p2) => {
+        // Draw line
+        ctx.beginPath();
+        ctx.moveTo(p1.x, p1.y);
+        ctx.lineTo(p2.x, p2.y);
+        ctx.stroke();
 
-    // Draw Y-axis
-    ctx.beginPath();
-    ctx.moveTo(negYAxisScreenEnd.x, negYAxisScreenEnd.y);
-    ctx.lineTo(yAxisScreenEnd.x, yAxisScreenEnd.y);
-    ctx.stroke();
+        // Draw arrowhead
+        const angle = Math.atan2(p2.y - p1.y, p2.x - p1.x);
+        ctx.beginPath();
+        ctx.moveTo(p2.x, p2.y);
+        ctx.lineTo(p2.x - C.AXIS_ARROW_SIZE * Math.cos(angle - C.AXIS_ARROW_ANGLE_RAD), p2.y - C.AXIS_ARROW_SIZE * Math.sin(angle - C.AXIS_ARROW_ANGLE_RAD));
+        ctx.lineTo(p2.x - C.AXIS_ARROW_SIZE * Math.cos(angle + C.AXIS_ARROW_ANGLE_RAD), p2.y - C.AXIS_ARROW_SIZE * Math.sin(angle + C.AXIS_ARROW_ANGLE_RAD));
+        ctx.closePath();
+        ctx.fill();
+    };
 
-    // The center vertex
-    ctx.fillStyle = colors.uiIcon;
+    drawArrow(centerScreen, xAxisScreenEnd);
+    drawArrow(centerScreen, yAxisScreenEnd);
+
+    // The center vertex for grabbing
     ctx.beginPath();
     ctx.arc(centerScreen.x, centerScreen.y, 4, 0, 2 * Math.PI);
     ctx.fill();
 
-    ctx.restore(); // Restore from glow effect
-
-    // Draw custom indicator separately if needed, without the main glow
-    if (coordSystem.isCustom) {
-        ctx.save();
-        ctx.strokeStyle = colors.selectionGlow;
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.arc(centerScreen.x, centerScreen.y, 8, 0, 2 * Math.PI);
-        ctx.stroke();
-        ctx.restore();
-    }
+    ctx.restore();
 }

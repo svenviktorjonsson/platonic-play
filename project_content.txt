@@ -4431,7 +4431,8 @@ function createFaceWithCoordinateSystem(vertexIds) {
     const newFace = {
         id: U.getFaceId({ vertexIds }),
         vertexIds: vertexIds,
-        localCoordSystem: null
+        localCoordSystem: null,
+        color: getColorForTarget(C.COLOR_TARGET_FACE)
     };
 
     if (!allFaces.some(f => f.id === newFace.id)) {
@@ -6260,14 +6261,31 @@ function updateFaces(edgesBefore, edgesAfter) {
 
     facesToAdd.forEach(newFace => {
         if (deletedFaceIds.has(newFace.id)) {
-            // If user is manually recreating edges, allow face recreation for added edges
             if (addedEdges.length > 0) {
                 deletedFaceIds.delete(newFace.id);
             } else {
-                return; // Skip if no new edges were added
+                return;
             }
         }
-        newFace.color = getColorForTarget(C.COLOR_TARGET_FACE);
+        
+        const colorIndex = colorAssignments[C.COLOR_TARGET_FACE];
+        if (colorIndex !== -1) {
+            const colorItem = allColors[colorIndex];
+            if (colorItem && colorItem.type === 'colormap') {
+                newFace.colormapItem = colorItem;
+                newFace.colormapDistribution = 'x';
+                delete newFace.color;
+            } else {
+                newFace.color = getColorForTarget(C.COLOR_TARGET_FACE);
+                delete newFace.colormapItem;
+                delete newFace.colormapDistribution;
+            }
+        } else {
+            newFace.color = getColorForTarget(C.COLOR_TARGET_FACE);
+            delete newFace.colormapItem;
+            delete newFace.colormapDistribution;
+        }
+        
         allFaces.push(newFace);
     });
 
@@ -7335,7 +7353,7 @@ function handleCoordinateSystemMouseDown(event) {
         if (element) {
             isDraggingCoordSystem = true;
             draggedCoordSystemElement = element;
-
+            draggedFaceId = face.id;
             coordSystemSnapTargets = prepareCoordSystemSnapTargets(face);
 
             if (element.type === 'center') {
@@ -7431,7 +7449,6 @@ function handleCoordinateSystemMouseMove(event) {
         }
 
     } else if (element.type === 'x_axis' || element.type === 'y_axis') {
-        // Dragging arms = scale and rotate while keeping origin fixed
         const vectorFromOrigin = {
             x: mouseDataPos.x - coordSystem.origin.x,
             y: mouseDataPos.y - coordSystem.origin.y
@@ -7440,7 +7457,6 @@ function handleCoordinateSystemMouseMove(event) {
         const newScale = Math.hypot(vectorFromOrigin.x, vectorFromOrigin.y);
         let newAngle = Math.atan2(vectorFromOrigin.y, vectorFromOrigin.x);
 
-        // Store original state for transform indicator
         const originalAngle = element.type === 'y_axis' ? coordSystem.angle + Math.PI / 2 : coordSystem.angle;
         const originalScale = coordSystem.scale;
         const referencePoint = {
@@ -7448,80 +7464,34 @@ function handleCoordinateSystemMouseMove(event) {
             y: coordSystem.origin.y + originalScale * Math.sin(originalAngle)
         };
 
-        // Reset edge highlighting and ghosts
         highlightedEdgeForSnap = null;
         coordSystemSnapAngle = null;
         coordSystemSnapType = null;
         ghostVertices = [];
         ghostVertexPosition = null;
 
-        // Handle angle snapping
         if (event.shiftKey) {
-            let bestSnapAngle = null;
-            let minAngleDiff = Infinity;
-            let bestEdgeIndex = null;
-            let snapType = null;
-
-            // Check snapping to all face edge directions (for both x and y axis)
-            if (coordSystemSnapTargets && coordSystemSnapTargets.edgeAngles) {
-                coordSystemSnapTargets.edgeAngles.forEach((edgeAngle, edgeIndex) => {
-                    // Check the edge direction itself
-                    const angleDiff = Math.abs(U.normalizeAngleToPi(newAngle - edgeAngle));
-                    if (angleDiff < minAngleDiff) {
-                        minAngleDiff = angleDiff;
-                        bestSnapAngle = edgeAngle;
-                        bestEdgeIndex = edgeIndex;
-                        snapType = 'edge';
-                    }
-                });
-            }
-
-            // Also check cardinal and 45-degree directions
-            const cardinalAngles = [
-                0,                    // 0°
-                Math.PI/4,           // 45°
-                Math.PI/2,           // 90°
-                3*Math.PI/4,         // 135°
-                Math.PI,             // 180°
-                -3*Math.PI/4,        // -135° (225°)
-                -Math.PI/2,          // -90° (270°)
-                -Math.PI/4           // -45° (315°)
-            ];
-            
-            cardinalAngles.forEach(cardinalAngle => {
-                const angleDiff = Math.abs(U.normalizeAngleToPi(newAngle - cardinalAngle));
-                if (angleDiff < minAngleDiff) {
-                    minAngleDiff = angleDiff;
-                    bestSnapAngle = cardinalAngle;
-                    bestEdgeIndex = null;
-                    snapType = 'cardinal';
-                }
-            });
-
-            // Always snap to the closest angle when shift is held
-            if (bestSnapAngle !== null) {
-                newAngle = bestSnapAngle;
-                highlightedEdgeForSnap = bestEdgeIndex;
-                coordSystemSnapAngle = bestSnapAngle;
-                coordSystemSnapType = snapType;
+            const snapResult = U.getAxisSnapAngle(mouseDataPos, coordSystem.origin, true, coordSystemSnapTargets);
+            if (snapResult.snapped) {
+                newAngle = snapResult.angle;
+                highlightedEdgeForSnap = snapResult.edgeIndex;
+                coordSystemSnapAngle = snapResult.angle;
+                coordSystemSnapType = snapResult.snapType;
             }
         }
 
-        // Apply rotation - both x and y axis can snap to any direction
         if (element.type === 'y_axis') {
             coordSystem.angle = newAngle - Math.PI / 2;
-        } else { // x_axis
+        } else {
             coordSystem.angle = newAngle;
         }
         
-        // Apply scale freely (no constraints)
         if (newScale > 0.01) {
             coordSystem.scale = newScale;
         }
         
         coordSystem.isCustom = true;
         
-        // Create transform indicator data
         const currentPoint = {
             x: coordSystem.origin.x + coordSystem.scale * Math.cos(newAngle),
             y: coordSystem.origin.y + coordSystem.scale * Math.sin(newAngle)
@@ -7533,7 +7503,7 @@ function handleCoordinateSystemMouseMove(event) {
             currentPos: currentPoint,
             rotation: U.normalizeAngleToPi(newAngle - originalAngle),
             scale: coordSystem.scale / originalScale,
-            isSnapping: event.shiftKey && (coordSystemSnapType === 'edge' || coordSystemSnapType === 'cardinal'),
+            isSnapping: event.shiftKey && snapResult && snapResult.snapped,
             transformType: 'coordinate_system'
         };
     }
@@ -7549,7 +7519,7 @@ function handleCoordinateSystemMouseUp() {
         highlightedEdgeForSnap = null;
         coordSystemSnapAngle = null;
         coordSystemSnapType = null;
-        draggedFaceId = null;
+        draggedFaceId = null; // Add this line
         ghostVertexPosition = null;
         ghostVertices = [];
         coordSystemTransformIndicatorData = null;
@@ -7601,7 +7571,25 @@ function handleKeyDown(event) {
                 R.prepareSnapInfoTexts(ctx, htmlOverlay, startVertex, snappedData, snappedData, stateForSnapInfo, dataToScreen, currentPreviewDrawingContext, updateHtmlLabel);
             }
         } else if (!isActionInProgress) {
-            ghostVertexPosition = getBestSnapPosition(mouseDataPos);
+            if (isDraggingCoordSystem && draggedCoordSystemElement && draggedCoordSystemElement.type === 'center') {
+                const potentialSnapPos = getBestSnapPosition(mouseDataPos);
+                if (potentialSnapPos) {
+                    ghostVertexPosition = potentialSnapPos;
+                    // Apply the snap to the coordinate system
+                    const face = draggedCoordSystemElement.face;
+                    const coordSystem = face.localCoordSystem;
+                    const faceVertices = face.vertexIds.map(id => findVertexById(id)).filter(p => p && p.type === 'regular');
+                    const clampedPos = U.clampPointToPolygon(potentialSnapPos, faceVertices);
+                    coordSystem.origin.x = clampedPos.x;
+                    coordSystem.origin.y = clampedPos.y;
+                    coordSystem.isCustom = true;
+                }
+            } else {
+                const clickedFace = findClickedFace(mousePos);
+                if (!clickedFace) {
+                    ghostVertexPosition = getBestSnapPosition(mouseDataPos);
+                }
+            }
         }
     }
 
@@ -8333,7 +8321,23 @@ function handleMouseUp(event) {
     }
 
     if (!isDragConfirmed && actionContext && actionContext.target === 'ui_icon_click' && actionContext.element.type === 'colorTargetIcon') {
-        // This was a click. Selection was handled on mousedown. Just reset the action state.
+        const { element } = actionContext;
+        const now = Date.now();
+        
+        const iconId = `icon-${element.target}`;
+        if (clickData.targetId === iconId && (now - clickData.timestamp) < C.DOUBLE_CLICK_MS) {
+            // Double-click: disable this color target
+            saveStateForUndo();
+            colorAssignments[element.target] = -1;
+            applyColorsToSelection();
+            buildColorPaletteUI();
+            clickData.count = 0;
+        } else {
+            // Single-click was already handled on mousedown
+        }
+        
+        clickData.targetId = iconId;
+        clickData.timestamp = now;
         isActionInProgress = false;
         actionContext = null;
         return;
@@ -8864,6 +8868,26 @@ function handleMouseUp(event) {
     if (!currentShiftPressed) ghostVertexPosition = null;
 }
 
+function handleKeyUp(event) {
+    if (event.key === 'Shift') {
+        currentShiftPressed = false;
+        ghostVertexPosition = null;
+        placingSnapPos = null;
+        ghostVertices = [];
+        
+        if (isDraggingCoordSystem && draggedCoordSystemElement && draggedCoordSystemElement.type === 'center') {
+            const mouseDataPos = screenToData(mousePos);
+            const face = draggedCoordSystemElement.face;
+            const coordSystem = face.localCoordSystem;
+            const faceVertices = face.vertexIds.map(id => findVertexById(id)).filter(p => p && p.type === 'regular');
+            const clampedPos = U.clampPointToPolygon(mouseDataPos, faceVertices);
+            coordSystem.origin.x = clampedPos.x;
+            coordSystem.origin.y = clampedPos.y;
+            coordSystem.isCustom = true;
+        }
+    }
+}
+
 
 // Event listeners setup
 canvas.addEventListener('wheel', (event) => {
@@ -8890,14 +8914,7 @@ canvas.addEventListener("mouseup", handleMouseUp);
 
 canvas.addEventListener('mousedown', handleMouseDown);
 
-window.addEventListener('keyup', (event) => {
-    if (event.key === 'Shift') {
-        currentShiftPressed = false;
-        ghostVertexPosition = null;
-        placingSnapPos = null;
-        ghostVertices = [];
-    }
-});
+window.addEventListener('keyup', handleKeyUp);
 
 window.addEventListener('keydown', handleKeyDown);
 
@@ -9561,43 +9578,47 @@ export function getAxisSnapAngle(mouseDataPos, origin, isShiftPressed, snapTarge
     const rawAngle = Math.atan2(mouseDataPos.y - origin.y, mouseDataPos.x - origin.x);
     
     if (!isShiftPressed || !snapTargets) {
-        return rawAngle;
+        return { angle: rawAngle, edgeIndex: null, snapType: null };
     }
     
-    const snapThreshold = Math.PI / 24; // 7.5 degrees
+    const snapThreshold = Math.PI / 24;
     let closestAngle = rawAngle;
     let minDifference = Infinity;
+    let bestEdgeIndex = null;
+    let bestSnapType = null;
     
-    // Snap to cardinal directions
-    const cardinalAngles = [0, Math.PI/2, Math.PI, -Math.PI/2];
+    const cardinalAngles = [0, Math.PI/4, Math.PI/2, 3*Math.PI/4, Math.PI, -3*Math.PI/4, -Math.PI/2, -Math.PI/4];
     cardinalAngles.forEach(angle => {
         const diff = Math.abs(normalizeAngleToPi(rawAngle - angle));
         if (diff < snapThreshold && diff < minDifference) {
             minDifference = diff;
             closestAngle = angle;
+            bestEdgeIndex = null;
+            bestSnapType = 'cardinal';
         }
     });
     
-    // Snap to edge directions
     if (snapTargets.edgeAngles) {
-        snapTargets.edgeAngles.forEach(angle => {
-            const diff = Math.abs(normalizeAngleToPi(rawAngle - angle));
-            if (diff < snapThreshold && diff < minDifference) {
-                minDifference = diff;
-                closestAngle = angle;
-            }
-            
-            // Also check perpendicular
-            const perpAngle = angle + Math.PI/2;
-            const perpDiff = Math.abs(normalizeAngleToPi(rawAngle - perpAngle));
-            if (perpDiff < snapThreshold && perpDiff < minDifference) {
-                minDifference = perpDiff;
-                closestAngle = perpAngle;
-            }
+        snapTargets.edgeAngles.forEach((angle, edgeIndex) => {
+            [angle, angle + Math.PI/2, angle - Math.PI/2, angle + Math.PI].forEach(checkAngle => {
+                const normalizedCheck = normalizeAngleToPi(checkAngle);
+                const diff = Math.abs(normalizeAngleToPi(rawAngle - normalizedCheck));
+                if (diff < snapThreshold && diff < minDifference) {
+                    minDifference = diff;
+                    closestAngle = normalizedCheck;
+                    bestEdgeIndex = edgeIndex;
+                    bestSnapType = 'edge';
+                }
+            });
         });
     }
     
-    return closestAngle;
+    return {
+        angle: closestAngle,
+        edgeIndex: bestEdgeIndex,
+        snapType: bestSnapType,
+        snapped: minDifference < snapThreshold
+    };
 }
 
 export function invertGrayscaleValue(value) {

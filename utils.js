@@ -337,29 +337,29 @@ export function findCoordinateSystemElement(screenPos, face, dataToScreen) {
     if (!coordSystem) return null;
 
     const centerScreen = dataToScreen(coordSystem.origin);
-    const centerSelectRadius = 8; // Smaller radius for center
+    const centerSelectRadius = 8;
 
-    // Check center first (higher priority)
     if (distance(screenPos, centerScreen) < centerSelectRadius) {
         return { face, type: 'center' };
     }
 
-    const armEndSelectRadius = 12; // Larger radius for arm ends
+    const armSelectThreshold = 5;
 
-    const checkArm = (x, y, type) => {
-        const armEndGlobal = localToGlobal({ x, y }, coordSystem);
-        const armEndScreen = dataToScreen(armEndGlobal);
-        if (distance(screenPos, armEndScreen) < armEndSelectRadius) {
-            return { face, type };
-        }
-        return null;
-    };
+    const xAxisEndGlobal = localToGlobal({ x: 1, y: 0 }, coordSystem);
+    const xAxisScreenEnd = dataToScreen(xAxisEndGlobal);
+    const closestOnX = getClosestPointOnLineSegment(screenPos, centerScreen, xAxisScreenEnd);
+    if (closestOnX.distance < armSelectThreshold) {
+        return { face, type: 'x_axis' };
+    }
 
-    // Check positive direction arms first (more common to grab)
-    return checkArm(1, 0, 'x_axis') ||
-           checkArm(0, 1, 'y_axis') ||
-           checkArm(-1, 0, 'x_axis') ||
-           checkArm(0, -1, 'y_axis');
+    const yAxisEndGlobal = localToGlobal({ x: 0, y: 1 }, coordSystem);
+    const yAxisScreenEnd = dataToScreen(yAxisEndGlobal);
+    const closestOnY = getClosestPointOnLineSegment(screenPos, centerScreen, yAxisScreenEnd);
+    if (closestOnY.distance < armSelectThreshold) {
+        return { face, type: 'y_axis' };
+    }
+
+    return null;
 }
 
 export function clampPointToPolygon(point, vertices) {
@@ -462,20 +462,54 @@ export function getClosestPointOnLineSegment(p, a, b) {
     return { x: closestX, y: closestY, distance: dist, onSegmentStrict: onSegmentStrict, t: clampedT };
 }
 
+export function getClosestPointOnLine(p, a, b) {
+    const abx = b.x - a.x;
+    const aby = b.y - a.y;
+    const acx = p.x - a.x;
+    const acy = p.y - a.y;
+    const lenSqAB = abx * abx + aby * aby;
+
+    if (lenSqAB === 0) {
+        return { x: a.x, y: a.y, distance: distance(p, a) };
+    }
+    let t = (acx * abx + acy * aby) / lenSqAB;
+    const closestX = a.x + t * abx;
+    const closestY = a.y + t * aby;
+    const dist = distance(p, { x: closestX, y: closestY });
+    return { x: closestX, y: closestY, distance: dist };
+}
+
+export function findCircleFromPointsAndAngle(p1, p2, referenceAngle, referencePointForSide) {
+    if (Math.abs(referenceAngle) < C.GEOMETRY_CALCULATION_EPSILON || Math.abs(referenceAngle - Math.PI) < C.GEOMETRY_CALCULATION_EPSILON) {
+        return null;
+    }
+
+    const d = distance(p1, p2);
+    const radius = Math.abs((d / 2) / Math.sin(referenceAngle));
+    
+    const midPoint = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+    const h = Math.sqrt(Math.max(0, radius * radius - (d / 2) * (d / 2)));
+    
+    const perpVec = { x: -(p2.y - p1.y), y: p2.x - p1.x };
+    const perpVecMag = Math.hypot(perpVec.x, perpVec.y);
+    const perpVecNorm = { x: perpVec.x / perpVecMag, y: perpVec.y / perpVecMag };
+    
+    const center1 = { x: midPoint.x + h * perpVecNorm.x, y: midPoint.y + h * perpVecNorm.y };
+    const center2 = { x: midPoint.x - h * perpVecNorm.x, y: midPoint.y - h * perpVecNorm.y };
+
+    const crossProduct = (p2.x - p1.x) * (referencePointForSide.y - p1.y) - (p2.y - p1.y) * (referencePointForSide.x - p1.x);
+    const crossProductCenter1 = (p2.x - p1.x) * (center1.y - p1.y) - (p2.y - p1.y) * (center1.x - p1.x);
+
+    const center = (crossProduct * crossProductCenter1 > 0) ? center1 : center2;
+    
+    return { center, radius };
+}
+
 export function getMousePosOnCanvas(event, canvasElement) {
     const rect = canvasElement.getBoundingClientRect();
     return { x: event.clientX - rect.left, y: event.clientY - rect.top };
 }
 
-function linesIntersectStrict(a1, a2, b1, b2) {
-    const denom = (b2.y - b1.y) * (a2.x - a1.x) - (b2.x - b1.x) * (a2.y - a1.y);
-    if (Math.abs(denom) < 1e-10) return false;
-    
-    const ua = ((b2.x - b1.x) * (a1.y - b1.y) - (b2.y - b1.y) * (a1.x - b1.x)) / denom;
-    const ub = ((a2.x - a1.x) * (a1.y - b1.y) - (a2.y - a1.y) * (a1.x - b1.x)) / denom;
-    
-    return ua > 0 && ua < 1 && ub > 0 && ub < 1;
-}
 
 export function findFacesToSplit(vertexId1, vertexId2, allFaces, findVertexById) {
     const facesToSplit = [];
@@ -1279,6 +1313,7 @@ export function findClosestUIElement(pos, elements) {
     return closest;
 }
 
+
 export function convertColorToColormapFormat(colormapData) {
     // Handle colormap selector format (uses 'points' instead of 'vertices')
     if (colormapData && colormapData.points) {
@@ -1298,7 +1333,8 @@ export function convertColorToColormapFormat(colormapData) {
         
         return {
             type: 'colormap',
-            vertices: processedVertices
+            vertices: processedVertices,
+            isCyclic: colormapData.isCyclic === true
         };
     }
     
@@ -1315,7 +1351,8 @@ export function convertColorToColormapFormat(colormapData) {
         }));
         return {
             type: 'colormap',
-            vertices: processedVertices
+            vertices: processedVertices,
+            isCyclic: colormapData.isCyclic === true
         };
     }
     return colormapData;
@@ -1364,6 +1401,7 @@ export function sampleColormap(colormapItem, t) {
     return `rgba(${r},${g},${b},${alpha})`;
 }
 
+
 export function createFaceLocalCoordinateSystem(face, findPointById) {
     const vertices = face.vertexIds
         .map(id => findPointById(id))
@@ -1377,12 +1415,11 @@ export function createFaceLocalCoordinateSystem(face, findPointById) {
     return {
         origin: { ...incircle.center },
         angle: 0,
-        scale: incircle.radius / 4,
+        scale: incircle.radius,
         isCustom: false,
         showCoordSystem: false
     };
 }
-
 export function globalToLocal(globalPoint, coordSystem) {
     if (!coordSystem) return globalPoint;
     const translated = {
@@ -1433,3 +1470,38 @@ export function localToGlobal(localPoint, coordSystem) {
         y: rotated.y + coordSystem.origin.y
     };
 }
+
+export function getPerpendicularBisector(p1, p2) {
+    const midPoint = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+    const perpVector = { x: -(p2.y - p1.y), y: p2.x - p1.x };
+    return {
+        p1: midPoint,
+        p2: {
+            x: midPoint.x + perpVector.x,
+            y: midPoint.y + perpVector.y
+        }
+    };
+}
+
+export function getCircleCircleIntersection(c1, c2) {
+    const d = distance(c1.center, c2.center);
+
+    if (d > c1.radius + c2.radius || d < Math.abs(c1.radius - c2.radius) || d === 0) {
+        return [];
+    }
+
+    const a = (c1.radius * c1.radius - c2.radius * c2.radius + d * d) / (2 * d);
+    const h = Math.sqrt(Math.max(0, c1.radius * c1.radius - a * a));
+    const p2x = c1.center.x + a * (c2.center.x - c1.center.x) / d;
+    const p2y = c1.center.y + a * (c2.center.y - c1.center.y) / d;
+
+    const p3x_offset = h * (c2.center.y - c1.center.y) / d;
+    const p3y_offset = h * (c2.center.x - c1.center.x) / d;
+
+    const pA = { x: p2x + p3x_offset, y: p2y - p3y_offset };
+    const pB = { x: p2x - p3x_offset, y: p2y + p3y_offset };
+
+    if (h === 0) return [pA];
+    return [pA, pB];
+}
+

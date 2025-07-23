@@ -182,6 +182,7 @@ export const SELECTION_GLOW_LINE_WIDTH = 2;
 export const EDGE_SELECTION_GLOW_WIDTH_OFFSET = 4;
 export const MAX_VERTICES_FOR_ANGLES = 1;
 export const MAX_EDGES_FOR_LABELS = 3;
+export const MAX_FACES_FOR_COORDS = 1;
 
 // --- GRID CALCULATIONS ---
 export const GRID_TARGET_SPACING = 140;
