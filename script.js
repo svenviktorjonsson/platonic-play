@@ -1,5 +1,7 @@
-import ColormapSelector from 'colormap-selector/ColormapSelector.js';
-import 'colormap-selector/styles.css';
+import ColormapSelector from './node_modules/colormap-selector/ColormapSelector.js';
+import './node_modules/colormap-selector/styles.css';
+
+console.log('🚀 Script.js loaded at:', new Date().toLocaleTimeString());
 
 import * as C from './constants.js';
 import * as U from './utils.js';
