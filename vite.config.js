@@ -8,4 +8,4 @@ export default defineConfig({
       'colormap-selector': resolve(process.cwd(), 'node_modules/colormap-selector')
     }
   }
-});
+}); 
