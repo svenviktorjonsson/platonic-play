@@ -1,4 +1,3 @@
-
 import ColormapSelector from 'colormap-selector/ColormapSelector.js';
 import 'colormap-selector/styles.css';
 
