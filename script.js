@@ -1,4 +1,4 @@
-import ColormapSelector from 'colormap-selector';
+import ColormapSelector from 'colormap-selector/ColormapSelector.js';
 import 'colormap-selector/styles.css';
 
 import * as C from './constants.js';
