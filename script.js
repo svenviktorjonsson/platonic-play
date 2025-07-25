@@ -26,12 +26,20 @@ const canvasUI = {
     symmetryIcons: []
 };
 
+let contextMenu;
+let contextMenuVertexId = null;
+let contextMenuEdgeId = null;
+let contextMenuFaceId = null;
+
+
+let initialCoordSystemStateOnDrag = null;
 let initialCoordSystemStates = new Map();
 let coordSystemTransformIndicatorData = null;
 let highlightedEdgeForSnap = null;
 let coordSystemSnapAngle = null;
 let draggedFaceId = null;
 let coordSystemSnapType = null;
+let coordSystemSnapScale = null;
 
 let isDraggingColorTarget = false;
 let draggedColorTargetInfo = null;
@@ -1351,7 +1359,6 @@ function restoreState(state) {
     if (isColorPaletteExpanded) {
         buildColorPaletteUI();
     }
-    ensureFaceCoordinateSystems();
     const restoredState = getCurrentState();
     if (undoStack.length === 0) {
         undoStack.push(restoredState);
@@ -1621,8 +1628,26 @@ function handlePaste() {
             };
 
             if (newFace.localCoordSystem) {
+                // Translate the origin
                 newFace.localCoordSystem.origin.x += deltaX;
                 newFace.localCoordSystem.origin.y += deltaY;
+
+                // Remap vertex/edge IDs within the coordinate system's constraints
+                if (newFace.localCoordSystem.attachedToVertex) {
+                    newFace.localCoordSystem.attachedToVertex = oldToNewIdMap.get(newFace.localCoordSystem.attachedToVertex);
+                }
+                if (newFace.localCoordSystem.attachedToEdge) {
+                    newFace.localCoordSystem.attachedToEdge.v1 = oldToNewIdMap.get(newFace.localCoordSystem.attachedToEdge.v1);
+                    newFace.localCoordSystem.attachedToEdge.v2 = oldToNewIdMap.get(newFace.localCoordSystem.attachedToEdge.v2);
+                }
+                if (newFace.localCoordSystem.rotationAlignedToEdge) {
+                    newFace.localCoordSystem.rotationAlignedToEdge.v1 = oldToNewIdMap.get(newFace.localCoordSystem.rotationAlignedToEdge.v1);
+                    newFace.localCoordSystem.rotationAlignedToEdge.v2 = oldToNewIdMap.get(newFace.localCoordSystem.rotationAlignedToEdge.v2);
+                }
+                if (newFace.localCoordSystem.scaleAttachedToEdge) {
+                    newFace.localCoordSystem.scaleAttachedToEdge.v1 = oldToNewIdMap.get(newFace.localCoordSystem.scaleAttachedToEdge.v1);
+                    newFace.localCoordSystem.scaleAttachedToEdge.v2 = oldToNewIdMap.get(newFace.localCoordSystem.scaleAttachedToEdge.v2);
+                }
             }
             allFaces.push(newFace);
             newPastedFaceIds.push(newFace.id);
@@ -1809,8 +1834,6 @@ function getCompletedSegmentProperties(startVertex, endVertex, existingEdges) {
 }
 
 function completeGraphOnSelectedVertices() {
-    if (selectedVertexIds.length < 2) return;
-
     const regularVertexIds = selectedVertexIds.filter(id => {
         const vertex = findVertexById(id);
         return vertex && vertex.type === 'regular';
@@ -1818,13 +1841,12 @@ function completeGraphOnSelectedVertices() {
 
     if (regularVertexIds.length < 2) return;
 
-
     saveStateForUndo();
 
     const edgesBefore = JSON.parse(JSON.stringify(allEdges));
-    const edgesToAdd = [];
-    
-    // Find all edges that will be added
+    let edgesWereAdded = false;
+    const gridInterval = (lastGridState.alpha2 > lastGridState.alpha1 && lastGridState.interval2) ? lastGridState.interval2 : lastGridState.interval1;
+
     for (let i = 0; i < regularVertexIds.length; i++) {
         for (let j = i + 1; j < regularVertexIds.length; j++) {
             const id1 = regularVertexIds[i];
@@ -1836,25 +1858,20 @@ function completeGraphOnSelectedVertices() {
             );
 
             if (!edgeExists) {
-                edgesToAdd.push({ id1, id2 });
+                const v1 = findVertexById(id1);
+                const v2 = findVertexById(id2);
+                if (v1 && v2) {
+                    const newEdge = U.createEdge(v1, v2, gridInterval, getColorForTarget);
+                    allEdges.push(newEdge);
+                    edgesWereAdded = true;
+                }
             }
         }
     }
 
-
-    if (edgesToAdd.length === 0) return;
-
-    // Add all the new edges
-    edgesToAdd.forEach(edge => {
-        applyColormapToEdge(edge);
-        allEdges.push(edge);
-    });
-
-    // Update faces with the new topology
-    if (facesVisible) {
+    if (edgesWereAdded && facesVisible) {
         updateFaces(edgesBefore, allEdges);
         
-        // Assign colors to any newly created faces
         allFaces.forEach(face => {
             if (!face.color) {
                 face.color = getColorForTarget(C.COLOR_TARGET_FACE);
@@ -1863,7 +1880,6 @@ function completeGraphOnSelectedVertices() {
         
         ensureFaceCoordinateSystems();
     }
-
 }
 
 function applySelectionLogic(vertexIdsToSelect = [], edgeIdsToSelect = [], faceIdsToSelect = [], wantsShift, wantsCtrl, targetIsCenter = false) {
@@ -1956,6 +1972,17 @@ function initializeApp() {
     viewTransform.offsetY = canvas.height / 2;
     coordsDisplayMode = 'regular';
 
+    contextMenu = document.getElementById('context-menu');
+    canvas.addEventListener('contextmenu', handleContextMenu);
+    window.addEventListener('click', () => {
+        if (contextMenu) {
+            contextMenu.style.display = 'none';
+        }
+    });
+    contextMenu.addEventListener('mouseleave', () => {
+        contextMenu.style.display = 'none';
+    });
+
     saveStateForUndo();
     gameLoop();
 }
@@ -2043,10 +2070,24 @@ function updateFaces(edgesBefore, edgesAfter) {
     }
 
     const facesToAdd = correctFacesForComponent.filter(f => !oldFaceIds.has(f.id));
+    const addedEdgeIds = new Set(addedEdges.map(e => U.getEdgeId(e)));
 
     facesToAdd.forEach(newFace => {
+        let isFormedByNewEdge = false;
+        if (addedEdges.length > 0) {
+            for (let i = 0; i < newFace.vertexIds.length; i++) {
+                const p1 = newFace.vertexIds[i];
+                const p2 = newFace.vertexIds[(i + 1) % newFace.vertexIds.length];
+                const faceEdgeId = U.getEdgeId({ id1: p1, id2: p2 });
+                if (addedEdgeIds.has(faceEdgeId)) {
+                    isFormedByNewEdge = true;
+                    break;
+                }
+            }
+        }
+        
         if (deletedFaceIds.has(newFace.id)) {
-            if (addedEdges.length > 0) {
+            if (isFormedByNewEdge) {
                 deletedFaceIds.delete(newFace.id);
             } else {
                 return;
@@ -2077,7 +2118,7 @@ function updateFaces(edgesBefore, edgesAfter) {
     ensureFaceCoordinateSystems();
 }
 
-function insertVertexOnEdgeWithFaces(targetEdge, insertionVertex) {
+function insertVertexOnEdgeWithFaces(targetEdge, insertionVertex, gridInterval, getColorForTarget) {
     const p1 = findVertexById(targetEdge.id1);
     const p2 = findVertexById(targetEdge.id2);
 
@@ -2097,8 +2138,8 @@ function insertVertexOnEdgeWithFaces(targetEdge, insertionVertex) {
 
     allEdges = allEdges.filter(e => U.getEdgeId(e) !== U.getEdgeId(targetEdge));
 
-    allEdges.push({ id1: targetEdge.id1, id2: newVertex.id });
-    allEdges.push({ id1: newVertex.id, id2: targetEdge.id2 });
+    allEdges.push(U.createEdge(p1, newVertex, gridInterval, getColorForTarget));
+    allEdges.push(U.createEdge(newVertex, p2, gridInterval, getColorForTarget));
 
     if (facesVisible) {
         updateFaces(edgesBefore, allEdges);
@@ -2374,7 +2415,7 @@ function getBestScaleSnap(center, initialVertexStates, handleVertex, rawScale) {
         });
     }
 
-    if (Math.abs(rawScale - 1.0) < 0.1) {
+    if (Math.abs(rawScale - 1.0) < C.SCALE_SNAP_THRESHOLD) {
         allPossibleSnaps.push({ scale: 1.0, priority: Math.abs(rawScale - 1.0) });
     }
 
@@ -2563,7 +2604,8 @@ function redrawAll() {
             dragPreviewVertices,
             transformIndicatorData,
             initialDragVertexStates,
-            colors
+            colors,
+            initialCoordSystemStates
         }, dataToScreen, findVertexById);
     }
 
@@ -2626,18 +2668,20 @@ function redrawAll() {
         ensureFaceCoordinateSystems();
         
         if (selectedFaceIds.length > 0) {
-            R.drawFaceCoordinateSystems(ctx, {
-                allFaces,
-                selectedFaceIds,
-                colors: getColors(),
-                isDragConfirmed,
-                dragPreviewVertices,
-                initialDragVertexStates,
-                transformIndicatorData,
-                highlightedEdgeForSnap,
-                draggedFaceId,
-                coordSystemSnapAngle,
-                coordSystemSnapType
+            R.drawFaceCoordinateSystems(ctx, { 
+                allFaces, 
+                selectedFaceIds, 
+                colors, 
+                isDragConfirmed, 
+                dragPreviewVertices, 
+                initialDragVertexStates, 
+                transformIndicatorData, 
+                highlightedEdgeForSnap, 
+                draggedFaceId, 
+                coordSystemSnapAngle, 
+                coordSystemSnapType,
+                coordSystemSnapScale,
+                initialCoordSystemStates
             }, dataToScreen, findVertexById);
         }
     }
@@ -2692,7 +2736,7 @@ function redrawAll() {
             if (actionContext && actionContext.targetVertex) {
                 R.drawDragFeedback(ctx, htmlOverlay, actionContext.targetVertex.id, hybridVertexStates, stateForFeedback, dataToScreen, (id) => U.findNeighbors(id, allEdges), U.getEdgeId, currentShiftPressed, null, updateHtmlLabel, selectedVertexIds, true, initialDragVertexStates, activeCenterId);
             } else if (actionContext && actionContext.targetEdge) {
-                R.drawSelectedEdgeDistances(ctx, htmlOverlay, selectedEdgeIds, allEdges, { showDistances, distanceSigFigs, colors, lastGridState }, findVertexById, U.getEdgeId, dataToScreen, updateHtmlLabel, hybridVertexStates);
+                R.drawSelectedEdgeDistances(ctx, htmlOverlay, selectedEdgeIds, allEdges, { showDistances, distanceSigFigs, colors, lastGridState, currentShiftPressed }, findVertexById, U.getEdgeId, dataToScreen, updateHtmlLabel, dragPreviewVertices, initialDragVertexStates, transformIndicatorData);
             }
         }
     } else if ((showDistances || showAngles) && !isDrawingMode && !isCopyPreviewActive && !isPlacingTransform) {
@@ -2702,7 +2746,7 @@ function redrawAll() {
             });
         }
         if (selectedEdgeIds.length > 0 && selectedEdgeIds.length <= C.MAX_EDGES_FOR_LABELS) {
-            R.drawSelectedEdgeDistances(ctx, htmlOverlay, selectedEdgeIds, allEdges, { showDistances, distanceSigFigs, colors, lastGridState }, findVertexById, U.getEdgeId, dataToScreen, updateHtmlLabel);
+            R.drawSelectedEdgeDistances(ctx, htmlOverlay, selectedEdgeIds, allEdges, { showDistances, distanceSigFigs, colors, lastGridState }, findVertexById, U.getEdgeId, dataToScreen, updateHtmlLabel, dragPreviewVertices, initialDragVertexStates, transformIndicatorData);
             R.drawSelectedEdgeAngles(ctx, htmlOverlay, selectedEdgeIds, allEdges, { showAngles, angleSigFigs, angleDisplayMode, currentShiftPressed, distanceSigFigs, viewTransform, lastGridState, colors }, findVertexById, U.getEdgeId, dataToScreen, (id) => U.findNeighbors(id, allEdges), updateHtmlLabel);
         }
     }
@@ -2765,12 +2809,8 @@ function redrawAll() {
         ctx.fill();
     });
 
-    if (transformIndicatorData) {
-        R.drawTransformIndicators(ctx, htmlOverlay, { transformIndicatorData, angleSigFigs, distanceSigFigs, colors }, dataToScreen, updateHtmlLabel);
-    }
-
-    if (coordSystemTransformIndicatorData) {
-        R.drawTransformIndicators(ctx, htmlOverlay, { transformIndicatorData: coordSystemTransformIndicatorData, angleSigFigs, distanceSigFigs, colors }, dataToScreen, updateHtmlLabel);
+    if (transformIndicatorData || coordSystemTransformIndicatorData) {
+        R.drawTransformIndicators(ctx, htmlOverlay, { transformIndicatorData, angleSigFigs, distanceSigFigs, colors, coordSystemTransformIndicatorData }, dataToScreen, updateHtmlLabel);
     }
 
     R.updateMouseCoordinates(htmlOverlay, { coordsDisplayMode, isMouseOverCanvas, currentShiftPressed, ghostVertexPosition, gridDisplayMode, lastGridState, angleDisplayMode, canvas, dpr, mousePos, colors }, screenToData, updateHtmlLabel);
@@ -2981,7 +3021,6 @@ function performEscapeAction() {
         isPlacingTransform = false;
         placingTransformType = null;
         placingSnapPos = null;
-        return;
     }
 
     selectedVertexIds = [];
@@ -2994,6 +3033,7 @@ function performEscapeAction() {
         buildColorPaletteUI();
     }
 
+    coordSystemTransformIndicatorData = null;
     isActionInProgress = false;
     isDragConfirmed = false;
     isRectangleSelecting = false;
@@ -3160,13 +3200,14 @@ function handleCoordinateSystemMouseDown(event) {
 function prepareCoordSystemSnapTargets(currentFace) {
     const vertices = [];
     const edgeMidvertices = [];
+    const edgeVertexIds = [];
     const faceCenters = [];
     const edgeAngles = [];
 
     currentFace.vertexIds.forEach(id => {
         const vertex = findVertexById(id);
         if (vertex && vertex.type === 'regular') {
-            vertices.push({ x: vertex.x, y: vertex.y });
+            vertices.push({ ...vertex, id: id });
         }
     });
 
@@ -3177,7 +3218,8 @@ function prepareCoordSystemSnapTargets(currentFace) {
             x: (v1.x + v2.x) / 2,
             y: (v1.y + v2.y) / 2
         });
-
+        
+        edgeVertexIds.push(v1.id, v2.id);
         edgeAngles.push(Math.atan2(v2.y - v1.y, v2.x - v1.x));
     }
 
@@ -3187,7 +3229,7 @@ function prepareCoordSystemSnapTargets(currentFace) {
         }
     });
 
-    return { vertices, edgeMidvertices, faceCenters, edgeAngles };
+    return { vertices, edgeMidvertices, edgeVertexIds, faceCenters, edgeAngles };
 }
 
 function handleCoordinateSystemMouseMove(event) {
@@ -3199,68 +3241,214 @@ function handleCoordinateSystemMouseMove(event) {
     const face = element.face;
     const coordSystem = face.localCoordSystem;
 
-    const faceVertices = face.vertexIds.map(id => findVertexById(id)).filter(p => p && p.type === 'regular');
+    const faceVertices = face.vertexIds.map(id => findVertexById(id)).filter(p => p && p.type === 'regular' && p.x !== undefined && p.y !== undefined);
 
     if (element.type === 'center') {
         let targetPos;
+        let snapResult = { snapped: false };
         
         if (event.shiftKey) {
-            const snapPos = U.getCoordinateSystemSnapPosition(
+            snapResult = U.getCoordinateSystemCenterSnap(
                 mouseDataPos,
                 coordSystemSnapTargets,
-                true,
                 gridDisplayMode,
                 lastGridState,
                 lastAngularGridState
             );
             
-            targetPos = U.clampPointToPolygon(snapPos, faceVertices);
+            if (snapResult.snapped) {
+                targetPos = snapResult.snapPoint;
+                
+                if (snapResult.snapType === 'edge') {
+                    const edgeInfo = snapResult.edgeInfo;
+                    const v1 = findVertexById(edgeInfo.v1);
+                    const v2 = findVertexById(edgeInfo.v2);
+                    
+                    if (v1 && v2) {
+                        if (initialCoordSystemStateOnDrag && initialCoordSystemStateOnDrag.attachedToEdge) {
+                            const fractions = [0, 0.25, 1/3, 0.5, 2/3, 0.75, 1];
+                            let bestFraction = 0.5;
+                            let minDist = Infinity;
+                            
+                            fractions.forEach(frac => {
+                                const fracPoint = {
+                                    x: v1.x + frac * (v2.x - v1.x),
+                                    y: v1.y + frac * (v2.y - v1.y)
+                                };
+                                const dist = U.distance(mouseDataPos, fracPoint);
+                                if (dist < minDist) {
+                                    minDist = dist;
+                                    bestFraction = frac;
+                                }
+                            });
+                            
+                            targetPos = {
+                                x: v1.x + bestFraction * (v2.x - v1.x),
+                                y: v1.y + bestFraction * (v2.y - v1.y)
+                            };
+                            
+                            snapResult.edgeInfo.t = bestFraction;
+                            
+                            const currentEdgeLength = U.distance(v1, v2);
+                            const originalEdgeLength = coordSystem.attachedToEdge ? coordSystem.attachedToEdge.originalLength : currentEdgeLength;
+                            const scaleRatio = coordSystem.scale / originalEdgeLength;
+                            
+                            snapResult.edgeInfo.originalLength = currentEdgeLength;
+                            snapResult.edgeInfo.scaleRatio = scaleRatio;
+                            
+                            coordSystemTransformIndicatorData = {
+                                edgeFraction: bestFraction,
+                                v1: v1,
+                                v2: v2,
+                                snapPosition: targetPos
+                            };
+                        } else {
+                            targetPos = snapResult.snapPoint;
+                            coordSystemTransformIndicatorData = null;
+                        }
+                    }
+                }
+            } else {
+                const incenter = U.calculateIncenter(faceVertices);
+                targetPos = incenter ? incenter.center : faceVertices[0];
+            }
             
-            coordSystem.origin.x = targetPos.x;
-            coordSystem.origin.y = targetPos.y;
-            coordSystem.isCustom = true;
-            
-            ghostVertexPosition = targetPos;
+            if (element.type === 'center') {
+                ghostVertexPosition = targetPos;
+            }
         } else {
-            targetPos = U.clampPointToPolygon(mouseDataPos, faceVertices);
-            coordSystem.origin.x = targetPos.x;
-            coordSystem.origin.y = targetPos.y;
-            coordSystem.isCustom = true;
-            
+            targetPos = mouseDataPos;
             ghostVertexPosition = null;
+            coordSystemTransformIndicatorData = null;
         }
-
+        
+        if (faceVertices.length > 0 && faceVertices.every(v => v && v.x !== undefined && v.y !== undefined)) {
+            targetPos = U.clampPointToPolygon(targetPos, faceVertices);
+            
+            if (ghostVertexPosition) {
+                ghostVertexPosition = U.clampPointToPolygon(ghostVertexPosition, faceVertices);
+            }
+        }
+        
+        coordSystem.origin.x = targetPos.x;
+        coordSystem.origin.y = targetPos.y;
+        coordSystem.isCustom = true;
+        
+        if (snapResult.snapped) {
+            coordSystem.attachedToVertex = snapResult.vertexId || null;
+            coordSystem.attachedToEdge = snapResult.edgeInfo || null;
+        } else {
+            coordSystem.attachedToVertex = null;
+            coordSystem.attachedToEdge = null;
+        }
     } else if (element.type === 'x_axis' || element.type === 'y_axis') {
         const vectorFromOrigin = {
             x: mouseDataPos.x - coordSystem.origin.x,
             y: mouseDataPos.y - coordSystem.origin.y
         };
         
-        const newScale = Math.hypot(vectorFromOrigin.x, vectorFromOrigin.y);
         let newAngle = Math.atan2(vectorFromOrigin.y, vectorFromOrigin.x);
-
-        const originalAngle = element.type === 'y_axis' ? coordSystem.angle + Math.PI / 2 : coordSystem.angle;
-        const originalScale = coordSystem.scale;
-        const referencePoint = {
-            x: coordSystem.origin.x + originalScale * Math.cos(originalAngle),
-            y: coordSystem.origin.y + originalScale * Math.sin(originalAngle)
-        };
+        let newScale = Math.hypot(vectorFromOrigin.x, vectorFromOrigin.y);
 
         highlightedEdgeForSnap = null;
         coordSystemSnapAngle = null;
         coordSystemSnapType = null;
         ghostVertices = [];
         ghostVertexPosition = null;
+        coordSystemTransformIndicatorData = null;
+        coordSystemSnapScale = null;
         
-        let snapResult = { snapped: false };
-
         if (event.shiftKey) {
-            snapResult = U.getAxisSnapAngle(mouseDataPos, coordSystem.origin, true, coordSystemSnapTargets);
-            if (snapResult.snapped) {
-                newAngle = snapResult.angle;
-                highlightedEdgeForSnap = snapResult.edgeIndex;
-                coordSystemSnapAngle = snapResult.angle;
-                coordSystemSnapType = snapResult.snapType;
+            const angleSnapResult = U.getAxisSnapAngle(mouseDataPos, coordSystem.origin, true, coordSystemSnapTargets);
+            
+            if (angleSnapResult.snapped) {
+                newAngle = angleSnapResult.angle;
+                coordSystemSnapAngle = newAngle;
+                coordSystemSnapType = angleSnapResult.snapType;
+                
+                const snappedAxisDirection = { x: Math.cos(newAngle), y: Math.sin(newAngle) };
+                const mouseVector = { x: mouseDataPos.x - coordSystem.origin.x, y: mouseDataPos.y - coordSystem.origin.y };
+                const effectiveScale = mouseVector.x * snappedAxisDirection.x + mouseVector.y * snappedAxisDirection.y;
+
+                if (angleSnapResult.snapType === 'vertex_direction') {
+                    const targetVertex = findVertexById(angleSnapResult.targetVertexId);
+                    if (targetVertex) {
+                        newScale = U.distance(coordSystem.origin, targetVertex);
+                        coordSystemSnapScale = newScale;
+                    }
+                } else if (angleSnapResult.edgeIndex !== null) {
+                    highlightedEdgeForSnap = angleSnapResult.edgeIndex;
+                    const edgeInfo = getAlignedEdgeInfo(face, angleSnapResult.edgeIndex);
+                    const isPerpendicular = Math.abs(U.normalizeAngleToPi(newAngle - edgeInfo.edgeAngle)) > Math.PI / 4 && Math.abs(U.normalizeAngleToPi(newAngle - edgeInfo.edgeAngle)) < 3 * Math.PI / 4;
+
+                    if (element.type === 'x_axis' && isPerpendicular) {
+                        const v1 = findVertexById(edgeInfo.v1Id);
+                        const v2 = findVertexById(edgeInfo.v2Id);
+                        if (v1 && v2) {
+                            const closestOnEdge = U.getClosestPointOnLine(coordSystem.origin, v1, v2);
+                            const referenceOrthogonalDistance = closestOnEdge.distance;
+
+                            const fractions = [0.25, 1/3, 0.5, 2/3, 0.75, 1.0];
+                            let bestSnap = { scale: effectiveScale, dist: Infinity, fraction: null };
+
+                            fractions.forEach(frac => {
+                                const targetDist = referenceOrthogonalDistance * frac;
+                                const diff = Math.abs(effectiveScale - targetDist);
+                                if (diff < bestSnap.dist) {
+                                    bestSnap = { scale: targetDist, dist: diff, fraction: frac };
+                                }
+                            });
+                            
+                            const pixelSnapThreshold = 15 / viewTransform.scale;
+                            if (bestSnap.dist < pixelSnapThreshold) {
+                                newScale = bestSnap.scale;
+                                coordSystemSnapScale = newScale;
+                                coordSystemTransformIndicatorData = {
+                                    orthogonalDistanceFraction: bestSnap.fraction,
+                                    v1: v1,
+                                    v2: v2,
+                                    snapPosition: { origin: coordSystem.origin, closest: closestOnEdge }
+                                };
+                            } else {
+                                newScale = effectiveScale > 0 ? effectiveScale : 0;
+                                coordSystemSnapScale = newScale;
+                            }
+                        }
+                    } else {
+                        const scaleSnapResult = U.getAxisScaleSnap(
+                            coordSystem.origin, 
+                            element.type === 'y_axis' ? newAngle - Math.PI / 2 : newAngle, 
+                            { alignedEdgeInfo: edgeInfo }, 
+                            face, 
+                            findVertexById,
+                            effectiveScale,
+                            viewTransform,
+                            element.type
+                        );
+                        
+                        if (scaleSnapResult.snapped) {
+                            newScale = scaleSnapResult.scale;
+                            coordSystemSnapScale = newScale;
+                            
+                            if (scaleSnapResult.edgeFraction !== null) {
+                                const arrowHeadPosition = {
+                                    x: coordSystem.origin.x + newScale * Math.cos(element.type === 'y_axis' ? newAngle : newAngle),
+                                    y: coordSystem.origin.y + newScale * Math.sin(element.type === 'y_axis' ? newAngle : newAngle)
+                                };
+                                coordSystemTransformIndicatorData = {
+                                    edgeFraction: scaleSnapResult.edgeFraction,
+                                    v1: findVertexById(edgeInfo.v1Id),
+                                    v2: findVertexById(edgeInfo.v2Id),
+                                    snapPosition: arrowHeadPosition
+                                };
+                            }
+                        } else {
+                             newScale = effectiveScale > 0 ? effectiveScale : 0;
+                        }
+                    }
+                }
+            } else {
+                newScale = Math.hypot(vectorFromOrigin.x, vectorFromOrigin.y);
             }
         }
 
@@ -3269,27 +3457,12 @@ function handleCoordinateSystemMouseMove(event) {
         } else {
             coordSystem.angle = newAngle;
         }
-        
+
         if (newScale > 0.01) {
             coordSystem.scale = newScale;
         }
-        
+
         coordSystem.isCustom = true;
-        
-        const currentPoint = {
-            x: coordSystem.origin.x + coordSystem.scale * Math.cos(newAngle),
-            y: coordSystem.origin.y + coordSystem.scale * Math.sin(newAngle)
-        };
-        
-        coordSystemTransformIndicatorData = {
-            center: coordSystem.origin,
-            startPos: referencePoint,
-            currentPos: currentPoint,
-            rotation: U.normalizeAngleToPi(newAngle - originalAngle),
-            scale: coordSystem.scale / originalScale,
-            isSnapping: event.shiftKey && snapResult && snapResult.snapped,
-            transformType: 'coordinate_system'
-        };
     }
 
     return true;
@@ -3297,13 +3470,100 @@ function handleCoordinateSystemMouseMove(event) {
 
 function handleCoordinateSystemMouseUp() {
     if (isDraggingCoordSystem) {
+        const element = draggedCoordSystemElement;
+        const face = element.face;
+        const coordSystem = face.localCoordSystem;
+        
+        if (element.type === 'center' && coordSystem) {
+            const snapThreshold = 0.01;
+            let attachedToVertex = null;
+            let attachedToEdge = null;
+            
+            face.vertexIds.forEach(vertexId => {
+                const vertex = findVertexById(vertexId);
+                if (vertex && U.distance(coordSystem.origin, vertex) < snapThreshold) {
+                    attachedToVertex = vertexId;
+                }
+            });
+            
+            if (!attachedToVertex) {
+                for (let i = 0; i < face.vertexIds.length; i++) {
+                    const v1 = findVertexById(face.vertexIds[i]);
+                    const v2 = findVertexById(face.vertexIds[(i + 1) % face.vertexIds.length]);
+                    if (v1 && v2) {
+                        const closest = U.getClosestPointOnLineSegment(coordSystem.origin, v1, v2);
+                        if (closest.distance < snapThreshold && closest.onSegmentStrict) {
+                            const currentEdgeLength = U.distance(v1, v2);
+                            attachedToEdge = { 
+                                v1: v1.id, 
+                                v2: v2.id, 
+                                t: closest.t,
+                                originalAngle: Math.atan2(v2.y - v1.y, v2.x - v1.x),
+                                originalLength: currentEdgeLength,
+                                scaleRatio: coordSystem.scale / currentEdgeLength
+                            };
+                            break;
+                        }
+                    }
+                }
+            }
+            
+            coordSystem.attachedToVertex = attachedToVertex;
+            coordSystem.attachedToEdge = attachedToEdge;
+        }
+
+        if (element.type === 'x_axis' || element.type === 'y_axis') {
+            let didSnapRotationToEdge = false;
+            let didSnapScaleToEdge = false;
+
+            if (coordSystemSnapType === 'edge' && highlightedEdgeForSnap !== null) {
+                const edgeInfo = getAlignedEdgeInfo(face, highlightedEdgeForSnap);
+                if (edgeInfo) {
+                    if (coordSystemSnapAngle !== null) {
+                        coordSystem.rotationAlignedToEdge = {
+                            v1: edgeInfo.v1Id,
+                            v2: edgeInfo.v2Id,
+                            originalAngle: edgeInfo.edgeAngle,
+                            originalSystemAngle: coordSystem.angle
+                        };
+                        didSnapRotationToEdge = true;
+                    }
+
+                    if (coordSystemSnapScale !== null) {
+                        const v1 = findVertexById(edgeInfo.v1Id);
+                        const v2 = findVertexById(edgeInfo.v2Id);
+                        if (v1 && v2) {
+                            const edgeLength = U.distance(v1, v2);
+                            if (edgeLength > C.GEOMETRY_CALCULATION_EPSILON) {
+                                coordSystem.scaleAttachedToEdge = {
+                                    v1: edgeInfo.v1Id,
+                                    v2: edgeInfo.v2Id,
+                                    scaleRatio: coordSystem.scale / edgeLength
+                                };
+                                didSnapScaleToEdge = true;
+                            }
+                         }
+                    }
+                }
+            }
+
+            if (!didSnapRotationToEdge) {
+                coordSystem.rotationAlignedToEdge = null;
+            }
+            if (!didSnapScaleToEdge) {
+                coordSystem.scaleAttachedToEdge = null;
+            }
+        }
+        
+        coordSystemSnapScale = null;
+        coordSystemTransformIndicatorData = null;
         isDraggingCoordSystem = false;
         draggedCoordSystemElement = null;
         coordSystemSnapTargets = null;
         highlightedEdgeForSnap = null;
         coordSystemSnapAngle = null;
         coordSystemSnapType = null;
-        draggedFaceId = null; // Add this line
+        draggedFaceId = null;
         ghostVertexPosition = null;
         ghostVertices = [];
         coordSystemTransformIndicatorData = null;
@@ -3486,184 +3746,21 @@ function handleThemeToggle() {
     }
 }
 
-
-function handleMouseDown(event) {
-    const targetElement = event.target;
-    if (targetElement && targetElement.closest('.katex')) {
-        event.stopPropagation();
-        return;
-    }
-
-    mousePos = U.getMousePosOnCanvas(event, canvas);
-    actionStartPos = { ...mousePos };
-
-    if (isColorPaletteExpanded) {
-        const iconsUnderMouse = (canvasUI.colorTargetIcons || []).filter(icon =>
-            mousePos.x >= icon.x && mousePos.x <= icon.x + icon.width &&
-            mousePos.y >= icon.y && mousePos.y <= icon.y + icon.height
-        );
-
-        if (iconsUnderMouse.length > 0) {
-            const topIcon = iconsUnderMouse[iconsUnderMouse.length - 1];
-            
-            const { element, shiftKey, ctrlKey } = { element: topIcon, shiftKey: event.shiftKey, ctrlKey: event.ctrlKey || event.metaKey };
-            if (shiftKey) {
-                if (!activeColorTargets.includes(element.target)) {
-                    activeColorTargets.push(element.target);
-                }
-            } else if (ctrlKey) {
-                if (activeColorTargets.includes(element.target)) {
-                    activeColorTargets = activeColorTargets.filter(t => t !== element.target);
-                } else {
-                    activeColorTargets.push(element.target);
-                }
-            } else {
-                activeColorTargets = [element.target];
-            }
-            buildColorPaletteUI();
-
-            actionContext = { target: 'ui_icon_click', element: { ...topIcon, type: 'colorTargetIcon' } };
-            isActionInProgress = true;
-            return;
-        }
-
-        for (const swatch of canvasUI.colorSwatches) {
-            if (mousePos.x >= swatch.x && mousePos.x <= swatch.x + swatch.width &&
-                mousePos.y >= swatch.y && mousePos.y <= swatch.y + swatch.height) {
-                actionContext = { target: 'ui_swatch', element: { ...swatch } };
-                isActionInProgress = true;
-                return;
-            }
-        }
-    }
-
-    if (handleCanvasUIClick(mousePos, event.shiftKey, event.ctrlKey || event.metaKey)) {
-        return;
-    }
-
-    if (handleCoordinateSystemMouseDown(event)) {
-        return;
-    }
-
-    if (isPlacingTransform) {
-        if (event.button === 2) {
-            performEscapeAction();
-            event.preventDefault();
-            return;
-        }
-
-        saveStateForUndo();
-        const mouseDataPos = screenToData(mousePos);
-        const snappedPos = currentShiftPressed ? getBestSnapPosition(mouseDataPos) : mouseDataPos;
-
-        const newCenter = {
-            id: U.generateUniqueId(),
-            x: snappedPos.x,
-            y: snappedPos.y,
-            type: placingTransformType
+function getAlignedEdgeInfo(face, edgeIndex) {
+    const v1Id = face.vertexIds[edgeIndex];
+    const v2Id = face.vertexIds[(edgeIndex + 1) % face.vertexIds.length];
+    const v1 = findVertexById(v1Id);
+    const v2 = findVertexById(v2Id);
+    
+    if (v1 && v2) {
+        return {
+            v1Id,
+            v2Id,
+            edgeAngle: Math.atan2(v2.y - v1.y, v2.x - v1.x)
         };
-        allVertices.push(newCenter);
-
-        performEscapeAction();
-        event.preventDefault();
-        return;
-    }
-
-    if (isDrawingMode && event.button === 2) {
-        performEscapeAction();
-        return;
-    }
-
-    if (event.altKey && !isDrawingMode && (findClickedVertex(mousePos) || findClickedEdge(mousePos))) {
-        const clickedVertex = findClickedVertex(mousePos);
-        const clickedEdge = findClickedEdge(mousePos);
-        
-        saveStateForUndo();
-        performEscapeAction();
-        
-        if (clickedVertex && clickedVertex.type === 'regular') {
-            isDrawingMode = true;
-            previewLineStartVertexId = clickedVertex.id;
-            drawingSequence = [];
-            currentSequenceIndex = 0;
-            currentDrawingPath = [clickedVertex.id];
-            window.currentDrawingPath = currentDrawingPath;
-        } else if (clickedEdge) {
-            const p1 = findVertexById(clickedEdge.id1);
-            const p2 = findVertexById(clickedEdge.id2);
-            if (p1 && p2) {
-                const closest = U.getClosestPointOnLineSegment(screenToData(mousePos), p1, p2);
-                const newVertex = insertVertexOnEdgeWithFaces(clickedEdge, closest);
-                if (newVertex) {
-                    isDrawingMode = true;
-                    previewLineStartVertexId = newVertex.id;
-                    drawingSequence = [];
-                    currentSequenceIndex = 0;
-                    currentDrawingPath = [newVertex.id];
-                    window.currentDrawingPath = currentDrawingPath;
-                }
-            }
-        }
-        
-        isActionInProgress = false;
-        event.preventDefault();
-        return;
-    }
-
-    let clickedVertex = findClickedVertex(mousePos);
-    let clickedEdge = !clickedVertex ? findClickedEdge(mousePos) : null;
-    let clickedFace = !clickedVertex && !clickedEdge ? findClickedFace(mousePos) : null;
-
-    const shiftOrCtrl = event.shiftKey || event.ctrlKey || event.metaKey;
-    const clickedItem = clickedVertex || clickedEdge || clickedFace;
-    let isClickOnSelection = false;
-    if (clickedVertex) isClickOnSelection = selectedVertexIds.includes(clickedVertex.id) || selectedCenterIds.includes(clickedVertex.id);
-    else if (clickedEdge) isClickOnSelection = selectedEdgeIds.includes(U.getEdgeId(clickedEdge));
-    else if (clickedFace) isClickOnSelection = selectedFaceIds.includes(U.getFaceId(clickedFace));
-    
-    if (!isDrawingMode && !shiftOrCtrl && clickedItem && !isClickOnSelection) {
-        if (clickedVertex) applySelectionLogic([clickedVertex.id], [], [], false, false, clickedVertex.type !== 'regular');
-        else if (clickedEdge) applySelectionLogic([], [U.getEdgeId(clickedEdge)], [], false, false);
-        else if (clickedFace) applySelectionLogic([], [], [U.getFaceId(clickedFace)], false, false);
     }
     
-    let dragHandle = null;
-    if (clickedVertex) {
-        dragHandle = clickedVertex;
-    } else if (clickedEdge) {
-        const p1 = findVertexById(clickedEdge.id1);
-        const p2 = findVertexById(clickedEdge.id2);
-        dragHandle = U.getClosestPointOnLineSegment(screenToData(mousePos), p1, p2);
-    } else if (clickedFace) {
-        dragHandle = screenToData(mousePos);
-    }
-
-    const isTransformDrag = activeCenterId && (selectedVertexIds.length > 0 || selectedEdgeIds.length > 0 || selectedFaceIds.length > 0);
-
-    isActionInProgress = true;
-    isDragConfirmed = false;
-    isPanningBackground = false;
-    isRectangleSelecting = false;
-    initialDragVertexStates = [];
-    dragPreviewVertices = [];
-    currentMouseButton = event.button;
-    rectangleSelectStartPos = actionStartPos;
-
-    actionContext = {
-        targetVertex: clickedVertex,
-        dragHandle: dragHandle,
-        targetEdge: clickedEdge,
-        targetFace: clickedFace,
-        target: clickedItem || 'canvas',
-        shiftKey: event.shiftKey,
-        ctrlKey: event.ctrlKey || event.metaKey,
-        isTransformDrag
-    };
-
-    if (clickedVertex && clickedVertex.type !== 'regular') {
-        isDraggingCenter = true;
-        handleCenterSelection(clickedVertex.id, event.shiftKey, event.ctrlKey || event.metaKey);
-    }
+    return null;
 }
 
 function handleMouseMove(event) {
@@ -3873,25 +3970,30 @@ function handleMouseMove(event) {
             canvas.style.cursor = 'grabbing';
             isDraggingCenter = actionContext.targetVertex && actionContext.targetVertex.type !== 'regular';
 
-            let verticesToDragIds = new Set(selectedVertexIds);
-
-            selectedEdgeIds.forEach(edgeId => {
-                const [id1, id2] = edgeId.split(C.EDGE_ID_DELIMITER);
-                verticesToDragIds.add(id1);
-                verticesToDragIds.add(id2);
-            });
-
-            selectedFaceIds.forEach(faceId => {
-                const face = allFaces.find(f => U.getFaceId(f) === faceId);
-                if (face) {
-                    face.vertexIds.forEach(id => verticesToDragIds.add(id));
-                }
-            });
-
-            let verticesToDrag = Array.from(verticesToDragIds).map(id => findVertexById(id)).filter(p => p && p.type === 'regular');
+            let verticesToDrag;
 
             if (isDraggingCenter) {
                 verticesToDrag = [actionContext.targetVertex];
+            } else {
+                let verticesToDragIds = new Set(selectedVertexIds);
+
+                selectedEdgeIds.forEach(edgeId => {
+                    const [id1, id2] = edgeId.split(C.EDGE_ID_DELIMITER);
+                    verticesToDragIds.add(id1);
+                    verticesToDragIds.add(id2);
+                });
+
+                selectedFaceIds.forEach(faceId => {
+                    const face = allFaces.find(f => U.getFaceId(f) === faceId);
+                    if (face) {
+                        face.vertexIds.forEach(id => verticesToDragIds.add(id));
+                    }
+                });
+
+                verticesToDrag = Array.from(verticesToDragIds).map(id => findVertexById(id)).filter(p => p && p.type === 'regular');
+            }
+
+            if (isDraggingCenter) {
                 if (actionContext.targetVertex.type === C.TRANSFORMATION_TYPE_ROTATION) {
                     const center = actionContext.targetVertex;
                     const startReferenceVertex = screenToData(actionStartPos);
@@ -3929,7 +4031,7 @@ function handleMouseMove(event) {
             const deltaY_css = mousePos.y - actionStartPos.y;
             viewTransform.offsetX = backgroundPanStartOffset.x + (deltaX_css * dpr);
             viewTransform.offsetY = backgroundPanStartOffset.y - (deltaY_css * dpr);
-        } else if (isTransformingSelection || isEdgeTransformDrag) {
+        } else if ((isTransformingSelection || isEdgeTransformDrag) && !isDraggingCenter) {
             const center = findVertexById(activeCenterId);
             let startReferenceVertex = actionTargetVertex;
             
@@ -3972,6 +4074,7 @@ function handleMouseMove(event) {
                 const newPos = U.applyTransformToVertex(p_initial, center, finalTransform.rotation, finalTransform.scale, finalTransform.directionalScale, startVectorForApply);
                 return { ...p_initial, x: newPos.x, y: newPos.y };
             });
+            
             if (snapResult.snapped && snapResult.snapType === 'merge' && snapResult.mergingVertex && snapResult.mergeTarget) {
                 const sourceVertexInitial = initialDragVertexStates.find(p => p.id === snapResult.mergingVertex.id);
                 if (sourceVertexInitial) {
@@ -4000,6 +4103,26 @@ function handleMouseMove(event) {
                         ghostVertices.push({ x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 });
                     }
                 }
+            }
+        } else if (isDraggingCenter && dragPreviewVertices.length > 0) {
+            // Simple translation for dragging centers with placement-style snapping
+            const mouseData = screenToData(mousePos);
+            
+            let finalPos = mouseData;
+            if (currentShiftPressed) {
+                const potentialSnapPos = getBestSnapPosition(mouseData);
+                if (potentialSnapPos) {
+                    finalPos = potentialSnapPos;
+                    ghostVertexPosition = potentialSnapPos;
+                }
+            } else {
+                ghostVertexPosition = null;
+            }
+            
+            const previewCenterToUpdate = dragPreviewVertices.find(dp => dp && dp.id === initialDragVertexStates[0].id);
+            if (previewCenterToUpdate) {
+                previewCenterToUpdate.x = finalPos.x;
+                previewCenterToUpdate.y = finalPos.y;
             }
         } else if (dragPreviewVertices.length > 0) {
             const mouseData = screenToData(mousePos);
@@ -4046,7 +4169,176 @@ function handleMouseMove(event) {
     }
 }
 
-function handleMouseUp(event) {
+function handleLeftMouseButtonDown(event) {
+    if (isPlacingTransform) {
+        saveStateForUndo();
+        const mouseDataPos = screenToData(mousePos);
+        const snappedPos = currentShiftPressed ? getBestSnapPosition(mouseDataPos) : mouseDataPos;
+
+        const newCenter = {
+            id: U.generateUniqueId(),
+            x: snappedPos.x,
+            y: snappedPos.y,
+            type: placingTransformType
+        };
+        allVertices.push(newCenter);
+
+        // Make the new center active and selected
+        selectedCenterIds = [newCenter.id];
+        activeCenterId = newCenter.id;
+        // Clear other selections for clarity
+        selectedVertexIds = [];
+        selectedEdgeIds = [];
+        selectedFaceIds = [];
+
+        // Reset ONLY the placement-related state, keeping the new selection
+        isPlacingTransform = false;
+        placingTransformType = null;
+        placingSnapPos = null;
+        canvas.style.cursor = 'crosshair';
+
+        event.preventDefault();
+        return;
+    }
+    isActionInProgress = true;
+    isDragConfirmed = false;
+    isPanningBackground = false;
+
+    if (isColorPaletteExpanded) {
+        const iconsUnderMouse = (canvasUI.colorTargetIcons || []).filter(icon =>
+            mousePos.x >= icon.x && mousePos.x <= icon.x + icon.width &&
+            mousePos.y >= icon.y && mousePos.y <= icon.y + icon.height
+        );
+
+        if (iconsUnderMouse.length > 0) {
+            const topIcon = iconsUnderMouse[iconsUnderMouse.length - 1];
+            
+            const { element, shiftKey, ctrlKey } = { element: topIcon, shiftKey: event.shiftKey, ctrlKey: event.ctrlKey || event.metaKey };
+            if (shiftKey) {
+                if (!activeColorTargets.includes(element.target)) {
+                    activeColorTargets.push(element.target);
+                }
+            } else if (ctrlKey) {
+                if (activeColorTargets.includes(element.target)) {
+                    activeColorTargets = activeColorTargets.filter(t => t !== element.target);
+                } else {
+                    activeColorTargets.push(element.target);
+                }
+            } else {
+                activeColorTargets = [element.target];
+            }
+            buildColorPaletteUI();
+
+            actionContext = { target: 'ui_icon_click', element: { ...topIcon, type: 'colorTargetIcon' } };
+            return;
+        }
+
+        for (const swatch of canvasUI.colorSwatches) {
+            if (mousePos.x >= swatch.x && mousePos.x <= swatch.x + swatch.width &&
+                mousePos.y >= swatch.y && mousePos.y <= swatch.y + swatch.height) {
+                actionContext = { target: 'ui_swatch', element: { ...swatch } };
+                return;
+            }
+        }
+    }
+
+    if (handleCanvasUIClick(mousePos, event.shiftKey, event.ctrlKey || event.metaKey)) {
+        actionContext = { target: 'ui' }; // Set a generic context for UI clicks
+        return;
+    }
+
+    if (handleCoordinateSystemMouseDown(event)) {
+        return;
+    }
+
+    if (event.altKey && !isDrawingMode && (findClickedVertex(mousePos) || findClickedEdge(mousePos))) {
+        const clickedVertex = findClickedVertex(mousePos);
+        const clickedEdge = findClickedEdge(mousePos);
+        
+        saveStateForUndo();
+        performEscapeAction();
+        
+        if (clickedVertex && clickedVertex.type === 'regular') {
+            isDrawingMode = true;
+            previewLineStartVertexId = clickedVertex.id;
+            drawingSequence = [];
+            currentSequenceIndex = 0;
+            currentDrawingPath = [clickedVertex.id];
+            window.currentDrawingPath = currentDrawingPath;
+        } else if (clickedEdge) {
+            const p1 = findVertexById(clickedEdge.id1);
+            const p2 = findVertexById(clickedEdge.id2);
+            if (p1 && p2) {
+                const closest = U.getClosestPointOnLineSegment(screenToData(mousePos), p1, p2);
+                const gridInterval = (lastGridState.alpha2 > lastGridState.alpha1 && lastGridState.interval2) ? lastGridState.interval2 : lastGridState.interval1;
+                const newVertex = insertVertexOnEdgeWithFaces(clickedEdge, closest, gridInterval, getColorForTarget);
+                if (newVertex) {
+                    isDrawingMode = true;
+                    previewLineStartVertexId = newVertex.id;
+                    drawingSequence = [];
+                    currentSequenceIndex = 0;
+                    currentDrawingPath = [newVertex.id];
+                    window.currentDrawingPath = currentDrawingPath;
+                }
+            }
+        }
+        
+        isActionInProgress = false;
+        event.preventDefault();
+        return;
+    }
+
+    let clickedVertex = findClickedVertex(mousePos);
+    let clickedEdge = !clickedVertex ? findClickedEdge(mousePos) : null;
+    let clickedFace = !clickedVertex && !clickedEdge ? findClickedFace(mousePos) : null;
+
+    const shiftOrCtrl = event.shiftKey || event.ctrlKey || event.metaKey;
+    const clickedItem = clickedVertex || clickedEdge || clickedFace;
+    let isClickOnSelection = false;
+    if (clickedVertex) isClickOnSelection = selectedVertexIds.includes(clickedVertex.id) || selectedCenterIds.includes(clickedVertex.id);
+    else if (clickedEdge) isClickOnSelection = selectedEdgeIds.includes(U.getEdgeId(clickedEdge));
+    else if (clickedFace) isClickOnSelection = selectedFaceIds.includes(U.getFaceId(clickedFace));
+    
+    if (!isDrawingMode && !shiftOrCtrl && clickedItem && !isClickOnSelection) {
+        if (clickedVertex) applySelectionLogic([clickedVertex.id], [], [], false, false, clickedVertex.type !== 'regular');
+        else if (clickedEdge) applySelectionLogic([], [U.getEdgeId(clickedEdge)], [], false, false);
+        else if (clickedFace) applySelectionLogic([], [], [U.getFaceId(clickedFace)], false, false);
+    }
+    
+    let dragHandle = null;
+    if (clickedVertex) {
+        dragHandle = clickedVertex;
+    } else if (clickedEdge) {
+        const p1 = findVertexById(clickedEdge.id1);
+        const p2 = findVertexById(clickedEdge.id2);
+        dragHandle = U.getClosestPointOnLineSegment(screenToData(mousePos), p1, p2);
+    } else if (clickedFace) {
+        dragHandle = screenToData(mousePos);
+    }
+
+    const isTransformDrag = activeCenterId && (selectedVertexIds.length > 0 || selectedEdgeIds.length > 0 || selectedFaceIds.length > 0);
+
+    initialDragVertexStates = [];
+    dragPreviewVertices = [];
+
+    actionContext = {
+        targetVertex: clickedVertex,
+        dragHandle: dragHandle,
+        targetEdge: clickedEdge,
+        targetFace: clickedFace,
+        target: clickedItem || 'canvas',
+        shiftKey: event.shiftKey,
+        ctrlKey: event.ctrlKey || event.metaKey,
+        isTransformDrag
+    };
+
+    if (clickedVertex && clickedVertex.type !== 'regular') {
+        isDraggingCenter = true;
+        handleCenterSelection(clickedVertex.id, event.shiftKey, event.ctrlKey || event.metaKey);
+    }
+}
+
+function handleLeftMouseButtonUp(event) {
     if (isDraggingColorTarget) {
         const icon = canvasUI.colorTargetIcons.find(i => i.target === draggedColorTargetInfo.target);
         if (icon) {
@@ -4140,7 +4432,11 @@ function handleMouseUp(event) {
                 const parsedColor = U.parseColor(colorToEdit.value);
                 initialState = { type: 'colormap', points: [{ pos: 0.5, alpha: parsedColor.a, color: [parsedColor.r, parsedColor.g, parsedColor.b], order: 1 }] };
             } else if (colorToEdit.type === 'colormap') {
-                initialState = { type: 'colormap', points: colorToEdit.vertices.map(v => ({ pos: v.pos, alpha: v.alpha !== undefined ? v.alpha : 1.0, color: Array.isArray(v.color) ? [...v.color] : [v.color.r || 0, v.color.g || 0, v.color.b || 0], order: v.order || 1 })) };
+                initialState = { 
+                    type: 'colormap', 
+                    points: colorToEdit.vertices.map(v => ({ pos: v.pos, alpha: v.alpha !== undefined ? v.alpha : 1.0, color: Array.isArray(v.color) ? [...v.color] : [v.color.r || 0, v.color.g || 0, v.color.b || 0], order: v.order || 1 })),
+                    isCyclic: colorToEdit.isCyclic === true
+                };
             }
             colorEditor.show(undefined, undefined, initialState);
             clickData.count = 0;
@@ -4205,458 +4501,502 @@ function handleMouseUp(event) {
 
     const { shiftKey, ctrlKey, targetVertex, targetEdge, targetFace } = actionContext;
 
-    if (isDragConfirmed) {
-        saveStateForUndo();
+    // Find this line:
+if (isDragConfirmed) {
 
-        if (isPanningBackground) {
-            // Intentionally empty
-        } else if (isRectangleSelecting) {
-            const dataP1 = screenToData({ x: Math.min(actionStartPos.x, mousePos.x), y: Math.min(actionStartPos.y, mousePos.y) });
-            const dataP2 = screenToData({ x: Math.max(actionStartPos.x, mousePos.x), y: Math.max(actionStartPos.y, mousePos.y) });
-            const minX = Math.min(dataP1.x, dataP2.x);
-            const maxX = Math.max(dataP1.x, dataP2.x);
-            const minY = Math.min(dataP1.y, dataP2.y);
-            const maxY = Math.max(dataP1.y, dataP2.y);
-            const verticesInRect = allVertices.filter(p => p.type === 'regular' && p.x >= minX && p.x <= maxX && p.y >= minY && p.y <= maxY).map(p => p.id);
-            const edgesInRect = allEdges.filter(e => verticesInRect.includes(e.id1) && verticesInRect.includes(e.id2)).map(e => U.getEdgeId(e));
-            const allVerticesInRect = new Set(verticesInRect);
-            const facesInRect = allFaces.filter(f => f.vertexIds.every(vId => allVerticesInRect.has(vId))).map(f => U.getFaceId(f));
-            applySelectionLogic(verticesInRect, edgesInRect, facesInRect, shiftKey, ctrlKey);
+// And replace everything inside it with this:
+    saveStateForUndo();
+    let lastCopySelectionIds = null;
+    if (copyCount > 1) {
+        const verticesToCopy = initialDragVertexStates.filter(p => p.type === 'regular');
+        const originalIds = new Set(verticesToCopy.map(p => p.id));
+        const edgesToCopy = allEdges.filter(e => originalIds.has(e.id1) && originalIds.has(e.id2));
+        const facesToCopy = allFaces.filter(f => f.vertexIds.every(id => originalIds.has(id)));
+        
+        const allNewVertices = [];
+        const allNewEdges = [];
+        const allNewFaces = [];
+        lastCopySelectionIds = { vertices: [], edges: [], faces: [] };
 
-            const newActiveTargets = [];
-            if (facesInRect.length > 0) newActiveTargets.push(C.COLOR_TARGET_FACE);
-            if (edgesInRect.length > 0) newActiveTargets.push(C.COLOR_TARGET_EDGE);
-            if (verticesInRect.length > 0) newActiveTargets.push(C.COLOR_TARGET_VERTEX);
+        for (let i = 1; i < copyCount; i++) {
+            const newIdMapForThisCopy = new Map();
+            const currentCopyVertices = [];
+            const currentCopyEdges = [];
+            const currentCopyFaces = [];
 
-            if (newActiveTargets.length > 0) {
-                activeColorTargets = newActiveTargets;
-                if (isColorPaletteExpanded) {
-                    buildColorPaletteUI();
+            verticesToCopy.forEach(p => {
+                let newPos;
+                if (transformIndicatorData) {
+                    const { center, rotation, scale, directionalScale, startPos } = transformIndicatorData;
+                    const startVector = { x: startPos.x - center.x, y: startPos.y - center.y };
+                    newPos = U.applyTransformToVertex(p, center, rotation * i, Math.pow(scale, i), directionalScale, startVector);
+                } else {
+                    const delta = { x: dragPreviewVertices[0].x - initialDragVertexStates[0].x, y: dragPreviewVertices[0].y - initialDragVertexStates[0].y };
+                    newPos = { x: p.x + delta.x * i, y: p.y + delta.y * i };
                 }
-            }
-        } else if (dragPreviewVertices.length > 0) {
-            if (copyCount > 1) {
-                const verticesToCopy = initialDragVertexStates.filter(p => p.type === 'regular');
-                const originalIds = new Set(verticesToCopy.map(p => p.id));
-                const edgesToCopy = allEdges.filter(e => originalIds.has(e.id1) && originalIds.has(e.id2));
-                const facesToCopy = allFaces.filter(f => f.vertexIds.every(id => originalIds.has(id)));
-                
-                const allNewVertices = [];
-                const allNewEdges = [];
-                const allNewFaces = [];
-                let lastCopySelectionIds = { vertices: [], edges: [], faces: [] };
+                const newVertex = { ...p, ...newPos, id: U.generateUniqueId() };
+                allNewVertices.push(newVertex);
+                newIdMapForThisCopy.set(p.id, newVertex.id);
+                currentCopyVertices.push(newVertex.id);
+            });
 
-                for (let i = 1; i < copyCount; i++) {
-                    const newIdMapForThisCopy = new Map();
-                    const currentCopyVertices = [];
-                    const currentCopyEdges = [];
-                    const currentCopyFaces = [];
+            edgesToCopy.forEach(edge => {
+                const newId1 = newIdMapForThisCopy.get(edge.id1);
+                const newId2 = newIdMapForThisCopy.get(edge.id2);
+                if (newId1 && newId2) {
+                    const newEdge = { ...edge, id1: newId1, id2: newId2 };
+                    allNewEdges.push(newEdge);
+                    currentCopyEdges.push(U.getEdgeId(newEdge));
+                }
+            });
 
-                    verticesToCopy.forEach(p => {
-                        let newPos;
+            facesToCopy.forEach(originalFace => {
+                const initialSystemForCopy = initialCoordSystemStates.get(originalFace.id);
+                const newVertexIds = originalFace.vertexIds.map(id => newIdMapForThisCopy.get(id));
+                if (newVertexIds.every(Boolean)) {
+                    const newFace = JSON.parse(JSON.stringify(originalFace));
+                    newFace.id = U.getFaceId({ vertexIds: newVertexIds });
+                    newFace.vertexIds = newVertexIds;
+
+                    if (newFace.localCoordSystem && initialSystemForCopy) {
                         if (transformIndicatorData) {
                             const { center, rotation, scale, directionalScale, startPos } = transformIndicatorData;
                             const startVector = { x: startPos.x - center.x, y: startPos.y - center.y };
-                            newPos = U.applyTransformToVertex(p, center, rotation * i, Math.pow(scale, i), directionalScale, startVector);
+                            newFace.localCoordSystem.origin = U.applyTransformToVertex(initialSystemForCopy.origin, center, rotation * i, Math.pow(scale, i), directionalScale, startVector);
+                            newFace.localCoordSystem.angle = U.normalizeAngle(initialSystemForCopy.angle + (rotation * i));
+                            if (!directionalScale) newFace.localCoordSystem.scale = initialSystemForCopy.scale * Math.pow(scale, i);
                         } else {
                             const delta = { x: dragPreviewVertices[0].x - initialDragVertexStates[0].x, y: dragPreviewVertices[0].y - initialDragVertexStates[0].y };
-                            newPos = { x: p.x + delta.x * i, y: p.y + delta.y * i };
+                            newFace.localCoordSystem.origin.x = initialSystemForCopy.origin.x + delta.x * i;
+                            newFace.localCoordSystem.origin.y = initialSystemForCopy.origin.y + delta.y * i;
                         }
-                        const newVertex = { ...p, ...newPos, id: U.generateUniqueId() };
-                        allNewVertices.push(newVertex);
-                        newIdMapForThisCopy.set(p.id, newVertex.id);
-                        currentCopyVertices.push(newVertex.id);
-                    });
-
-                    edgesToCopy.forEach(edge => {
-                        const newId1 = newIdMapForThisCopy.get(edge.id1);
-                        const newId2 = newIdMapForThisCopy.get(edge.id2);
-                        if (newId1 && newId2) {
-                            const newEdge = { ...edge, id1: newId1, id2: newId2 };
-                            allNewEdges.push(newEdge);
-                            currentCopyEdges.push(U.getEdgeId(newEdge));
+                        
+                        if (newFace.localCoordSystem.attachedToVertex) {
+                            newFace.localCoordSystem.attachedToVertex = newIdMapForThisCopy.get(newFace.localCoordSystem.attachedToVertex);
                         }
-                    });
-
-                    facesToCopy.forEach(originalFace => {
-                        const initialSystemForCopy = initialCoordSystemStates.get(originalFace.id);
-                        const newVertexIds = originalFace.vertexIds.map(id => newIdMapForThisCopy.get(id));
-                        if (newVertexIds.every(Boolean) && initialSystemForCopy) {
-                            const newFace = JSON.parse(JSON.stringify(originalFace));
-                            newFace.id = U.getFaceId({ vertexIds: newVertexIds });
-                            newFace.vertexIds = newVertexIds;
-
-                            if (newFace.localCoordSystem) {
-                                if (transformIndicatorData) {
-                                    const { center, rotation, scale, directionalScale, startPos } = transformIndicatorData;
-                                    const startVector = { x: startPos.x - center.x, y: startPos.y - center.y };
-                                    newFace.localCoordSystem.origin = U.applyTransformToVertex(initialSystemForCopy.origin, center, rotation * i, Math.pow(scale, i), directionalScale, startVector);
-                                    newFace.localCoordSystem.angle = U.normalizeAngle(initialSystemForCopy.angle + (rotation * i));
-                                    if (!directionalScale) newFace.localCoordSystem.scale = initialSystemForCopy.scale * Math.pow(scale, i);
-                                } else {
-                                    const delta = { x: dragPreviewVertices[0].x - initialDragVertexStates[0].x, y: dragPreviewVertices[0].y - initialDragVertexStates[0].y };
-                                    newFace.localCoordSystem.origin.x = initialSystemForCopy.origin.x + delta.x * i;
-                                    newFace.localCoordSystem.origin.y = initialSystemForCopy.origin.y + delta.y * i;
-                                }
-                            }
-                            allNewFaces.push(newFace);
-                            currentCopyFaces.push(newFace.id);
+                        if (newFace.localCoordSystem.attachedToEdge) {
+                            newFace.localCoordSystem.attachedToEdge.v1 = newIdMapForThisCopy.get(newFace.localCoordSystem.attachedToEdge.v1);
+                            newFace.localCoordSystem.attachedToEdge.v2 = newIdMapForThisCopy.get(newFace.localCoordSystem.attachedToEdge.v2);
                         }
-                    });
-                    
-                    if (i === copyCount - 1) {
-                        lastCopySelectionIds = { vertices: currentCopyVertices, edges: currentCopyEdges, faces: currentCopyFaces };
+                        if (newFace.localCoordSystem.rotationAlignedToEdge) {
+                            newFace.localCoordSystem.rotationAlignedToEdge.v1 = newIdMapForThisCopy.get(newFace.localCoordSystem.rotationAlignedToEdge.v1);
+                            newFace.localCoordSystem.rotationAlignedToEdge.v2 = newIdMapForThisCopy.get(newFace.localCoordSystem.rotationAlignedToEdge.v2);
+                        }
+                        if (newFace.localCoordSystem.scaleAttachedToEdge) {
+                            newFace.localCoordSystem.scaleAttachedToEdge.v1 = newIdMapForThisCopy.get(newFace.localCoordSystem.scaleAttachedToEdge.v1);
+                            newFace.localCoordSystem.scaleAttachedToEdge.v2 = newIdMapForThisCopy.get(newFace.localCoordSystem.scaleAttachedToEdge.v2);
+                        }
+                        
+                        newFace.localCoordSystem.isCustom = true;
                     }
+                    allNewFaces.push(newFace);
+                    currentCopyFaces.push(newFace.id);
                 }
-                
-                allVertices.push(...allNewVertices);
-                allEdges.push(...allNewEdges);
-                allFaces.push(...allNewFaces);
-                
-                selectedVertexIds = lastCopySelectionIds.vertices;
-                selectedEdgeIds = lastCopySelectionIds.edges;
-                selectedFaceIds = lastCopySelectionIds.faces;
-            } else {
-                dragPreviewVertices.forEach(dp => {
-                    const originalVertex = allVertices.find(p => p.id === dp.id);
-                    if (originalVertex) {
-                        originalVertex.x = dp.x;
-                        originalVertex.y = dp.y;
-                    }
-                });
-                
-                const verticesThatMoved = new Set(initialDragVertexStates.map(v => v.id));
-                const affectedFaces = new Set();
-                allFaces.forEach(face => {
-                    if (face.vertexIds.some(vId => verticesThatMoved.has(vId))) {
-                        affectedFaces.add(face);
-                    }
-                });
-
-                if (affectedFaces.size > 0) {
-                    affectedFaces.forEach(face => {
-                        const initialSystem = initialCoordSystemStates.get(face.id);
-                        if (face.localCoordSystem && initialSystem) {
-                            if (transformIndicatorData) {
-                                const { center, rotation, scale, directionalScale, startPos } = transformIndicatorData;
-                                const startVector = { x: startPos.x - center.x, y: startPos.y - center.y };
-                                const newOrigin = U.applyTransformToVertex(initialSystem.origin, center, rotation, scale, directionalScale, startVector);
-                                face.localCoordSystem.origin = newOrigin;
-                                face.localCoordSystem.angle = U.normalizeAngle(initialSystem.angle + rotation);
-                                if (!directionalScale) face.localCoordSystem.scale = initialSystem.scale * scale;
-                            } else {
-                                const refInitial = initialDragVertexStates[0];
-                                const refFinal = dragPreviewVertices.find(v => v.id === refInitial.id);
-                                if (refInitial && refFinal) {
-                                    const deltaX = refFinal.x - refInitial.x;
-                                    const deltaY = refFinal.y - refInitial.y;
-                                    face.localCoordSystem.origin.x = initialSystem.origin.x + deltaX;
-                                    face.localCoordSystem.origin.y = initialSystem.origin.y + deltaY;
-                                }
-                            }
-                        }
-                    });
-                }
-            }
-
-            const mergeRadius = C.MERGE_RADIUS_SCREEN / viewTransform.scale;
-            const parent = new Map();
-            allVertices.forEach(p => parent.set(p.id, p.id));
-            const isOriginalDragged = new Set(initialDragVertexStates.map(p => p.id));
-
-            const findRoot = (id) => {
-                if (!parent.has(id) || parent.get(id) === id) return id;
-                const rootId = findRoot(parent.get(id));
-                parent.set(id, rootId);
-                return rootId;
-            };
-
-            for (let i = 0; i < allVertices.length; i++) {
-                for (let j = i + 1; j < allVertices.length; j++) {
-                    const p1 = allVertices[i];
-                    const p2 = allVertices[j];
-                    if (U.distance(p1, p2) < mergeRadius) {
-                        const root1 = findRoot(p1.id);
-                        const root2 = findRoot(p2.id);
-                        if (root1 !== root2) {
-                            const p1_is_orig = isOriginalDragged.has(root1);
-                            const p2_is_orig = isOriginalDragged.has(root2);
-                            if (p1_is_orig && !p2_is_orig) {
-                                parent.set(root1, root2);
-                            } else {
-                                parent.set(root2, root1);
-                            }
-                        }
-                    }
-                }
-            }
-
-            const verticesToDelete = new Set();
-            allVertices.forEach(p => {
-                const rootId = findRoot(p.id);
-                if (p.id !== rootId) verticesToDelete.add(p.id);
             });
-
-            if (verticesToDelete.size > 0) {
-                allEdges.forEach(edge => {
-                    edge.id1 = findRoot(edge.id1);
-                    edge.id2 = findRoot(edge.id2);
-                });
-
-                allFaces.forEach(face => {
-                    const remappedVertexIds = face.vertexIds.map(vId => findRoot(vId));
-                    const uniqueVertexIds = remappedVertexIds.filter((vId, index, self) => self.indexOf(vId) === index);
-                    
-                    if (uniqueVertexIds.length < 3) {
-                        face.vertexIds = [];
-                    } else {
-                        face.vertexIds = uniqueVertexIds;
-                        face.id = U.getFaceId({ vertexIds: uniqueVertexIds });
-                    }
-                });
-
-                allVertices = allVertices.filter(p => !verticesToDelete.has(p.id));
-                allEdges = allEdges.filter((e, index, self) =>
-                    e.id1 !== e.id2 &&
-                    index === self.findIndex(t => U.getEdgeId(t) === U.getEdgeId(e))
-                );
-                allFaces = allFaces.filter(f => f.vertexIds.length >= 3);
-                
-                selectedVertexIds = Array.from(new Set(selectedVertexIds.map(id => findRoot(id)).filter(id => !verticesToDelete.has(id))));
-                selectedEdgeIds = Array.from(new Set(selectedEdgeIds.map(id => {
-                    const [id1, id2] = id.split(C.EDGE_ID_DELIMITER);
-                    const root1 = findRoot(id1);
-                    const root2 = findRoot(id2);
-                    return root1 === root2 ? null : U.getEdgeId({id1: root1, id2: root2});
-                }).filter(Boolean)));
-                selectedFaceIds = Array.from(new Set(selectedFaceIds.map(id => {
-                    const face = allFaces.find(f => f.id === id);
-                    return face ? face.id : null;
-                }).filter(Boolean)));
+            
+            if (i === copyCount - 1) {
+                lastCopySelectionIds = { vertices: currentCopyVertices, edges: currentCopyEdges, faces: currentCopyFaces };
             }
         }
+        
+        allVertices.push(...allNewVertices);
+        allEdges.push(...allNewEdges);
+        allFaces.push(...allNewFaces);
+        
+        selectedVertexIds = lastCopySelectionIds.vertices;
+        selectedEdgeIds = lastCopySelectionIds.edges;
+        selectedFaceIds = lastCopySelectionIds.faces;
+    } else if (dragPreviewVertices.length > 0) {
+        dragPreviewVertices.forEach(dp => {
+            const originalVertex = allVertices.find(p => p.id === dp.id);
+            if (originalVertex) {
+                originalVertex.x = dp.x;
+                originalVertex.y = dp.y;
+            }
+        });
+        
+        const verticesThatMoved = new Set(initialDragVertexStates.map(v => v.id));
+        const affectedFaces = new Set();
+        allFaces.forEach(face => {
+            if (face.vertexIds.some(vId => verticesThatMoved.has(vId))) {
+                affectedFaces.add(face);
+            }
+        });
+
+        if (affectedFaces.size > 0) {
+            affectedFaces.forEach(face => {
+                const initialSystem = initialCoordSystemStates.get(face.id);
+                if (face.localCoordSystem && initialSystem) {
+                    if (transformIndicatorData && !transformIndicatorData.directionalScale) {
+                        const { center, rotation, scale, startPos } = transformIndicatorData;
+                        const startVector = { x: startPos.x - center.x, y: startPos.y - center.y };
+                        const newOrigin = U.applyTransformToVertex(initialSystem.origin, center, rotation, scale, false, startVector);
+                        face.localCoordSystem.origin = newOrigin;
+                        face.localCoordSystem.angle = U.normalizeAngle(initialSystem.angle + rotation);
+                        face.localCoordSystem.scale = initialSystem.scale * scale;
+                    } else {
+                        applyCoordinateSystemConstraintsOnDragEnd(face, initialSystem, initialDragVertexStates, dragPreviewVertices, findVertexById);
+                    }
+                }
+            });
+        }
+    }
+
+    const mergeRadius = C.MERGE_RADIUS_SCREEN / viewTransform.scale;
+        const parent = new Map();
+        allVertices.forEach(p => parent.set(p.id, p.id));
+        const isOriginalDragged = new Set(initialDragVertexStates.map(p => p.id));
+
+        const findRoot = (id) => {
+            if (!parent.has(id) || parent.get(id) === id) return id;
+            const rootId = findRoot(parent.get(id));
+            parent.set(id, rootId);
+            return rootId;
+        };
+
+        for (let i = 0; i < allVertices.length; i++) {
+            for (let j = i + 1; j < allVertices.length; j++) {
+                const p1 = allVertices[i];
+                const p2 = allVertices[j];
+                if (p1.type === 'regular' && p2.type === 'regular' && U.distance(p1, p2) < mergeRadius) {
+                    const root1 = findRoot(p1.id);
+                    const root2 = findRoot(p2.id);
+                    if (root1 !== root2) {
+                        const p1_is_orig = isOriginalDragged.has(root1);
+                        const p2_is_orig = isOriginalDragged.has(root2);
+                        if (p1_is_orig && !p2_is_orig) {
+                            parent.set(root1, root2);
+                        } else {
+                            parent.set(root2, root1);
+                        }
+                    }
+                }
+            }
+        }
+
+        const verticesToDelete = new Set();
+        allVertices.forEach(p => {
+            const rootId = findRoot(p.id);
+            if (p.id !== rootId) verticesToDelete.add(p.id);
+        });
+
+        if (verticesToDelete.size > 0) {
+            const edgesBeforeMerge = JSON.parse(JSON.stringify(allEdges));
+            
+            const faceCoordSystemBackup = backupFaceCoordinateSystemsBeforeMerge(allFaces, findRoot);
+
+            allEdges.forEach(edge => {
+                edge.id1 = findRoot(edge.id1);
+                edge.id2 = findRoot(edge.id2);
+            });
+
+            allFaces.forEach(face => {
+                const remappedVertexIds = face.vertexIds.map(vId => findRoot(vId));
+                const uniqueVertexIds = remappedVertexIds.filter((vId, index, self) => self.indexOf(vId) === index);
+                
+                if (uniqueVertexIds.length < 3) {
+                    face.vertexIds = [];
+                } else {
+                    face.vertexIds = uniqueVertexIds;
+                    face.id = U.getFaceId({ vertexIds: uniqueVertexIds });
+                }
+            });
+
+            allVertices = allVertices.filter(p => !verticesToDelete.has(p.id));
+
+            allEdges = allEdges.filter((e, index, self) =>
+                e.id1 !== e.id2 &&
+                index === self.findIndex(t => U.getEdgeId(t) === U.getEdgeId(e))
+            );
+            allFaces = allFaces.filter(f => f.vertexIds.length >= 3);
+            
+            selectedVertexIds = Array.from(new Set(selectedVertexIds.map(id => findRoot(id)).filter(id => !verticesToDelete.has(id))));
+            selectedEdgeIds = Array.from(new Set(selectedEdgeIds.map(id => {
+                const [id1, id2] = id.split(C.EDGE_ID_DELIMITER);
+                const root1 = findRoot(id1);
+                const root2 = findRoot(id2);
+                return root1 === root2 ? null : U.getEdgeId({id1: root1, id2: root2});
+            }).filter(Boolean)));
+            selectedFaceIds = Array.from(new Set(selectedFaceIds.map(id => {
+                const face = allFaces.find(f => f.id === id);
+                return face ? face.id : null;
+            }).filter(Boolean)));
+            
+            updateFaces(edgesBeforeMerge, allEdges);
+            
+            allFaces.forEach(face => {
+                const backupSystem = faceCoordSystemBackup.get(face.id);
+                if (backupSystem) {
+                    face.localCoordSystem = backupSystem;
+                    
+                    if (face.localCoordSystem.attachedToVertex) {
+                        const mergedVertexId = findRoot(face.localCoordSystem.attachedToVertex);
+                        face.localCoordSystem.attachedToVertex = mergedVertexId;
+                        
+                        const mergedVertex = allVertices.find(v => v.id === mergedVertexId);
+                        if (mergedVertex) {
+                            face.localCoordSystem.origin.x = mergedVertex.x;
+                            face.localCoordSystem.origin.y = mergedVertex.y;
+                        }
+                    }
+                    if (face.localCoordSystem.attachedToEdge) {
+                        face.localCoordSystem.attachedToEdge.v1 = findRoot(face.localCoordSystem.attachedToEdge.v1);
+                        face.localCoordSystem.attachedToEdge.v2 = findRoot(face.localCoordSystem.attachedToEdge.v2);
+                        
+                        const v1 = allVertices.find(v => v.id === face.localCoordSystem.attachedToEdge.v1);
+                        const v2 = allVertices.find(v => v.id === face.localCoordSystem.attachedToEdge.v2);
+                        if (v1 && v2) {
+                            const t = face.localCoordSystem.attachedToEdge.t;
+                            face.localCoordSystem.origin.x = v1.x + t * (v2.x - v1.x);
+                            face.localCoordSystem.origin.y = v1.y + t * (v2.y - v1.y);
+                        }
+                    }
+                    if (face.localCoordSystem.rotationAlignedToEdge) {
+                        face.localCoordSystem.rotationAlignedToEdge.v1 = findRoot(face.localCoordSystem.rotationAlignedToEdge.v1);
+                        face.localCoordSystem.rotationAlignedToEdge.v2 = findRoot(face.localCoordSystem.rotationAlignedToEdge.v2);
+                    }
+                    if (face.localCoordSystem.scaleAttachedToEdge) {
+                        face.localCoordSystem.scaleAttachedToEdge.v1 = findRoot(face.localCoordSystem.scaleAttachedToEdge.v1);
+                        face.localCoordSystem.scaleAttachedToEdge.v2 = findRoot(face.localCoordSystem.scaleAttachedToEdge.v2);
+                    }
+                }
+            });
+            
+            ensureFaceCoordinateSystems();
+        }
+
+        const finalMovedVertexIds = new Set();
+        if (copyCount > 1 && lastCopySelectionIds) {
+            lastCopySelectionIds.vertices.forEach(id => finalMovedVertexIds.add(id));
+        } else if (dragPreviewVertices.length > 0) {
+            dragPreviewVertices.forEach(p => finalMovedVertexIds.add(p.id));
+        }
+
+        if (verticesToDelete.size > 0) {
+            selectedVertexIds.forEach(id => finalMovedVertexIds.add(id));
+        }
+
+        if (finalMovedVertexIds.size > 0) {
+            updateAffectedEdgeProperties(Array.from(finalMovedVertexIds), transformIndicatorData);
+        }
+
         initialCoordSystemStates.clear();
-    } else { // This is a CLICK action
-        if (currentMouseButton === 0) {
-            if (actionContext.target === 'ui-icon') {
-                // This was a simple click on an icon, already handled by setting activeColorTarget in mouseDown.
-            } else {
-                const startVertex = findVertexById(previewLineStartVertexId);
-                if (isDrawingMode && startVertex) {
-                    
-                    saveStateForUndo();
-                    const edgesBefore = JSON.parse(JSON.stringify(allEdges));
-                    const snappedData = getSnappedPosition(startVertex, mousePos, shiftKey);
-                    let newVertex = null;
-    
-                    if (snappedData.snapType === 'vertex' && snappedData.targetVertex) {
-    newVertex = snappedData.targetVertex;
-                    } else if (snappedData.snapType === 'edge' && snappedData.targetEdge) {
-                        newVertex = insertVertexOnEdgeWithFaces(snappedData.targetEdge, { x: snappedData.x, y: snappedData.y });
-                    } else {
-                        let newVertexColor = getColorForTarget(C.COLOR_TARGET_VERTEX);
-                        const colorIndex = colorAssignments[C.COLOR_TARGET_VERTEX];
-                        if (colorIndex !== -1) {
-                            const colorItem = allColors[colorIndex];
-                            if (colorItem && colorItem.type === 'colormap') {
-                                newVertexColor = U.sampleColormap(colorItem, 0.5);
-                            }
-                        }
+    } else {
+        if (actionContext.target === 'ui-icon') {
+            // This was a simple click on an icon, already handled by setting activeColorTarget in mouseDown.
+        } else {
+            const startVertex = findVertexById(previewLineStartVertexId);
+            if (isDrawingMode && startVertex) {
+                
+                saveStateForUndo();
+                const edgesBefore = JSON.parse(JSON.stringify(allEdges));
+                const snappedData = getSnappedPosition(startVertex, mousePos, shiftKey);
+                let newVertex = null;
 
-                        newVertex = { id: U.generateUniqueId(), x: snappedData.x, y: snappedData.y, type: 'regular', color: newVertexColor };
-                        allVertices.push(newVertex);
-                    }
-    
-                    if (newVertex) {
-                        const edgeExists = allEdges.some(e => (e.id1 === startVertex.id && e.id2 === newVertex.id) || (e.id2 === startVertex.id && e.id1 === newVertex.id));
-                        if (!edgeExists) {
-                            const newEdge = { id1: startVertex.id, id2: newVertex.id };
-                            applyColormapToEdge(newEdge);
-                            
-                            allEdges.push(newEdge);
-                            updateFaces(edgesBefore, allEdges);
-
-                            // Assign colors to any newly created faces
-                            allFaces.forEach(face => {
-                                if (!face.color) {
-                                    face.color = getColorForTarget(C.COLOR_TARGET_FACE);
-                                }
-                            });
-                        }
-                        
-                        const completedSegmentProps = getCompletedSegmentProperties(startVertex, newVertex, allEdges);
-                        if (completedSegmentProps) {
-                            if (drawingSequence.length > 0) {
-                                drawingSequence[drawingSequence.length - 1].turn = completedSegmentProps.turnAngleRad;
-                            }
-                            drawingSequence.push({ 
-                                length: completedSegmentProps.length, 
-                                turn: 0, 
-                                endVertexColor: newVertex.color 
-                            });
-                            currentSequenceIndex = drawingSequence.length - 1;
-                        }
-                        
-                        currentDrawingPath.push(newVertex.id);
-                        window.currentDrawingPath = currentDrawingPath;
-
-                        // Update both vertex and edge colors in the drawing sequence
-                        updateDrawingSequenceColors();
-                        updateDrawingSequenceEdgeColors();
-                        
-                        previewLineStartVertexId = newVertex.id;
-                    }
-                    
-                    if (shiftKey && newVertex && snappedData) {
-                        const completedSegmentProps = getCompletedSegmentProperties(startVertex, newVertex, allEdges);
-                        if (completedSegmentProps) {
-                            frozenReference_Origin_Data = completedSegmentProps.startVertex;
-                            
-                            if (snappedData.gridToGridSquaredSum > 0 && snappedData.gridInterval) {
-                                frozenReference_D_du = snappedData.gridInterval * Math.sqrt(snappedData.gridToGridSquaredSum);
-                            } else {
-                                frozenReference_D_du = completedSegmentProps.length;
-                            }
-                            
-                            frozenReference_D_g2g = snappedData.gridToGridSquaredSum > 0 ? { 
-                                g2gSquaredSum: snappedData.gridToGridSquaredSum, 
-                                interval: snappedData.gridInterval 
-                            } : null;
-                            
-                            frozenReference_A_rad = completedSegmentProps.turnAngleRad;
-                            frozenReference_A_baseRad = completedSegmentProps.precedingSegmentAbsoluteAngleRad;
-                        }
-                    } else {
-                        frozenReference_D_du = null;
-                        frozenReference_D_g2g = null;
-                        frozenReference_A_rad = null;
-                        frozenReference_A_baseRad = null;
-                        frozenReference_Origin_Data = null;
-                    }
-    
-                    clickData.count = 0;
-                } else if (actionContext.target === 'canvas') {
-                    saveStateForUndo();
-                    const startCoords = ghostVertexPosition ? ghostVertexPosition : screenToData(mousePos);
-                    
-                    // For the first vertex in a new drawing sequence, always use the first color of the colormap
+                if (snappedData.snapType === 'vertex' && snappedData.targetVertex) {
+                    newVertex = snappedData.targetVertex;
+                } else if (snappedData.snapType === 'edge' && snappedData.targetEdge) {
+                    newVertex = insertVertexOnEdgeWithFaces(snappedData.targetEdge, { x: snappedData.x, y: snappedData.y });
+                } else {
                     let newVertexColor = getColorForTarget(C.COLOR_TARGET_VERTEX);
                     const colorIndex = colorAssignments[C.COLOR_TARGET_VERTEX];
                     if (colorIndex !== -1) {
                         const colorItem = allColors[colorIndex];
                         if (colorItem && colorItem.type === 'colormap') {
-                            newVertexColor = U.sampleColormap(colorItem, 0);
+                            newVertexColor = U.sampleColormap(colorItem, 0.5);
                         }
                     }
 
-                    const newVertex = { id: U.generateUniqueId(), ...startCoords, type: 'regular', color: newVertexColor };
+                    newVertex = { id: U.generateUniqueId(), x: snappedData.x, y: snappedData.y, type: 'regular', color: newVertexColor };
                     allVertices.push(newVertex);
-                    isDrawingMode = true;
-                    previewLineStartVertexId = newVertex.id;
-                    drawingSequence = [];
-                    currentSequenceIndex = 0;
-                    currentDrawingPath = [newVertex.id];
-                    window.currentDrawingPath = currentDrawingPath;
-                } else {
-                    if (targetVertex || targetEdge || targetFace) {
-                        saveStateForUndo();    
-                        const targetId = targetFace ? U.getFaceId(targetFace) : (targetEdge ? U.getEdgeId(targetEdge) : targetVertex.id);
-                        let targetType;
-                        if (targetFace) targetType = 'face';
-                        else if (targetVertex && targetVertex.type !== 'regular') targetType = 'center';
-                        else if (targetVertex) targetType = 'vertex';
-                        else if (targetEdge) targetType = 'edge';
-    
-                        if (targetId && clickData.targetId === targetId && (Date.now() - clickData.timestamp) < C.DOUBLE_CLICK_MS) {
-                            clickData.count++;
-                        } else {
-                            clickData.count = 1;
-                        }
-                        clickData.targetId = targetId;
-                        clickData.type = targetType;
-                        clickData.timestamp = Date.now();
-    
-                        switch (clickData.count) {
-                            case 1:
-                                if (clickData.type === 'face') applySelectionLogic([], [], [clickData.targetId], shiftKey, ctrlKey);
-                                else if (clickData.type === 'edge') applySelectionLogic([], [clickData.targetId], [], shiftKey, ctrlKey);
-                                else if (clickData.type === 'vertex') applySelectionLogic([clickData.targetId], [], [], shiftKey, ctrlKey);
-                                else if (clickData.type === 'center') handleCenterSelection(clickData.targetId, shiftKey, ctrlKey);
-                                break;
-                            case 2:
-                                if (clickData.type === 'vertex') {
-                                    const neighbors = U.findNeighbors(clickData.targetId, allEdges);
-                                    applySelectionLogic([clickData.targetId, ...neighbors], [], [], shiftKey, ctrlKey);
-                                } else if (clickData.type === 'edge') {
-                                    const edge = allEdges.find(e => U.getEdgeId(e) === clickData.targetId);
-                                    if (edge) {
-                                        const validNeighborEdges = [...findNeighborEdges(edge.id1), ...findNeighborEdges(edge.id2)];
-                                        applySelectionLogic([], Array.from(new Set(validNeighborEdges.map(e => U.getEdgeId(e)))), [], shiftKey, ctrlKey);
-                                    }
-                                } else if (clickData.type === 'face') {
-                                    const face = allFaces.find(f => U.getFaceId(f) === clickData.targetId);
-                                    if (face) {
-                                        const adjacentFaceIds = [];
-                                        const faceEdges = new Set();
-                                        for (let i = 0; i < face.vertexIds.length; i++) {
-                                            const id1 = face.vertexIds[i];
-                                            const id2 = face.vertexIds[(i + 1) % face.vertexIds.length];
-                                            faceEdges.add(U.getEdgeId({ id1, id2 }));
-                                        }
-                                        allFaces.forEach(otherFace => {
-                                            if (U.getFaceId(otherFace) === U.getFaceId(face)) return;
-                                            for (let i = 0; i < otherFace.vertexIds.length; i++) {
-                                                const id1 = otherFace.vertexIds[i];
-                                                const id2 = otherFace.vertexIds[(i + 1) % otherFace.vertexIds.length];
-                                                if (faceEdges.has(U.getEdgeId({ id1, id2 }))) {
-                                                    adjacentFaceIds.push(U.getFaceId(otherFace));
-                                                    break;
-                                                }
-                                            }
-                                        });
-                                        applySelectionLogic([], [], [U.getFaceId(face), ...adjacentFaceIds], shiftKey, ctrlKey);
-                                    }
-                                }
-                                break;
-                            case 3:
-                                if (clickData.type === 'vertex' || clickData.type === 'edge' || clickData.type === 'face') {
-                                    let startNode;
-                                    if (clickData.type === 'vertex') startNode = clickData.targetId;
-                                    else if (clickData.type === 'edge') startNode = clickData.targetId.split(C.EDGE_ID_DELIMITER)[0];
-                                    else if (clickData.type === 'face') {
-                                        const face = allFaces.find(f => U.getFaceId(f) === clickData.targetId);
-                                        if (face) startNode = face.vertexIds[0];
-                                    }
-                                    if (startNode) {
-                                        const verticesInSubgraph = new Set(findAllVerticesInSubgraph(startNode));
-                                        if (clickData.type === 'vertex') applySelectionLogic(Array.from(verticesInSubgraph), [], [], shiftKey, ctrlKey);
-                                        else if (clickData.type === 'edge') {
-                                            const edgesInSubgraph = allEdges.filter(e => verticesInSubgraph.has(e.id1) && verticesInSubgraph.has(e.id2)).map(e => U.getEdgeId(e));
-                                            applySelectionLogic([], edgesInSubgraph, [], shiftKey, ctrlKey);
-                                        } else if (clickData.type === 'face') {
-                                            const facesInSubgraph = allFaces.filter(f => f.vertexIds.every(vId => verticesInSubgraph.has(vId))).map(f => U.getFaceId(f));
-                                            applySelectionLogic([], [], facesInSubgraph, shiftKey, ctrlKey);
-                                        }
-                                    }
-                                }
-                                clickData.count = 0;
-                                break;
-                        }
-    
-                        const newActiveTargets = [];
-                        if (selectedFaceIds.length > 0) newActiveTargets.push(C.COLOR_TARGET_FACE);
-                        if (selectedEdgeIds.length > 0) newActiveTargets.push(C.COLOR_TARGET_EDGE);
-                        if (selectedVertexIds.length > 0) newActiveTargets.push(C.COLOR_TARGET_VERTEX);
+                }
 
-                        if (newActiveTargets.length > 0) {
-                            activeColorTargets = newActiveTargets;
+                if (newVertex) {
+                    const edgeExists = allEdges.some(e => (e.id1 === startVertex.id && e.id2 === newVertex.id) || (e.id2 === startVertex.id && e.id1 === newVertex.id));
+                    if (!edgeExists) {
+                        const gridInterval = (lastGridState.alpha2 > lastGridState.alpha1 && lastGridState.interval2) ? lastGridState.interval2 : lastGridState.interval1;
+                        const newEdge = U.createEdge(startVertex, newVertex, gridInterval, getColorForTarget);
+                        allEdges.push(newEdge);
+                        updateFaces(edgesBefore, allEdges);
+
+                        // Assign colors to any newly created faces
+                        allFaces.forEach(face => {
+                            if (!face.color) {
+                                face.color = getColorForTarget(C.COLOR_TARGET_FACE);
+                            }
+                        });
+                    }
+                    
+                    const completedSegmentProps = getCompletedSegmentProperties(startVertex, newVertex, allEdges);
+                    if (completedSegmentProps) {
+                        if (drawingSequence.length > 0) {
+                            drawingSequence[drawingSequence.length - 1].turn = completedSegmentProps.turnAngleRad;
                         }
+                        drawingSequence.push({ 
+                            length: completedSegmentProps.length, 
+                            turn: 0, 
+                            endVertexColor: newVertex.color 
+                        });
+                        currentSequenceIndex = drawingSequence.length - 1;
+                    }
+                    
+                    currentDrawingPath.push(newVertex.id);
+                    window.currentDrawingPath = currentDrawingPath;
+
+                    // Update both vertex and edge colors in the drawing sequence
+                    updateDrawingSequenceColors();
+                    updateDrawingSequenceEdgeColors();
+                    
+                    previewLineStartVertexId = newVertex.id;
+                }
+                
+                if (shiftKey && newVertex && snappedData) {
+                    const completedSegmentProps = getCompletedSegmentProperties(startVertex, newVertex, allEdges);
+                    if (completedSegmentProps) {
+                        frozenReference_Origin_Data = completedSegmentProps.startVertex;
+                        
+                        if (snappedData.gridToGridSquaredSum > 0 && snappedData.gridInterval) {
+                            frozenReference_D_du = snappedData.gridInterval * Math.sqrt(snappedData.gridToGridSquaredSum);
+                        } else {
+                            frozenReference_D_du = completedSegmentProps.length;
+                        }
+                        
+                        frozenReference_D_g2g = snappedData.gridToGridSquaredSum > 0 ? { 
+                            g2gSquaredSum: snappedData.gridToGridSquaredSum, 
+                            interval: snappedData.gridInterval 
+                        } : null;
+                        
+                        frozenReference_A_rad = completedSegmentProps.turnAngleRad;
+                        frozenReference_A_baseRad = completedSegmentProps.precedingSegmentAbsoluteAngleRad;
+                    }
+                } else {
+                    frozenReference_D_du = null;
+                    frozenReference_D_g2g = null;
+                    frozenReference_A_rad = null;
+                    frozenReference_A_baseRad = null;
+                    frozenReference_Origin_Data = null;
+                }
+
+                clickData.count = 0;
+            } else if (actionContext.target === 'canvas') {
+                saveStateForUndo();
+                const startCoords = ghostVertexPosition ? ghostVertexPosition : screenToData(mousePos);
+                
+                // For the first vertex in a new drawing sequence, always use the first color of the colormap
+                let newVertexColor = getColorForTarget(C.COLOR_TARGET_VERTEX);
+                const colorIndex = colorAssignments[C.COLOR_TARGET_VERTEX];
+                if (colorIndex !== -1) {
+                    const colorItem = allColors[colorIndex];
+                    if (colorItem && colorItem.type === 'colormap') {
+                        newVertexColor = U.sampleColormap(colorItem, 0);
+                    }
+                }
+
+                const newVertex = { id: U.generateUniqueId(), ...startCoords, type: 'regular', color: newVertexColor };
+                allVertices.push(newVertex);
+                isDrawingMode = true;
+                previewLineStartVertexId = newVertex.id;
+                drawingSequence = [];
+                currentSequenceIndex = 0;
+                currentDrawingPath = [newVertex.id];
+                window.currentDrawingPath = currentDrawingPath;
+            } else {
+                if (targetVertex || targetEdge || targetFace) {
+                    saveStateForUndo();    
+                    const targetId = targetFace ? U.getFaceId(targetFace) : (targetEdge ? U.getEdgeId(targetEdge) : targetVertex.id);
+                    let targetType;
+                    if (targetFace) targetType = 'face';
+                    else if (targetVertex && targetVertex.type !== 'regular') targetType = 'center';
+                    else if (targetVertex) targetType = 'vertex';
+                    else if (targetEdge) targetType = 'edge';
+
+                    if (targetId && clickData.targetId === targetId && (Date.now() - clickData.timestamp) < C.DOUBLE_CLICK_MS) {
+                        clickData.count++;
+                    } else {
+                        clickData.count = 1;
+                    }
+                    clickData.targetId = targetId;
+                    clickData.type = targetType;
+                    clickData.timestamp = Date.now();
+
+                    switch (clickData.count) {
+                        case 1:
+                            if (clickData.type === 'face') applySelectionLogic([], [], [clickData.targetId], shiftKey, ctrlKey);
+                            else if (clickData.type === 'edge') applySelectionLogic([], [clickData.targetId], [], shiftKey, ctrlKey);
+                            else if (clickData.type === 'vertex') applySelectionLogic([clickData.targetId], [], [], shiftKey, ctrlKey);
+                            else if (clickData.type === 'center') handleCenterSelection(clickData.targetId, shiftKey, ctrlKey);
+                            break;
+                        case 2:
+                            if (clickData.type === 'vertex') {
+                                const neighbors = U.findNeighbors(clickData.targetId, allEdges);
+                                applySelectionLogic([clickData.targetId, ...neighbors], [], [], shiftKey, ctrlKey);
+                            } else if (clickData.type === 'edge') {
+                                const edge = allEdges.find(e => U.getEdgeId(e) === clickData.targetId);
+                                if (edge) {
+                                    const validNeighborEdges = [...findNeighborEdges(edge.id1), ...findNeighborEdges(edge.id2)];
+                                    applySelectionLogic([], Array.from(new Set(validNeighborEdges.map(e => U.getEdgeId(e)))), [], shiftKey, ctrlKey);
+                                }
+                            } else if (clickData.type === 'face') {
+                                const face = allFaces.find(f => U.getFaceId(f) === clickData.targetId);
+                                if (face) {
+                                    const adjacentFaceIds = [];
+                                    const faceEdges = new Set();
+                                    for (let i = 0; i < face.vertexIds.length; i++) {
+                                        const id1 = face.vertexIds[i];
+                                        const id2 = face.vertexIds[(i + 1) % face.vertexIds.length];
+                                        faceEdges.add(U.getEdgeId({ id1, id2 }));
+                                    }
+                                    allFaces.forEach(otherFace => {
+                                        if (U.getFaceId(otherFace) === U.getFaceId(face)) return;
+                                        for (let i = 0; i < otherFace.vertexIds.length; i++) {
+                                            const id1 = otherFace.vertexIds[i];
+                                            const id2 = otherFace.vertexIds[(i + 1) % otherFace.vertexIds.length];
+                                            if (faceEdges.has(U.getEdgeId({ id1, id2 }))) {
+                                                adjacentFaceIds.push(U.getFaceId(otherFace));
+                                                break;
+                                            }
+                                        }
+                                    });
+                                    applySelectionLogic([], [], [U.getFaceId(face), ...adjacentFaceIds], shiftKey, ctrlKey);
+                                }
+                            }
+                            break;
+                        case 3:
+                            if (clickData.type === 'vertex' || clickData.type === 'edge' || clickData.type === 'face') {
+                                let startNode;
+                                if (clickData.type === 'vertex') startNode = clickData.targetId;
+                                else if (clickData.type === 'edge') startNode = clickData.targetId.split(C.EDGE_ID_DELIMITER)[0];
+                                else if (clickData.type === 'face') {
+                                    const face = allFaces.find(f => U.getFaceId(f) === clickData.targetId);
+                                    if (face) startNode = face.vertexIds[0];
+                                }
+                                if (startNode) {
+                                    const verticesInSubgraph = new Set(findAllVerticesInSubgraph(startNode));
+                                    if (clickData.type === 'vertex') applySelectionLogic(Array.from(verticesInSubgraph), [], [], shiftKey, ctrlKey);
+                                    else if (clickData.type === 'edge') {
+                                        const edgesInSubgraph = allEdges.filter(e => verticesInSubgraph.has(e.id1) && verticesInSubgraph.has(e.id2)).map(e => U.getEdgeId(e));
+                                        applySelectionLogic([], edgesInSubgraph, [], shiftKey, ctrlKey);
+                                    } else if (clickData.type === 'face') {
+                                        const facesInSubgraph = allFaces.filter(f => f.vertexIds.every(vId => verticesInSubgraph.has(vId))).map(f => U.getFaceId(f));
+                                        applySelectionLogic([], [], facesInSubgraph, shiftKey, ctrlKey);
+                                    }
+                                }
+                            }
+                            clickData.count = 0;
+                            break;
+                    }
+
+                    const newActiveTargets = [];
+                    if (selectedFaceIds.length > 0) newActiveTargets.push(C.COLOR_TARGET_FACE);
+                    if (selectedEdgeIds.length > 0) newActiveTargets.push(C.COLOR_TARGET_EDGE);
+                    if (selectedVertexIds.length > 0) newActiveTargets.push(C.COLOR_TARGET_VERTEX);
+
+                    if (newActiveTargets.length > 0) {
+                        activeColorTargets = newActiveTargets;
                     }
                 }
             }
-        } else if (currentMouseButton === 2) {
-            performEscapeAction();
-        }
+        } 
     }
 
     isActionInProgress = false;
@@ -4667,6 +5007,282 @@ function handleMouseUp(event) {
     transformIndicatorData = null;
     canvas.style.cursor = 'crosshair';
     if (!currentShiftPressed) ghostVertexPosition = null;
+}
+
+function updateAffectedEdgeProperties(movedVertexIds, transformIndicatorData) {
+    if (movedVertexIds.length === 0) return;
+
+    // For rotation or translation, properties are preserved, so we do nothing.
+    const isRotation = transformIndicatorData && transformIndicatorData.transformType === C.TRANSFORMATION_TYPE_ROTATION;
+    const isTranslation = !transformIndicatorData;
+    if (isRotation || isTranslation) {
+        return;
+    }
+
+    const affectedEdges = new Set();
+    movedVertexIds.forEach(vertexId => {
+        findNeighborEdges(vertexId).forEach(edge => affectedEdges.add(edge));
+    });
+
+    const gridInterval = (lastGridState.alpha2 > lastGridState.alpha1 && lastGridState.interval2) ? lastGridState.interval2 : lastGridState.interval1;
+
+    // For scaling, we recalculate the property for each affected edge.
+    affectedEdges.forEach(edge => {
+        const v1 = findVertexById(edge.id1);
+        const v2 = findVertexById(edge.id2);
+        if (!v1 || !v2) return;
+
+        const deltaX = v1.x - v2.x;
+        const deltaY = v1.y - v2.y;
+        const dx_grid_float = deltaX / gridInterval;
+        const dy_grid_float = deltaY / gridInterval;
+        const epsilon = 1e-5;
+
+        const isGridVector = gridInterval &&
+            Math.abs(dx_grid_float - Math.round(dx_grid_float)) < epsilon &&
+            Math.abs(dy_grid_float - Math.round(dy_grid_float)) < epsilon;
+
+        if (isGridVector) {
+            edge.labelMode = 'exact';
+            const dx_grid = Math.round(dx_grid_float);
+            const dy_grid = Math.round(dy_grid_float);
+            edge.exactValue = {
+                g2gSquaredSum: dx_grid * dx_grid + dy_grid * dy_grid,
+                gridInterval: gridInterval
+            };
+        } else {
+            edge.labelMode = 'decimal';
+            delete edge.exactValue;
+        }
+    });
+}
+
+function handleRightMouseButtonDown(event) {
+    isActionInProgress = true;
+    isRectangleSelecting = false; 
+    rectangleSelectStartPos = actionStartPos;
+    actionContext = { target: 'canvas' };
+}
+
+function handleRightMouseButtonUp(event) {
+    if (isDragConfirmed && isRectangleSelecting) {
+        const dataP1 = screenToData({ x: Math.min(actionStartPos.x, mousePos.x), y: Math.min(actionStartPos.y, mousePos.y) });
+        const dataP2 = screenToData({ x: Math.max(actionStartPos.x, mousePos.x), y: Math.max(actionStartPos.y, mousePos.y) });
+        const minX = Math.min(dataP1.x, dataP2.x);
+        const maxX = Math.max(dataP1.x, dataP2.x);
+        const minY = Math.min(dataP1.y, dataP2.y);
+        const maxY = Math.max(dataP1.y, dataP2.y);
+        const verticesInRect = allVertices.filter(p => p.type === 'regular' && p.x >= minX && p.x <= maxX && p.y >= minY && p.y <= maxY).map(p => p.id);
+        const edgesInRect = allEdges.filter(e => verticesInRect.includes(e.id1) && verticesInRect.includes(e.id2)).map(e => U.getEdgeId(e));
+        const allVerticesInRect = new Set(verticesInRect);
+        const facesInRect = allFaces.filter(f => f.vertexIds.every(vId => allVerticesInRect.has(vId))).map(f => U.getFaceId(f));
+        applySelectionLogic(verticesInRect, edgesInRect, facesInRect, actionContext.shiftKey, actionContext.ctrlKey);
+
+        const newActiveTargets = [];
+        if (facesInRect.length > 0) newActiveTargets.push(C.COLOR_TARGET_FACE);
+        if (edgesInRect.length > 0) newActiveTargets.push(C.COLOR_TARGET_EDGE);
+        if (verticesInRect.length > 0) newActiveTargets.push(C.COLOR_TARGET_VERTEX);
+
+        if (newActiveTargets.length > 0) {
+            activeColorTargets = newActiveTargets;
+            if (isColorPaletteExpanded) {
+                buildColorPaletteUI();
+            }
+        }
+    } else {
+        // This handles a simple right-click without a drag
+        performEscapeAction();
+        canvas.style.cursor = 'crosshair';
+    }
+}
+
+function handleMouseDownDispatcher(event) {
+    if (contextMenu.style.display === 'block') {
+        contextMenu.style.display = 'none';
+    }
+
+    const targetElement = event.target;
+    if (targetElement && targetElement.closest('.katex')) {
+        event.stopPropagation();
+        return;
+    }
+
+    // This check now correctly cancels drawing or transform placement with a right-click
+    if ((isDrawingMode || isPlacingTransform) && event.button === 2) {
+        performEscapeAction();
+        event.preventDefault();
+        return;
+    }
+
+    mousePos = U.getMousePosOnCanvas(event, canvas);
+    actionStartPos = { ...mousePos };
+    currentMouseButton = event.button;
+
+    if (currentMouseButton === 0) {
+        handleLeftMouseButtonDown(event);
+    } else if (currentMouseButton === 2) {
+        handleRightMouseButtonDown(event);
+    }
+}
+
+function handleMouseUpDispatcher(event) {
+    if (currentMouseButton === 0) {
+        handleLeftMouseButtonUp(event);
+    } else if (currentMouseButton === 2) {
+        handleRightMouseButtonUp(event);
+    }
+
+    // Common cleanup for ANY mouse up action
+    isActionInProgress = false;
+    isDragConfirmed = false;
+    isPanningBackground = false;
+    isRectangleSelecting = false;
+    actionContext = null;
+    transformIndicatorData = null;
+    
+    // Only reset the cursor if we are NOT in the middle of placing a transform
+    if (!isPlacingTransform) {
+        canvas.style.cursor = 'crosshair';
+    }
+
+    if (!currentShiftPressed) ghostVertexPosition = null;
+}
+
+function handleAddFaceFromMenu() {
+    if (contextMenuFaceId) {
+        const allPossibleFaces = U.detectClosedPolygons(allEdges, findVertexById);
+        const faceToAdd = allPossibleFaces.find(f => f.id === contextMenuFaceId);
+
+        if (faceToAdd) {
+            saveStateForUndo();
+
+            if (!allFaces.some(f => f.id === faceToAdd.id)) {
+                faceToAdd.color = getColorForTarget(C.COLOR_TARGET_FACE);
+                allFaces.push(faceToAdd);
+
+                deletedFaceIds.delete(faceToAdd.id);
+
+                ensureFaceCoordinateSystems();
+            }
+        }
+        contextMenuFaceId = null;
+    }
+    contextMenu.style.display = 'none';
+}
+
+function applyCoordinateSystemConstraintsOnDragEnd(face, initialSystem, initialDragVertexStates, dragPreviewVertices, findVertexById) {
+    // This function now correctly solves constraints based on the final vertex positions (dragPreviewVertices)
+    // without incorrectly checking against the initial set of dragged vertices.
+
+    if (!initialSystem.isCustom) {
+        const faceVertices = face.vertexIds.map(id => {
+            return dragPreviewVertices.find(p => p.id === id) || findVertexById(id);
+        }).filter(v => v && v.type === 'regular');
+        
+        if (faceVertices.length >= 3) {
+            const incircle = U.calculateIncenter(faceVertices);
+            if (incircle) {
+                face.localCoordSystem.origin = incircle.center;
+                face.localCoordSystem.scale = incircle.radius;
+            }
+        }
+        return;
+    }
+
+    let finalOrigin = { ...initialSystem.origin };
+    let finalAngle = initialSystem.angle;
+    let finalScale = initialSystem.scale;
+    
+    if (face.localCoordSystem.attachedToVertex) {
+        const finalVertex = dragPreviewVertices.find(p => p.id === face.localCoordSystem.attachedToVertex);
+        if (finalVertex) {
+            finalOrigin = { x: finalVertex.x, y: finalVertex.y };
+        }
+    } else if (face.localCoordSystem.attachedToEdge) {
+        const finalV1 = dragPreviewVertices.find(p => p.id === face.localCoordSystem.attachedToEdge.v1) || findVertexById(face.localCoordSystem.attachedToEdge.v1);
+        const finalV2 = dragPreviewVertices.find(p => p.id === face.localCoordSystem.attachedToEdge.v2) || findVertexById(face.localCoordSystem.attachedToEdge.v2);
+        
+        if (finalV1 && finalV2) {
+            finalOrigin = {
+                x: finalV1.x + face.localCoordSystem.attachedToEdge.t * (finalV2.x - finalV1.x),
+                y: finalV1.y + face.localCoordSystem.attachedToEdge.t * (finalV2.y - finalV1.y)
+            };
+        }
+    }
+    
+    if (face.localCoordSystem.rotationAlignedToEdge) {
+        const finalV1 = dragPreviewVertices.find(p => p.id === face.localCoordSystem.rotationAlignedToEdge.v1) || findVertexById(face.localCoordSystem.rotationAlignedToEdge.v1);
+        const finalV2 = dragPreviewVertices.find(p => p.id === face.localCoordSystem.rotationAlignedToEdge.v2) || findVertexById(face.localCoordSystem.rotationAlignedToEdge.v2);
+        
+        if (finalV1 && finalV2) {
+            const newEdgeAngle = Math.atan2(finalV2.y - finalV1.y, finalV2.x - finalV1.x);
+            const originalEdgeAngle = face.localCoordSystem.rotationAlignedToEdge.originalAngle;
+            const originalSystemAngle = face.localCoordSystem.rotationAlignedToEdge.originalSystemAngle;
+            
+            const angleOffset = originalSystemAngle - originalEdgeAngle;
+            finalAngle = U.normalizeAngle(newEdgeAngle + angleOffset);
+            
+            face.localCoordSystem.rotationAlignedToEdge.originalAngle = newEdgeAngle;
+            face.localCoordSystem.rotationAlignedToEdge.originalSystemAngle = finalAngle;
+        }
+    }
+    
+    if (face.localCoordSystem.scaleAttachedToEdge) {
+        const finalV1 = dragPreviewVertices.find(p => p.id === face.localCoordSystem.scaleAttachedToEdge.v1) || findVertexById(face.localCoordSystem.scaleAttachedToEdge.v1);
+        const finalV2 = dragPreviewVertices.find(p => p.id === face.localCoordSystem.scaleAttachedToEdge.v2) || findVertexById(face.localCoordSystem.scaleAttachedToEdge.v2);
+        
+        if (finalV1 && finalV2) {
+            const newEdgeLength = U.distance(finalV1, finalV2);
+            finalScale = newEdgeLength * face.localCoordSystem.scaleAttachedToEdge.scaleRatio;
+            face.localCoordSystem.scaleAttachedToEdge.originalLength = newEdgeLength;
+        }
+    }
+    
+    const finalFaceVertices = face.vertexIds.map(id => {
+        return dragPreviewVertices.find(p => p.id === id) || findVertexById(id);
+    }).filter(v => v && v.type === 'regular');
+    
+    if (finalFaceVertices.length >= 3) {
+        face.localCoordSystem.origin = U.clampPointToPolygon(finalOrigin, finalFaceVertices);
+        face.localCoordSystem.angle = finalAngle;
+        face.localCoordSystem.scale = Math.max(0.01, finalScale);
+        face.localCoordSystem.isCustom = true;
+    }
+}
+
+
+
+
+function backupFaceCoordinateSystemsBeforeMerge(allFaces, findRoot) {
+    const faceCoordSystemBackup = new Map();
+    allFaces.forEach(face => {
+        const remappedVertexIds = [...new Set(face.vertexIds.map(vId => findRoot(vId)))];
+        if (remappedVertexIds.length >= 3) {
+            const newFaceId = U.getFaceId({ vertexIds: remappedVertexIds });
+            if (face.localCoordSystem && face.localCoordSystem.isCustom) {
+                const backup = JSON.parse(JSON.stringify(face.localCoordSystem));
+
+                if (backup.attachedToVertex) {
+                    backup.attachedToVertex = findRoot(backup.attachedToVertex);
+                }
+                if (backup.attachedToEdge) {
+                    backup.attachedToEdge.v1 = findRoot(backup.attachedToEdge.v1);
+                    backup.attachedToEdge.v2 = findRoot(backup.attachedToEdge.v2);
+                }
+                if (backup.rotationAlignedToEdge) {
+                    backup.rotationAlignedToEdge.v1 = findRoot(backup.rotationAlignedToEdge.v1);
+                    backup.rotationAlignedToEdge.v2 = findRoot(backup.rotationAlignedToEdge.v2);
+                }
+                if (backup.scaleAttachedToEdge) {
+                    backup.scaleAttachedToEdge.v1 = findRoot(backup.scaleAttachedToEdge.v1);
+                    backup.scaleAttachedToEdge.v2 = findRoot(backup.scaleAttachedToEdge.v2);
+                }
+
+                faceCoordSystemBackup.set(newFaceId, backup);
+            }
+        }
+    });
+    return faceCoordSystemBackup;
 }
 
 function handleKeyUp(event) {
@@ -4687,6 +5303,130 @@ function handleKeyUp(event) {
             coordSystem.isCustom = true;
         }
     }
+}
+
+function handleContextMenu(event) {
+    event.preventDefault();
+    contextMenu.innerHTML = '';
+    contextMenu.style.display = 'none';
+
+    mousePos = U.getMousePosOnCanvas(event, canvas);
+    const dataPos = screenToData(mousePos);
+
+    let menuItems = [];
+    contextMenuFaceId = null;
+    contextMenuEdgeId = null;
+    contextMenuVertexId = null;
+
+    const clickedVertex = findClickedVertex(mousePos);
+    const clickedEdge = !clickedVertex ? findClickedEdge(mousePos) : null;
+    const clickedFace = !clickedVertex && !clickedEdge ? findClickedFace(mousePos) : null;
+
+    if (clickedVertex && clickedVertex.type === 'regular') {
+        contextMenuVertexId = clickedVertex.id;
+        menuItems.push({
+            text: 'Remove Vertex',
+            handler: handleRemoveVertexFromMenu
+        });
+    } else if (clickedEdge) {
+        contextMenuEdgeId = U.getEdgeId(clickedEdge);
+        menuItems.push({
+            text: 'Remove Edge',
+            handler: handleRemoveEdgeFromMenu
+        });
+    } else if (clickedFace) {
+        contextMenuFaceId = U.getFaceId(clickedFace);
+        menuItems.push({
+            text: 'Remove Face',
+            handler: handleRemoveFaceFromMenu
+        });
+    } else {
+        const allPossibleFaces = U.detectClosedPolygons(allEdges, findVertexById);
+        const existingFaceIds = new Set(allFaces.map(f => f.id));
+
+        const potentialNewFaces = allPossibleFaces.filter(potentialFace =>
+            !existingFaceIds.has(potentialFace.id)
+        );
+
+        let smallestEnclosingFace = null;
+        let smallestArea = Infinity;
+
+        potentialNewFaces.forEach(potentialFace => {
+            const vertices = potentialFace.vertexIds.map(id => findVertexById(id));
+            if (vertices.every(Boolean) && U.isVertexInPolygon(dataPos, vertices)) {
+                const area = Math.abs(U.shoelaceArea(vertices));
+                if (area < smallestArea) {
+                    smallestArea = area;
+                    smallestEnclosingFace = potentialFace;
+                }
+            }
+        });
+
+        if (smallestEnclosingFace) {
+            contextMenuFaceId = smallestEnclosingFace.id;
+            menuItems.push({
+                text: 'Add Face',
+                handler: handleAddFaceFromMenu
+            });
+        }
+    }
+
+    if (menuItems.length > 0) {
+        const ul = document.createElement('ul');
+        menuItems.forEach(itemData => {
+            const li = document.createElement('li');
+            li.textContent = itemData.text;
+            li.addEventListener('click', itemData.handler);
+            ul.appendChild(li);
+        });
+        contextMenu.appendChild(ul);
+
+        contextMenu.style.left = `${event.clientX - C.CONTEXT_MENU_INSET}px`;
+        contextMenu.style.top = `${event.clientY - C.CONTEXT_MENU_INSET}px`;
+        contextMenu.style.display = 'block';
+    }
+}
+
+function handleRemoveVertexFromMenu() {
+    if (contextMenuVertexId) {
+        saveStateForUndo();
+        selectedEdgeIds = [];
+        selectedFaceIds = [];
+        selectedCenterIds = [];
+        selectedVertexIds = [contextMenuVertexId];
+
+        deleteSelectedItems();
+        contextMenuVertexId = null;
+    }
+    contextMenu.style.display = 'none';
+}
+
+function handleRemoveEdgeFromMenu() {
+    if (contextMenuEdgeId) {
+        saveStateForUndo();
+        selectedVertexIds = [];
+        selectedFaceIds = [];
+        selectedCenterIds = [];
+        selectedEdgeIds = [contextMenuEdgeId];
+
+        deleteSelectedItems();
+        contextMenuEdgeId = null;
+    }
+    contextMenu.style.display = 'none';
+}
+
+function handleRemoveFaceFromMenu() {
+    if (contextMenuFaceId) {
+        saveStateForUndo();
+        selectedVertexIds = [];
+        selectedEdgeIds = [];
+        selectedCenterIds = [];
+        selectedFaceIds = [contextMenuFaceId];
+
+        deleteSelectedItems();
+        contextMenuFaceId = null;
+    }
+    contextMenu.style.display = 'none';
 }
 
 
@@ -4711,9 +5451,9 @@ canvas.addEventListener('contextmenu', (event) => event.preventDefault());
 
 canvas.addEventListener('mousemove', handleMouseMove);
 
-canvas.addEventListener("mouseup", handleMouseUp);
+canvas.addEventListener("mouseup", handleMouseUpDispatcher);
 
-canvas.addEventListener('mousedown', handleMouseDown);
+canvas.addEventListener('mousedown', handleMouseDownDispatcher);
 
 window.addEventListener('keyup', handleKeyUp);
 

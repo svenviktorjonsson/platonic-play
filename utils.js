@@ -1,5 +1,6 @@
 import * as C from './constants.js';
 
+
 export function formatNumber(value, sigFigs) {
     if (value === 0) return "0";
     const absValue = Math.abs(value);
@@ -622,51 +623,204 @@ export function getCoordinateSystemSnapPosition(mouseDataPos, snapTargets, isShi
     return closestSnap || mouseDataPos;
 }
 
-export function getAxisSnapAngle(mouseDataPos, origin, isShiftPressed, snapTargets) {
+export function getAxisSnapAngle(mouseDataPos, origin, isShiftPressed, snapTargets, snapRadius = null) {
     const rawAngle = Math.atan2(mouseDataPos.y - origin.y, mouseDataPos.x - origin.x);
     
     if (!isShiftPressed || !snapTargets) {
-        return { angle: rawAngle, edgeIndex: null, snapType: null };
+        return { angle: rawAngle, edgeIndex: null, snapType: null, snapped: false, targetVertexId: null };
     }
     
-    const snapThreshold = Math.PI / 24;
-    let closestAngle = rawAngle;
-    let minDifference = Infinity;
-    let bestEdgeIndex = null;
-    let bestSnapType = null;
-    
-    const cardinalAngles = [0, Math.PI/4, Math.PI/2, 3*Math.PI/4, Math.PI, -3*Math.PI/4, -Math.PI/2, -Math.PI/4];
-    cardinalAngles.forEach(angle => {
-        const diff = Math.abs(normalizeAngleToPi(rawAngle - angle));
-        if (diff < snapThreshold && diff < minDifference) {
-            minDifference = diff;
-            closestAngle = angle;
-            bestEdgeIndex = null;
-            bestSnapType = 'cardinal';
+    const snapThreshold = Math.PI / 24; // About 7.5 degrees
+    let bestSnap = { angle: rawAngle, difference: Infinity, edgeIndex: null, snapType: null, targetVertexId: null };
+
+    const priorities = {
+        edge: 1,
+        vertex_direction: 2,
+        cardinal: 3
+    };
+
+    const checkSnap = (snapAngle, snapType, edgeIndex = null, targetVertexId = null) => {
+        const normalizedSnap = normalizeAngleToPi(snapAngle);
+        const diff = Math.abs(normalizeAngleToPi(rawAngle - normalizedSnap));
+
+        if (diff < snapThreshold) {
+            const newSnapPriority = priorities[snapType];
+            const oldSnapPriority = bestSnap.snapType ? priorities[bestSnap.snapType] : Infinity;
+            
+            if (newSnapPriority < oldSnapPriority) {
+                bestSnap = { angle: normalizedSnap, difference: diff, edgeIndex, snapType, targetVertexId };
+            } else if (newSnapPriority === oldSnapPriority && diff < bestSnap.difference) {
+                bestSnap = { angle: normalizedSnap, difference: diff, edgeIndex, snapType, targetVertexId };
+            }
         }
-    });
+    };
+
+    // Check for snaps in order of priority (lower is better)
     
+    // Priority 1: Edges
     if (snapTargets.edgeAngles) {
         snapTargets.edgeAngles.forEach((angle, edgeIndex) => {
-            [angle, angle + Math.PI/2, angle - Math.PI/2, angle + Math.PI].forEach(checkAngle => {
-                const normalizedCheck = normalizeAngleToPi(checkAngle);
-                const diff = Math.abs(normalizeAngleToPi(rawAngle - normalizedCheck));
-                if (diff < snapThreshold && diff < minDifference) {
-                    minDifference = diff;
-                    closestAngle = normalizedCheck;
-                    bestEdgeIndex = edgeIndex;
-                    bestSnapType = 'edge';
-                }
+            [angle, angle + Math.PI / 2, angle - Math.PI / 2, angle + Math.PI].forEach(checkAngle => {
+                checkSnap(checkAngle, 'edge', edgeIndex);
+            });
+        });
+    }
+
+    // Priority 2: Vertices
+    if (snapTargets.vertices) {
+        snapTargets.vertices.forEach(vertex => {
+            if (distance(origin, vertex) > C.GEOMETRY_CALCULATION_EPSILON) {
+                const angleToVertex = Math.atan2(vertex.y - origin.y, vertex.x - origin.x);
+                checkSnap(angleToVertex, 'vertex_direction', null, vertex.id);
+            }
+        });
+    }
+
+    // Priority 3: Cardinal Directions
+    const cardinalAngles = [0, Math.PI / 2, Math.PI, -Math.PI / 2];
+    cardinalAngles.forEach(angle => checkSnap(angle, 'cardinal'));
+    
+    return {
+        angle: bestSnap.angle,
+        edgeIndex: bestSnap.edgeIndex,
+        snapType: bestSnap.snapType,
+        snapped: bestSnap.difference < Infinity,
+        targetVertexId: bestSnap.targetVertexId
+    };
+}
+
+export function getAxisScaleSnap(origin, axisAngle, snapTargets, face, findVertexById, currentScale = null, viewTransform = null, draggedAxisType = 'x_axis') {
+    if (!currentScale || !viewTransform || !snapTargets.alignedEdgeInfo) {
+        return { snapped: false };
+    }
+    
+    const pixelSnapThreshold = 15 / viewTransform.scale;
+    let snapCandidates = [];
+    
+    const { v1Id, v2Id } = snapTargets.alignedEdgeInfo;
+    const v1 = findVertexById(v1Id);
+    const v2 = findVertexById(v2Id);
+    
+    if (v1 && v2 && v1.type === 'regular' && v2.type === 'regular') {
+        const edgeLength = distance(v1, v2);
+        const fractions = [0.25, 1/3, 0.5, 2/3, 0.75, 1.0];
+        
+        fractions.forEach(frac => {
+            const targetScale = edgeLength * frac;
+            const scaleDifference = Math.abs(currentScale - targetScale);
+            
+            snapCandidates.push({
+                scale: targetScale,
+                distance: scaleDifference,
+                type: 'edge_fraction',
+                priority: frac === 0.5 ? 1 : (frac === 1.0 ? 2 : 3),
+                fraction: frac
             });
         });
     }
     
-    return {
-        angle: closestAngle,
-        edgeIndex: bestEdgeIndex,
-        snapType: bestSnapType,
-        snapped: minDifference < snapThreshold
-    };
+    if (snapCandidates.length === 0) {
+        return { snapped: false };
+    }
+
+    snapCandidates.sort((a, b) => {
+        if (a.priority !== b.priority) return a.priority - b.priority;
+        return a.distance - b.distance;
+    });
+    
+    const closestSnap = snapCandidates.find(candidate => candidate.distance < pixelSnapThreshold);
+    
+    if (closestSnap) {
+        return {
+            snapped: true,
+            scale: closestSnap.scale,
+            snapType: 'edge_fraction',
+            edgeFraction: closestSnap.fraction
+        };
+    }
+    
+    return { snapped: false };
+}
+
+export function getCoordinateSystemCenterSnap(mouseDataPos, snapTargets, gridDisplayMode, lastGridState, lastAngularGridState) {
+    let bestSnap = null;
+    let minDistance = Infinity;
+    
+    if (snapTargets) {
+        // Check vertex snaps
+        snapTargets.vertices.forEach(vertex => {
+            const dist = distance(mouseDataPos, vertex);
+            if (dist < minDistance) {
+                minDistance = dist;
+                bestSnap = {
+                    snapped: true,
+                    snapPoint: vertex,
+                    snapType: 'vertex',
+                    vertexId: vertex.id
+                };
+            }
+        });
+        
+        // Check edge fractional snaps
+        for (let edgeIndex = 0; edgeIndex < snapTargets.edgeMidvertices.length; edgeIndex++) {
+            const v1Id = snapTargets.edgeVertexIds[edgeIndex * 2];
+            const v2Id = snapTargets.edgeVertexIds[edgeIndex * 2 + 1];
+            
+            // Find vertices (assuming findVertexById is available in scope)
+            const v1 = { id: v1Id, ...snapTargets.vertices.find(v => v.id === v1Id) };
+            const v2 = { id: v2Id, ...snapTargets.vertices.find(v => v.id === v2Id) };
+            
+            if (v1 && v2) {
+                const fractions = [0, 0.25, 1/3, 0.5, 2/3, 0.75, 1];
+                
+                fractions.forEach(frac => {
+                    const fracPoint = {
+                        x: v1.x + frac * (v2.x - v1.x),
+                        y: v1.y + frac * (v2.y - v1.y)
+                    };
+                    
+                    const dist = distance(mouseDataPos, fracPoint);
+                    if (dist < minDistance) {
+                        minDistance = dist;
+                        bestSnap = {
+                            snapped: true,
+                            snapPoint: fracPoint,
+                            snapType: 'edge',
+                            edgeInfo: {
+                                v1: v1Id,
+                                v2: v2Id,
+                                t: frac,
+                                originalAngle: snapTargets.edgeAngles[edgeIndex],
+                                edgeIndex: edgeIndex
+                            }
+                        };
+                    }
+                });
+            }
+        }
+    }
+    
+    // Check grid snaps
+    if (gridDisplayMode && gridDisplayMode !== 'none' && lastGridState && lastGridState.interval1) {
+        const gridInterval = (lastGridState.alpha2 > lastGridState.alpha1 && lastGridState.interval2) 
+            ? lastGridState.interval2 
+            : lastGridState.interval1;
+        
+        const gridCandidates = getGridSnapCandidates(mouseDataPos, gridDisplayMode, gridInterval, lastAngularGridState, true);
+        gridCandidates.forEach(gridPoint => {
+            const dist = distance(mouseDataPos, gridPoint);
+            if (dist < minDistance) {
+                minDistance = dist;
+                bestSnap = {
+                    snapped: true,
+                    snapPoint: gridPoint,
+                    snapType: 'grid'
+                };
+            }
+        });
+    }
+    
+    return bestSnap || { snapped: false };
 }
 
 export function invertGrayscaleValue(value) {
@@ -1215,14 +1369,9 @@ export function detectClosedPolygons(allEdges, findPointById) {
         });
     }
 
-    const triangularFaces = findAllTriangularFaces(adjacencyMap, vertices);
-    
-    const allPossibleFaces = triangularFaces.map(triangle => ({
-        vertexIds: triangle,
-        id: `face_${triangle.join('_')}`
-    }));
-
+    const allPossibleFaces = [];
     const processedDirectedEdges = new Set();
+    
     for (const [startVertex, neighbors] of adjacencyMap.entries()) {
         for (const nextVertex of neighbors) {
             const directedEdgeKey = `${startVertex}->${nextVertex}`;
@@ -1239,12 +1388,9 @@ export function detectClosedPolygons(allEdges, findPointById) {
                         processedDirectedEdges.add(`${v1}->${v2}`);
                     }
                     
-                    if (facePath.length > 3) {
-                        allPossibleFaces.push({
-                            vertexIds: facePath,
-                            id: `face_${facePath.join('_')}`
-                        });
-                    }
+                    const newFace = { vertexIds: facePath };
+                    newFace.id = getFaceId(newFace);
+                    allPossibleFaces.push(newFace);
                 }
             }
         }
@@ -1266,6 +1412,34 @@ export function detectClosedPolygons(allEdges, findPointById) {
     return uniqueFaces;
 }
 
+export function createEdge(v1, v2, gridInterval, getColorForTarget) {
+    const newEdge = { id1: v1.id, id2: v2.id };
+
+    const deltaX = v1.x - v2.x;
+    const deltaY = v1.y - v2.y;
+    const dx_grid_float = deltaX / gridInterval;
+    const dy_grid_float = deltaY / gridInterval;
+    const epsilon = 1e-5;
+
+    const isGridVector = gridInterval &&
+        Math.abs(dx_grid_float - Math.round(dx_grid_float)) < epsilon &&
+        Math.abs(dy_grid_float - Math.round(dy_grid_float)) < epsilon;
+
+    if (isGridVector) {
+        newEdge.labelMode = 'exact';
+        const dx_grid = Math.round(dx_grid_float);
+        const dy_grid = Math.round(dy_grid_float);
+        newEdge.exactValue = {
+            g2gSquaredSum: dx_grid * dx_grid + dy_grid * dy_grid,
+            gridInterval: gridInterval
+        };
+    } else {
+        newEdge.labelMode = 'decimal';
+    }
+    
+    newEdge.color = getColorForTarget(C.COLOR_TARGET_EDGE);
+    return newEdge;
+}
 
 export function detectFacesFromNewEdge(newEdge, allEdges, findPointById, deletedFaceIds = new Set()) {
     // Get all possible faces with the current edge set
@@ -1483,6 +1657,8 @@ export function getPerpendicularBisector(p1, p2) {
     };
 }
 
+
+
 export function getCircleCircleIntersection(c1, c2) {
     const d = distance(c1.center, c2.center);
 
@@ -1504,4 +1680,6 @@ export function getCircleCircleIntersection(c1, c2) {
     if (h === 0) return [pA];
     return [pA, pB];
 }
+
+
 

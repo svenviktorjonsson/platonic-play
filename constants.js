@@ -27,7 +27,9 @@ export const BASE_THEME = {
     helperLine: 'rgba(200, 200, 200, 0.6)'
 };
 
-
+export const CONTEXT_MENU_INSET = 5;
+export const COORD_SYSTEM_EDGE_FRACTION_LABEL_OFFSET = 25;
+export const COORD_SYSTEM_EDGE_FRACTION_FONT_SIZE = 20;
 export const INSCRIBED_CIRCLE_ITERATIONS = 20;
 export const INSCRIBED_CIRCLE_STEP_FACTOR = 0.1;
 // --- GEOMETRY & DRAWING ---
@@ -62,7 +64,8 @@ export const EDGE_CLICK_THRESHOLD = 7;
 export const MIN_SCALE_VALUE = 1e-20;
 export const ZOOM_FACTOR = 1.15;
 export const KEYBOARD_ZOOM_FACTOR = 1.15;
-export const ANGLE_SNAP_THRESHOLD_RAD = Math.PI / 24;
+export const ANGLE_SNAP_THRESHOLD_RAD = Math.PI / 48;
+export const SCALE_SNAP_THRESHOLD = 0.05
 export const ON_SEGMENT_STRICT_T_MIN = 1e-5;
 export const ON_SEGMENT_STRICT_T_MAX = 1 - 1e-5;
 export const MIN_TRANSFORM_ACTION_THRESHOLD = 0.001;
