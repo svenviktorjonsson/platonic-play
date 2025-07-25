@@ -11,6 +11,7 @@ Relevant files and folders (excluding specified patterns):
 ├── script.js
 ├── style.css
 ├── utils.js
+├── vite.config.js
 
 
 === File Contents ===
@@ -355,6 +356,8 @@ export const COLOR_TARGET_FACE = 'face';
 
 
 === readme.md ===
+readme
+
 
 
 
@@ -11665,6 +11668,13 @@ export function getCircleCircleIntersection(c1, c2) {
 
 
 
+
+=== vite.config.js ===
+import { defineConfig } from 'vite';
+
+export default defineConfig({
+  base: '/platonic-play/',
+});
 
 
 === LLM Instructions ===
