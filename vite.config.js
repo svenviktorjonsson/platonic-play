@@ -1,19 +1,11 @@
 import { defineConfig } from 'vite';
+import { resolve } from 'path';
 
 export default defineConfig({
   base: '/platonic-play/',
-  build: {
-    rollupOptions: {
-      external: [],
-      output: {
-        manualChunks: undefined
-      }
-    },
-    commonjsOptions: {
-      include: [/colormap-selector/, /node_modules/]
+  resolve: {
+    alias: {
+      'colormap-selector': resolve(process.cwd(), 'node_modules/colormap-selector')
     }
-  },
-  optimizeDeps: {
-    include: ['colormap-selector']
   }
 });
