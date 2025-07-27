@@ -1,12 +1,13 @@
 import * as C from './constants.js';
 
 
-export function formatNumber(value, sigFigs) {
+export function formatNumber(value, sigFigs, forceScientific = false) {
     if (value === 0) return "0";
     const absValue = Math.abs(value);
     const sign = value < 0 ? "-" : "";
     let formattedString;
-    if (absValue >= C.SCIENTIFIC_NOTATION_UPPER_BOUND || (absValue !== 0 && absValue < C.SCIENTIFIC_NOTATION_LOWER_BOUND)) {
+    if (forceScientific || absValue >= C.SCIENTIFIC_NOTATION_UPPER_BOUND || (absValue !== 0 && absValue < C.SCIENTIFIC_NOTATION_LOWER_BOUND)) {
+        if (value === 0) return "0";
         const expStr = absValue.toExponential(Math.max(0, sigFigs - 1));
         const parts = expStr.split('e');
         let coefficient = parseFloat(parts[0]).toString();
@@ -28,7 +29,6 @@ export function formatNumber(value, sigFigs) {
         } else {
             decimalPlacesToDisplay = Math.max(0, sigFigs - integerDigits);
         }
-        decimalPlacesToDisplay = Math.min(decimalPlacesToDisplay, C.MAX_DECIMAL_PLACES_FORMAT);
         let fixedStr = absValue.toFixed(decimalPlacesToDisplay);
         let num = parseFloat(fixedStr);
         if (Math.abs(num) === 0 && value !== 0) {

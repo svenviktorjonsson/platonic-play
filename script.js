@@ -1711,13 +1711,17 @@ function zoomAt(zoomCenterScreen_css_pixels, scaleFactor) {
     if (newScale < C.MIN_SCALE_VALUE) {
         newScale = C.MIN_SCALE_VALUE;
     }
+    if (newScale > C.MAX_SCALE_VALUE) {
+        newScale = C.MAX_SCALE_VALUE;
+    }
+
+    const effectiveScaleFactor = newScale / viewTransform.scale;
 
     const mouseX_physical = zoomCenterScreen_css_pixels.x * dpr;
     const mouseY_physical = zoomCenterScreen_css_pixels.y * dpr;
 
-    viewTransform.offsetX = mouseX_physical * (1 - scaleFactor) + viewTransform.offsetX * scaleFactor;
-
-    viewTransform.offsetY = (canvas.height - mouseY_physical) * (1 - scaleFactor) + viewTransform.offsetY * scaleFactor;
+    viewTransform.offsetX = mouseX_physical * (1 - effectiveScaleFactor) + viewTransform.offsetX * effectiveScaleFactor;
+    viewTransform.offsetY = (canvas.height - mouseY_physical) * (1 - effectiveScaleFactor) + viewTransform.offsetY * effectiveScaleFactor;
 
     viewTransform.scale = newScale;
 }
@@ -2581,6 +2585,7 @@ function getBestDirectionalScaleSnap(center, initialVertexStates, handleVertex, 
 
 function redrawAll() {
     labelsToKeepThisFrame.clear();
+    let axisFormatInfo = { useScientific: false };
     const colors = getColors();
     R.clearCanvas(ctx, { canvas, dpr, colors });
 
@@ -2595,7 +2600,7 @@ function redrawAll() {
 
     if (coordsDisplayMode !== C.COORDS_DISPLAY_MODE_NONE) {
         const stateForAxes = { canvas, dpr, coordsDisplayMode, viewTransform, angleDisplayMode, colors };
-        R.drawAxes(ctx, htmlOverlay, stateForAxes, dataToScreen, screenToData, lastGridState, lastAngularGridState, updateHtmlLabel);
+        axisFormatInfo = R.drawAxes(ctx, htmlOverlay, stateForAxes, dataToScreen, screenToData, lastGridState, lastAngularGridState, updateHtmlLabel);
     }
 
     if (facesVisible && allVertices.length > 0) {
@@ -2815,8 +2820,7 @@ function redrawAll() {
         R.drawTransformIndicators(ctx, htmlOverlay, { transformIndicatorData, angleSigFigs, distanceSigFigs, colors, coordSystemTransformIndicatorData }, dataToScreen, updateHtmlLabel);
     }
 
-    R.updateMouseCoordinates(htmlOverlay, { coordsDisplayMode, isMouseOverCanvas, currentShiftPressed, ghostVertexPosition, gridDisplayMode, lastGridState, angleDisplayMode, canvas, dpr, mousePos, colors }, screenToData, updateHtmlLabel);
-
+    R.updateMouseCoordinates(htmlOverlay, { coordsDisplayMode, isMouseOverCanvas, currentShiftPressed, ghostVertexPosition, gridDisplayMode, lastGridState, angleDisplayMode, canvas, dpr, mousePos, colors, useScientific: axisFormatInfo.useScientific }, screenToData, updateHtmlLabel);
     const stateForUI = {
         dpr, canvasUI, isToolbarExpanded, isColorPaletteExpanded, isTransformPanelExpanded, isDisplayPanelExpanded, isVisibilityPanelExpanded,
         isPlacingTransform, placingTransformType, placingSnapPos, mousePos,
