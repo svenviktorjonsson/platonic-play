@@ -80,7 +80,8 @@ export const EDGE_ID_DELIMITER = '_EDGE_';
 export const DOUBLE_CLICK_MS = 300;
 export const DRAG_THRESHOLD = 3;
 export const EDGE_CLICK_THRESHOLD = 7;
-export const MIN_SCALE_VALUE = 1e-20;
+export const MIN_SCALE_VALUE = 1e-15;
+export const MAX_SCALE_VALUE = 1e13;
 export const ZOOM_FACTOR = 1.15;
 export const KEYBOARD_ZOOM_FACTOR = 1.15;
 export const ANGLE_SNAP_THRESHOLD_RAD = Math.PI / 48;
@@ -181,16 +182,15 @@ export const REF_ARC_RADIUS_SCREEN = 35;
 export const SNAP_ANGLE_LABEL_OFFSET = 60;
 export const TRANSFORM_ANGLE_LABEL_OFFSET = 20;
 export const TRANSFORM_SCALE_LABEL_OFFSET = 18;
-export const SCIENTIFIC_NOTATION_UPPER_BOUND = 1000;
-export const SCIENTIFIC_NOTATION_LOWER_BOUND = 0.001;
-export const MAX_DECIMAL_PLACES_FORMAT = 10;
+export const SCIENTIFIC_NOTATION_UPPER_BOUND = 1000000;
+export const SCIENTIFIC_NOTATION_LOWER_BOUND = 0.000001;
 export const ZERO_TOLERANCE = 0.00001;
 export const FRACTION_FORMAT_TOLERANCE = 0.015;
 export const FRACTION_FORMAT_MAX_DENOMINATOR = 32;
 export const FRACTION_FORMAT_MAX_DENOMINATOR_TRANSFORM = 10;
 export const COORD_PRECISION_FACTOR = 0.999;
-export const MAX_COORD_DECIMAL_PLACES = 6;
-export const MAX_ANGLE_DECIMAL_PLACES = 4;
+export const MAX_COORD_DECIMAL_PLACES = 16;
+export const MAX_ANGLE_DECIMAL_PLACES = 12;
 export const MOUSE_COORD_FONT_SIZE = 14;
 export const KATEX_MINUS_PHANTOM = '\\hphantom{-}';
 export const PI_SYMBOL_KATEX = '\\pi';
@@ -552,9 +552,10 @@ export function drawFaceGlows(ctx, { allFaces, hoveredFaceId, selectedFaceIds, c
 }
 
 function calculateVisibleAngleRange(originScreen, screenRadius, canvasWidth, canvasHeight) {
+    // If origin is inside the viewport, we can see the full circle
     if (originScreen.x >= 0 && originScreen.x <= canvasWidth && 
         originScreen.y >= 0 && originScreen.y <= canvasHeight) {
-        return { minAngle: 0, maxAngle: 360, isFullCircle: true };
+        return { ranges: [[0, 360]], isFullCircle: true };
     }
 
     const rect = {
@@ -564,6 +565,7 @@ function calculateVisibleAngleRange(originScreen, screenRadius, canvasWidth, can
         bottom: canvasHeight
     };
 
+    // If circle doesn't intersect the viewport at all
     if (originScreen.x + screenRadius < rect.left || 
         originScreen.x - screenRadius > rect.right ||
         originScreen.y + screenRadius < rect.top || 
@@ -578,17 +580,20 @@ function calculateVisibleAngleRange(originScreen, screenRadius, canvasWidth, can
         { x: rect.left, y: rect.bottom }
     ];
 
+    // If all corners are inside the circle, we see the full circle
     const allCornersInside = corners.every(corner => {
         const distSq = (corner.x - originScreen.x) ** 2 + (corner.y - originScreen.y) ** 2;
         return distSq <= screenRadius ** 2;
     });
 
     if (allCornersInside) {
-        return { minAngle: 0, maxAngle: 360, isFullCircle: true };
+        return { ranges: [[0, 360]], isFullCircle: true };
     }
 
+    // Find all intersection points and angles
     const intersectionAngles = [];
 
+    // Check corners that are outside the circle
     corners.forEach(corner => {
         const distSq = (corner.x - originScreen.x) ** 2 + (corner.y - originScreen.y) ** 2;
         if (distSq > screenRadius ** 2) {
@@ -600,6 +605,7 @@ function calculateVisibleAngleRange(originScreen, screenRadius, canvasWidth, can
         }
     });
 
+    // Check intersections with rectangle edges
     const edges = [
         { x1: rect.left, y1: rect.top, x2: rect.right, y2: rect.top },
         { x1: rect.right, y1: rect.top, x2: rect.right, y2: rect.bottom },
@@ -623,15 +629,17 @@ function calculateVisibleAngleRange(originScreen, screenRadius, canvasWidth, can
     });
 
     if (intersectionAngles.length === 0) {
-        return { minAngle: 0, maxAngle: 360, isFullCircle: true };
+        return { ranges: [[0, 360]], isFullCircle: true };
     }
 
+    // Remove duplicates and sort
     const uniqueAngles = [...new Set(intersectionAngles.map(a => Math.round(a * 1e6) / 1e6))].sort((a, b) => a - b);
 
     if (uniqueAngles.length < 2) {
-        return { minAngle: 0, maxAngle: 360, isFullCircle: true };
+        return { ranges: [[0, 360]], isFullCircle: true };
     }
 
+    // Find the largest gap between consecutive angles (this is the invisible range)
     let maxGap = 0;
     let maxGapStartAngle = 0;
     let maxGapEndAngle = 0;
@@ -642,6 +650,7 @@ function calculateVisibleAngleRange(originScreen, screenRadius, canvasWidth, can
         
         let gap;
         if (i === uniqueAngles.length - 1) {
+            // Wrap around gap
             gap = (360 - currentAngle) + nextAngle;
         } else {
             gap = nextAngle - currentAngle;
@@ -654,16 +663,18 @@ function calculateVisibleAngleRange(originScreen, screenRadius, canvasWidth, can
         }
     }
 
+    // The visible range is everything EXCEPT the largest gap
+    // So we need to return the complement of the gap
     if (maxGapEndAngle > maxGapStartAngle) {
+        // Simple case: gap doesn't wrap around
         return {
-            minAngle: maxGapEndAngle,
-            maxAngle: maxGapStartAngle + 360,
+            ranges: [[maxGapEndAngle, maxGapStartAngle + 360]],
             isFullCircle: false
         };
     } else {
+        // Gap wraps around 0/360
         return {
-            minAngle: maxGapEndAngle,
-            maxAngle: maxGapStartAngle,
+            ranges: [[maxGapEndAngle, maxGapStartAngle]],
             isFullCircle: false
         };
     }
@@ -1198,14 +1209,26 @@ export function drawPolarReferenceCircle(ctx, htmlOverlay, updateHtmlLabel, radi
                 anglesToProcess.push(deg);
             }
         } else {
-            anglesToProcess = generateOptimizedAngleSequence(
-                level.angle,
-                visibleAngleRange.minAngle,
-                visibleAngleRange.maxAngle
-            );
+            // Handle new format with ranges array
+            anglesToProcess = [];
+            if (visibleAngleRange.ranges && Array.isArray(visibleAngleRange.ranges)) {
+                visibleAngleRange.ranges.forEach(range => {
+                    const [minAngle, maxAngle] = range;
+                    const rangeAngles = generateOptimizedAngleSequence(level.angle, minAngle, maxAngle);
+                    anglesToProcess.push(...rangeAngles);
+                });
+            } else if (visibleAngleRange.minAngle !== undefined && visibleAngleRange.maxAngle !== undefined) {
+                // Fallback for old format
+                anglesToProcess = generateOptimizedAngleSequence(level.angle, visibleAngleRange.minAngle, visibleAngleRange.maxAngle);
+            }
+            // Remove duplicates
+            anglesToProcess = [...new Set(anglesToProcess)];
         }
 
         anglesToProcess.forEach(deg => {
+            // Round off floating point inaccuracy
+            deg = Math.round(deg * 1e10) / 1e10; // Round to 10 decimal places to eliminate floating point errors
+            
             if (angleDisplayMode === 'degrees') {
                 if (drawnAnglesSimple.has(deg)) return;
             }
@@ -1215,13 +1238,27 @@ export function drawPolarReferenceCircle(ctx, htmlOverlay, updateHtmlLabel, radi
             }
 
             const angleRad = deg * Math.PI / 180;
+            
+            // OPTIMIZATION: Check if this angle's label will be visible before doing expensive calculations
+            const labelPos = { 
+                x: originScreen.x + (screenRadius + C.REF_TEXT_DISTANCE_LABEL_OFFSET_SCREEN) * Math.cos(angleRad), 
+                y: originScreen.y - (screenRadius + C.REF_TEXT_DISTANCE_LABEL_OFFSET_SCREEN) * Math.sin(angleRad) 
+            };
+            
+            // Skip if label would be way off screen
+            const labelMargin = 100; // Reasonable margin for labels
+            const isLabelVisible = labelPos.x > -labelMargin && labelPos.x < canvasWidthCSS + labelMargin && 
+                                   labelPos.y > -labelMargin && labelPos.y < canvasHeightCSS + labelMargin;
+            
+            if (!isLabelVisible) {
+                return; // Skip this angle entirely if label won't be visible
+            }
+            
             let labelOptions = { textAlign: 'center', textBaseline: 'middle' };
             
             if (angleDisplayMode === 'radians') {
                 labelOptions = { textAlign: 'left', textBaseline: 'middle' };
             }
-            
-            let labelPos;
 
             ctx.save();
             ctx.strokeStyle = finalColor;
@@ -1266,7 +1303,8 @@ export function drawPolarReferenceCircle(ctx, htmlOverlay, updateHtmlLabel, radi
                 ctx.lineTo(tickEnd.x, tickEnd.y);
                 ctx.stroke();
                 
-                labelPos = { x: tickEnd.x, y: tickEnd.y };
+                labelPos.x = tickEnd.x;
+                labelPos.y = tickEnd.y;
 
             } else {
                 const tickStart = { 
@@ -1283,10 +1321,6 @@ export function drawPolarReferenceCircle(ctx, htmlOverlay, updateHtmlLabel, radi
                     ctx.lineTo(tickEnd.x, tickEnd.y);
                     ctx.stroke();
                 }
-                labelPos = { 
-                    x: originScreen.x + (screenRadius + C.REF_TEXT_DISTANCE_LABEL_OFFSET_SCREEN) * Math.cos(angleRad), 
-                    y: originScreen.y - (screenRadius + C.REF_TEXT_DISTANCE_LABEL_OFFSET_SCREEN) * Math.sin(angleRad) 
-                };
             }
             
             ctx.restore();
@@ -1299,8 +1333,13 @@ export function drawPolarReferenceCircle(ctx, htmlOverlay, updateHtmlLabel, radi
                     precision = Math.max(precision, Math.ceil(-Math.log10(level.angle)) + 1);
                 }
                 
-                const formattedDeg = parseFloat(deg.toFixed(precision));
-                angleText = `${formattedDeg}^{\\circ}`;
+                // Round to eliminate floating point errors, then format
+                const cleanDeg = Math.round(deg * Math.pow(10, precision)) / Math.pow(10, precision);
+                const formattedDeg = parseFloat(cleanDeg.toFixed(precision));
+                
+                // Additional rounding to eliminate display artifacts
+                const displayValue = Math.round(formattedDeg * 1e10) / 1e10;
+                angleText = `${displayValue}^{\\circ}`;
             } else {
                 if (deg === 0 && angleDisplayMode === 'radians') {
                     angleText = '0';
@@ -1554,9 +1593,11 @@ export function drawAxes(ctx, htmlOverlay, { canvas, dpr, coordsDisplayMode, vie
             
             if (isPolar) {
                 const maxRadiusData = Math.hypot(Math.max(Math.abs(topLeftData.x), Math.abs(bottomRightData.x)), Math.max(Math.abs(topLeftData.y), Math.abs(bottomRightData.y))) * C.POLAR_AXIS_RADIUS_BUFFER_FACTOR;
+                const startMultiplier = 1;
+                const endMultiplier = Math.ceil(maxRadiusData / interval);
                 
-                for (let r_data = interval; r_data <= maxRadiusData; r_data += interval) {
-                    if (Math.abs(r_data) < localZeroThreshold) continue;
+                for (let i = startMultiplier; i <= endMultiplier; i++) {
+                    const r_data = i * interval;
                     const existing = drawnXPositions.get(r_data);
                     if (!existing) {
                         drawnXPositions.set(r_data, { alpha, isCoarser });
@@ -1569,12 +1610,13 @@ export function drawAxes(ctx, htmlOverlay, { canvas, dpr, coordsDisplayMode, vie
                     }
                 }
             } else {
-                const startTickX = Math.floor(topLeftData.x / interval) * interval;
-                const endTickX = Math.ceil(bottomRightData.x / interval) * interval;
-                const startTickY = Math.floor(bottomRightData.y / interval) * interval;
-                const endTickY = Math.ceil(topLeftData.y / interval) * interval;
+                const startMultiplierX = Math.floor(topLeftData.x / interval);
+                const endMultiplierX = Math.ceil(bottomRightData.x / interval);
+                const startMultiplierY = Math.floor(bottomRightData.y / interval);
+                const endMultiplierY = Math.ceil(topLeftData.y / interval);
                 
-                for (let x_data = startTickX; x_data <= endTickX; x_data += interval) {
+                for (let i = startMultiplierX; i <= endMultiplierX; i++) {
+                    const x_data = i * interval;
                     if (Math.abs(x_data) < localZeroThreshold) continue;
                     const existing = drawnXPositions.get(x_data);
                     if (!existing) {
@@ -1588,7 +1630,8 @@ export function drawAxes(ctx, htmlOverlay, { canvas, dpr, coordsDisplayMode, vie
                     }
                 }
                 
-                for (let y_data = startTickY; y_data <= endTickY; y_data += interval) {
+                for (let i = startMultiplierY; i <= endMultiplierY; i++) {
+                    const y_data = i * interval;
                     if (Math.abs(y_data) < localZeroThreshold) continue;
                     const existing = drawnYPositions.get(y_data);
                     if (!existing) {
@@ -1608,6 +1651,31 @@ export function drawAxes(ctx, htmlOverlay, { canvas, dpr, coordsDisplayMode, vie
         
         addTicksForInterval(interval1, alpha1, interval1IsCoarser);
         addTicksForInterval(interval2, alpha2, !interval1IsCoarser);
+
+        // Check if scientific notation should be used for ANY visible value
+        let useScientific = false;
+        const checkScientific = (val) => {
+            const absValue = Math.abs(val);
+            if (absValue >= C.SCIENTIFIC_NOTATION_UPPER_BOUND || (absValue > 0 && absValue < C.SCIENTIFIC_NOTATION_LOWER_BOUND)) {
+                useScientific = true;
+            }
+        };
+        
+        // Check all axis tick values
+        drawnXPositions.forEach((_, x_data) => checkScientific(x_data));
+        drawnYPositions.forEach((_, y_data) => checkScientific(y_data));
+        
+        // Also check the current viewport bounds to ensure mouse coordinates will be consistent
+        const topLeftData = screenToData({ x: 0, y: 0 });
+        const bottomRightData = screenToData({ x: canvasWidth, y: canvasHeight });
+        checkScientific(topLeftData.x);
+        checkScientific(topLeftData.y);
+        checkScientific(bottomRightData.x);
+        checkScientific(bottomRightData.y);
+        
+        // Calculate decimal places based on the primary interval
+        const primaryInterval = interval1 || interval2 || 1;
+        const decimalPlaces = primaryInterval > 0 ? Math.max(0, -Math.floor(Math.log10(primaryInterval))) : 0;
         
         drawnXPositions.forEach((tickInfo, x_data) => {
             const effectiveAlpha = tickInfo.isCoarser ? 1.0 : tickInfo.alpha;
@@ -1615,24 +1683,28 @@ export function drawAxes(ctx, htmlOverlay, { canvas, dpr, coordsDisplayMode, vie
             ctx.strokeStyle = tickLabelColor;
             ctx.lineWidth = C.GRID_LINEWIDTH;
             
-            let sourceInterval = interval1;
-            if (interval2 && Math.abs(x_data % interval2) < Math.abs(x_data % interval1)) {
-                sourceInterval = interval2;
-            }
-            const screenSpacing = sourceInterval * viewTransform.scale;
-            let sigFigsForLabel = 0;
-            if (screenSpacing > C.TICK_LABEL_SIGFIG_THRESH_1) sigFigsForLabel = 3; 
-            else if (screenSpacing > C.TICK_LABEL_SIGFIG_THRESH_2) sigFigsForLabel = 2; 
-            else if (screenSpacing > C.TICK_LABEL_SIGFIG_THRESH_3) sigFigsForLabel = 1; 
-            else sigFigsForLabel = 0;
-            
-            const decimalPlacesInInterval = sourceInterval > 0 ? -Math.floor(Math.log10(sourceInterval)) : 0;
-            if (decimalPlacesInInterval > 0) {
-                sigFigsForLabel = Math.max(sigFigsForLabel, decimalPlacesInInterval + 1);
-            }
-            
             if (isPolar) {
-                const labelText = U.formatNumber(x_data, sigFigsForLabel);
+                let labelText;
+                if (useScientific) {
+                    // Calculate how many decimal places needed in scientific notation coefficient
+                    // to distinguish between consecutive tick values
+                    const logValue = Math.log10(Math.abs(x_data));
+                    const exponent = Math.floor(logValue);
+                    const coefficient = x_data / Math.pow(10, exponent);
+                    
+                    // Determine precision needed based on tick interval
+                    const intervalInSameScale = primaryInterval / Math.pow(10, exponent);
+                    const decimalPlacesNeeded = Math.max(0, -Math.floor(Math.log10(intervalInSameScale)) + 1);
+                    
+                    const expStr = Math.abs(x_data).toExponential(decimalPlacesNeeded);
+                    const parts = expStr.split('e');
+                    let coefficientStr = parts[0];
+                    let exp = parseInt(parts[1], 10);
+                    const sign = x_data < 0 ? "-" : "";
+                    labelText = `${sign}${coefficientStr} \\cdot 10^{${exp}}`;
+                } else {
+                    labelText = x_data.toFixed(decimalPlaces).replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '');
+                }
                 const stableIdPart = x_data.toExponential(15);
                 
                 const isYAxisOnScreen = origin.y > -C.AXIS_LABEL_PADDING && origin.y < canvasHeight + C.AXIS_LABEL_PADDING;
@@ -1712,10 +1784,32 @@ export function drawAxes(ctx, htmlOverlay, { canvas, dpr, coordsDisplayMode, vie
                 ctx.lineTo(screenX, origin.y + C.AXIS_TICK_SIZE); 
                 ctx.stroke();
                 
+                let tickLabel;
+                if (useScientific) {
+                    // Calculate precision needed for scientific notation
+                    const logValue = Math.log10(Math.abs(x_data));
+                    const exponent = Math.floor(logValue);
+                    
+                    // Determine precision needed based on tick interval
+                    const intervalInSameScale = primaryInterval / Math.pow(10, exponent);
+                    const decimalPlacesNeeded = Math.max(0, -Math.floor(Math.log10(intervalInSameScale)) + 1);
+                    
+                    const expStr = Math.abs(x_data).toExponential(decimalPlacesNeeded);
+                    const parts = expStr.split('e');
+                    let coefficientStr = parts[0];
+                    // Remove trailing zeros from coefficient
+                    coefficientStr = coefficientStr.replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '');
+                    let exp = parseInt(parts[1], 10);
+                    const sign = x_data < 0 ? "-" : "";
+                    tickLabel = `${sign}${coefficientStr} \\cdot 10^{${exp}}`;
+                } else {
+                    tickLabel = x_data.toFixed(decimalPlaces).replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '');
+                }
+                
                 const getStableId = (prefix, num) => `${prefix}-${num.toExponential(15)}`;
                 updateHtmlLabel({ 
                     id: getStableId('tick-label-x', x_data), 
-                    content: U.formatNumber(x_data, sigFigsForLabel), 
+                    content: tickLabel, 
                     x: screenX, 
                     y: origin.y + C.AXIS_TICK_SIZE + C.AXIS_LABEL_OFFSET, 
                     color: tickLabelColor, 
@@ -1732,25 +1826,30 @@ export function drawAxes(ctx, htmlOverlay, { canvas, dpr, coordsDisplayMode, vie
                 ctx.strokeStyle = tickLabelColor;
                 ctx.lineWidth = C.GRID_LINEWIDTH;
                 
-                let sourceInterval = interval1;
-                if (interval2 && Math.abs(y_data % interval2) < Math.abs(y_data % interval1)) {
-                    sourceInterval = interval2;
-                }
-                const screenSpacing = sourceInterval * viewTransform.scale;
-                let sigFigsForLabel = 0;
-                if (screenSpacing > C.TICK_LABEL_SIGFIG_THRESH_1) sigFigsForLabel = 3; 
-                else if (screenSpacing > C.TICK_LABEL_SIGFIG_THRESH_2) sigFigsForLabel = 2; 
-                else if (screenSpacing > C.TICK_LABEL_SIGFIG_THRESH_3) sigFigsForLabel = 1; 
-                else sigFigsForLabel = 0;
-                
-                const decimalPlacesInInterval = sourceInterval > 0 ? -Math.floor(Math.log10(sourceInterval)) : 0;
-                if (decimalPlacesInInterval > 0) {
-                    sigFigsForLabel = Math.max(sigFigsForLabel, decimalPlacesInInterval + 1);
-                }
-                
                 const screenY = dataToScreen({ x: 0, y: y_data }).y;
-                let yLabelContent = U.formatNumber(y_data, sigFigsForLabel);
-                if (coordsDisplayMode === C.COORDS_DISPLAY_MODE_COMPLEX && yLabelContent !== "0") {
+                let yLabelContent;
+                if (useScientific) {
+                    // Calculate precision needed for scientific notation
+                    const logValue = Math.log10(Math.abs(y_data));
+                    const exponent = Math.floor(logValue);
+                    
+                    // Determine precision needed based on tick interval
+                    const intervalInSameScale = primaryInterval / Math.pow(10, exponent);
+                    const decimalPlacesNeeded = Math.max(0, -Math.floor(Math.log10(intervalInSameScale)) + 1);
+                    
+                    const expStr = Math.abs(y_data).toExponential(decimalPlacesNeeded);
+                    const parts = expStr.split('e');
+                    let coefficientStr = parts[0];
+                    // Remove trailing zeros from coefficient
+                    coefficientStr = coefficientStr.replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '');
+                    let exp = parseInt(parts[1], 10);
+                    const sign = y_data < 0 ? "-" : "";
+                    yLabelContent = `${sign}${coefficientStr} \\cdot 10^{${exp}}`;
+                } else {
+                    yLabelContent = y_data.toFixed(decimalPlaces).replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '');
+                }
+                
+                if (coordsDisplayMode === C.COORDS_DISPLAY_MODE_COMPLEX && Math.abs(y_data) > C.GEOMETRY_CALCULATION_EPSILON) {
                     if (yLabelContent === '1') yLabelContent = C.IMAGINARY_UNIT_SYMBOL;
                     else if (yLabelContent === '-1') yLabelContent = `-${C.IMAGINARY_UNIT_SYMBOL}`;
                     else yLabelContent += C.IMAGINARY_UNIT_SYMBOL;
@@ -1773,75 +1872,44 @@ export function drawAxes(ctx, htmlOverlay, { canvas, dpr, coordsDisplayMode, vie
                 });
             });
         }
+        return { useScientific };
     };
 
     ctx.lineWidth = C.AXIS_LINE_WIDTH;
     ctx.strokeStyle = colors.axis;
     ctx.fillStyle = colors.axis;
 
+    let formatInfo = { useScientific: false };
     if (coordsDisplayMode === C.COORDS_DISPLAY_MODE_POLAR) {
         const { interval1, interval2, alpha1, alpha2 } = lastGridState;
-        ctx.lineWidth = C.GRID_LINEWIDTH;
         
-        const posXVisible = canvasWidth > origin.x;
-        const negXVisible = 0 < origin.x;
-        const posYVisible = 0 < origin.y;
-        const negYVisible = canvasHeight > origin.y;
+        // Draw polar axis lines with arrows and labels
+        drawPolarAxisLines(ctx, htmlOverlay, { canvas, dpr, colors }, dataToScreen, updateHtmlLabel);
         
-        if (posXVisible) {
-            drawAxisWithArrows(origin.x, origin.y, canvasWidth, origin.y);
-            updateHtmlLabel({ 
-                id: 'axis-label-r-posx', 
-                content: C.POLAR_RADIUS_SYMBOL, 
-                x: canvasWidth - C.AXIS_ARROW_SIZE - C.X_AXIS_LABEL_ARROW_DIST, 
-                y: origin.y - C.X_AXIS_LABEL_DISTANCE, 
-                color: colors.axis, 
-                fontSize: C.AXIS_NAME_FONT_SIZE, 
-                options: { textAlign: 'center', textBaseline: 'bottom' } 
-            });
-        }
+        // Calculate scientific notation decision for consistency
+        let useScientific = false;
+        const checkScientific = (val) => {
+            const absValue = Math.abs(val);
+            if (absValue >= C.SCIENTIFIC_NOTATION_UPPER_BOUND || (absValue > 0 && absValue < C.SCIENTIFIC_NOTATION_LOWER_BOUND)) {
+                useScientific = true;
+            }
+        };
         
-        if (negXVisible) {
-            drawAxisWithArrows(origin.x, origin.y, 0, origin.y);
-            updateHtmlLabel({ 
-                id: 'axis-label-r-negx', 
-                content: C.POLAR_RADIUS_SYMBOL, 
-                x: C.AXIS_ARROW_SIZE + C.X_AXIS_LABEL_ARROW_DIST, 
-                y: origin.y - C.X_AXIS_LABEL_DISTANCE, 
-                color: colors.axis, 
-                fontSize: C.AXIS_NAME_FONT_SIZE, 
-                options: { textAlign: 'center', textBaseline: 'bottom' } 
-            });
-        }
+        // Check viewport bounds for scientific notation decision
+        const topLeftData = screenToData({ x: 0, y: 0 });
+        const bottomRightData = screenToData({ x: canvasWidth, y: canvasHeight });
+        checkScientific(topLeftData.x);
+        checkScientific(topLeftData.y);
+        checkScientific(bottomRightData.x);
+        checkScientific(bottomRightData.y);
         
-        if (posYVisible) {
-            drawAxisWithArrows(origin.x, origin.y, origin.x, 0);
-            updateHtmlLabel({ 
-                id: 'axis-label-r-posy', 
-                content: C.POLAR_RADIUS_SYMBOL, 
-                x: origin.x + C.Y_AXIS_LABEL_DISTANCE, 
-                y: C.AXIS_ARROW_SIZE + C.Y_AXIS_LABEL_ARROW_DIST, 
-                color: colors.axis, 
-                fontSize: C.AXIS_NAME_FONT_SIZE, 
-                options: { textAlign: 'left', textBaseline: 'middle' } 
-            });
-        }
+        // Draw polar radius ticks and labels
+        drawPolarRadiusTicks(ctx, htmlOverlay, { canvas, dpr, colors }, dataToScreen, screenToData, lastGridState, updateHtmlLabel, useScientific);
         
-        if (negYVisible) {
-            drawAxisWithArrows(origin.x, origin.y, origin.x, canvasHeight);
-            updateHtmlLabel({ 
-                id: 'axis-label-r-negy', 
-                content: C.POLAR_RADIUS_SYMBOL, 
-                x: origin.x + C.Y_AXIS_LABEL_DISTANCE, 
-                y: canvasHeight - C.AXIS_ARROW_SIZE - C.Y_AXIS_LABEL_ARROW_DIST, 
-                color: colors.axis, 
-                fontSize: C.AXIS_NAME_FONT_SIZE, 
-                options: { textAlign: 'left', textBaseline: 'middle' } 
-            });
-        }
-        
-        drawTicksAndLabels(interval1, alpha1, interval2, alpha2, true);
+        // Draw polar reference circles (angle ticks)
         drawPolarReferenceCircle(ctx, htmlOverlay, updateHtmlLabel, 0, 0, { canvas, dpr, coordsDisplayMode, viewTransform, angleDisplayMode, colors }, dataToScreen, lastAngularGridState);
+        
+        formatInfo = { useScientific };
     } else {
         if (origin.y > 0 && origin.y < canvasHeight) drawAxisWithArrows(0, origin.y, canvasWidth, origin.y);
         if (origin.x > 0 && origin.x < canvasWidth) drawAxisWithArrows(origin.x, canvasHeight, origin.x, 0);
@@ -1873,12 +1941,384 @@ export function drawAxes(ctx, htmlOverlay, { canvas, dpr, coordsDisplayMode, vie
             options: { textAlign: 'left', textBaseline: 'middle' } 
         });
         
-        drawTicksAndLabels(lastGridState.interval1, lastGridState.alpha1, lastGridState.interval2, lastGridState.alpha2, false);
+        formatInfo = drawTicksAndLabels(lastGridState.interval1, lastGridState.alpha1, lastGridState.interval2, lastGridState.alpha2, false);
     }
 
     drawZeroTickAndTickLabel(ctx, origin, canvasWidth, canvasHeight, coordsDisplayMode, updateHtmlLabel, colors);
 
     ctx.restore();
+    return formatInfo;
+}
+
+// Optimized function for drawing polar radius ticks and labels
+export function drawPolarRadiusTicks(ctx, htmlOverlay, { canvas, dpr, colors }, dataToScreen, screenToData, lastGridState, updateHtmlLabel, useScientific) {
+    const canvasWidth = canvas.width / dpr;
+    const canvasHeight = canvas.height / dpr;
+    const origin = dataToScreen({ x: 0, y: 0 });
+    
+    // Check if origin axes are visible on screen
+    const isYAxisOnScreen = origin.y > -C.AXIS_LABEL_PADDING && origin.y < canvasHeight + C.AXIS_LABEL_PADDING;
+    const isXAxisOnScreen = origin.x > -C.AXIS_LABEL_PADDING && origin.x < canvasWidth + C.AXIS_LABEL_PADDING;
+    
+    // Early exit if no axes are visible
+    if (!isYAxisOnScreen && !isXAxisOnScreen) {
+        return;
+    }
+    
+    const { interval1, interval2, alpha1, alpha2 } = lastGridState;
+    const drawnRadiusPositions = new Map();
+    
+    // Calculate decimal places based on the primary interval
+    const primaryInterval = interval1 || interval2 || 1;
+    const decimalPlaces = primaryInterval > 0 ? Math.max(0, -Math.floor(Math.log10(primaryInterval))) : 0;
+    
+    const addTicksForInterval = (interval, alpha, isCoarser) => {
+        if (!interval || alpha < C.MIN_ALPHA_FOR_DRAWING) return;
+        
+        // Calculate only the radius range that could be visible on the current axes
+        let maxRadius = 0;
+        
+        if (isYAxisOnScreen) {
+            // Check X-axis visibility range
+            const leftData = screenToData({ x: 0, y: origin.y });
+            const rightData = screenToData({ x: canvasWidth, y: origin.y });
+            maxRadius = Math.max(maxRadius, Math.abs(leftData.x), Math.abs(rightData.x));
+        }
+        
+        if (isXAxisOnScreen) {
+            // Check Y-axis visibility range  
+            const topData = screenToData({ x: origin.x, y: 0 });
+            const bottomData = screenToData({ x: origin.x, y: canvasHeight });
+            maxRadius = Math.max(maxRadius, Math.abs(topData.y), Math.abs(bottomData.y));
+        }
+        
+        // Add small buffer
+        maxRadius *= 1.1;
+        
+        const startMultiplier = 1;
+        const endMultiplier = Math.ceil(maxRadius / interval);
+        
+        // Limit calculations to prevent performance issues
+        const maxCalculations = 1000;
+        const actualEndMultiplier = Math.min(endMultiplier, startMultiplier + maxCalculations);
+        
+        for (let i = startMultiplier; i <= actualEndMultiplier; i++) {
+            const r_data = i * interval;
+            
+            // Check if any tick for this radius will be visible
+            let willBeVisible = false;
+            
+            if (isYAxisOnScreen) {
+                const xPos = dataToScreen({ x: r_data, y: 0 }).x;
+                const xNegPos = dataToScreen({ x: -r_data, y: 0 }).x;
+                if ((xPos >= -C.AXIS_LABEL_PADDING && xPos <= canvasWidth + C.AXIS_LABEL_PADDING) ||
+                    (xNegPos >= -C.AXIS_LABEL_PADDING && xNegPos <= canvasWidth + C.AXIS_LABEL_PADDING)) {
+                    willBeVisible = true;
+                }
+            }
+            
+            if (!willBeVisible && isXAxisOnScreen) {
+                const yPos = dataToScreen({ x: 0, y: r_data }).y;
+                const yNegPos = dataToScreen({ x: 0, y: -r_data }).y;
+                if ((yPos >= -C.AXIS_LABEL_PADDING && yPos <= canvasHeight + C.AXIS_LABEL_PADDING) ||
+                    (yNegPos >= -C.AXIS_LABEL_PADDING && yNegPos <= canvasHeight + C.AXIS_LABEL_PADDING)) {
+                    willBeVisible = true;
+                }
+            }
+            
+            // Only add if it will be visible
+            if (willBeVisible) {
+                const existing = drawnRadiusPositions.get(r_data);
+                if (!existing) {
+                    drawnRadiusPositions.set(r_data, { alpha, isCoarser });
+                } else if (isCoarser) {
+                    drawnRadiusPositions.set(r_data, { alpha: Math.max(existing.alpha, alpha), isCoarser: true });
+                } else {
+                    if (!existing.isCoarser) {
+                        drawnRadiusPositions.set(r_data, { alpha: Math.max(existing.alpha, alpha), isCoarser: false });
+                    }
+                }
+            }
+        }
+    };
+    
+    const interval1IsCoarser = !interval2 || interval1 >= interval2;
+    addTicksForInterval(interval1, alpha1, interval1IsCoarser);
+    addTicksForInterval(interval2, alpha2, !interval1IsCoarser);
+    
+    // Draw radius ticks and labels
+    drawnRadiusPositions.forEach((tickInfo, r_data) => {
+        const effectiveAlpha = tickInfo.isCoarser ? 1.0 : tickInfo.alpha;
+        const tickLabelColor = `rgba(${colors.axisTickLabel.join(',')}, ${C.AXIS_TICK_LABEL_ALPHA * effectiveAlpha})`;
+        ctx.strokeStyle = tickLabelColor;
+        ctx.lineWidth = C.GRID_LINEWIDTH;
+        
+        // Format the label text
+        let labelText;
+        if (useScientific) {
+            const logValue = Math.log10(Math.abs(r_data));
+            const exponent = Math.floor(logValue);
+            const intervalInSameScale = primaryInterval / Math.pow(10, exponent);
+            const decimalPlacesNeeded = Math.max(0, -Math.floor(Math.log10(intervalInSameScale)) + 1);
+            
+            const expStr = Math.abs(r_data).toExponential(decimalPlacesNeeded);
+            const parts = expStr.split('e');
+            let coefficientStr = parts[0];
+            coefficientStr = coefficientStr.replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '');
+            let exp = parseInt(parts[1], 10);
+            const sign = r_data < 0 ? "-" : "";
+            labelText = `${sign}${coefficientStr} \\cdot 10^{${exp}}`;
+        } else {
+            labelText = r_data.toFixed(decimalPlaces).replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '');
+        }
+        
+        const stableIdPart = r_data.toExponential(15);
+
+        // Draw ticks on X-axis (only if Y axis is visible)
+        if (isYAxisOnScreen) {
+            const pX = dataToScreen({ x: r_data, y: 0 });
+            if (pX.x > -C.AXIS_LABEL_PADDING && pX.x < canvasWidth + C.AXIS_LABEL_PADDING) {
+                ctx.beginPath(); 
+                ctx.moveTo(pX.x, origin.y - C.AXIS_TICK_SIZE / 2); 
+                ctx.lineTo(pX.x, origin.y + C.AXIS_TICK_SIZE / 2); 
+                ctx.stroke();
+                updateHtmlLabel({ 
+                    id: `polartick-r-x-${stableIdPart}`, 
+                    content: labelText, 
+                    x: pX.x, 
+                    y: origin.y + C.AXIS_TICK_SIZE + C.AXIS_LABEL_OFFSET, 
+                    color: tickLabelColor, 
+                    fontSize: C.AXIS_TICK_FONT_SIZE, 
+                    options: { textAlign: 'center', textBaseline: 'top' } 
+                });
+            }
+            
+            const pNegX = dataToScreen({ x: -r_data, y: 0 });
+            if (pNegX.x > -C.AXIS_LABEL_PADDING && pNegX.x < canvasWidth + C.AXIS_LABEL_PADDING) {
+                ctx.beginPath(); 
+                ctx.moveTo(pNegX.x, origin.y - C.AXIS_TICK_SIZE / 2); 
+                ctx.lineTo(pNegX.x, origin.y + C.AXIS_TICK_SIZE / 2); 
+                ctx.stroke();
+                updateHtmlLabel({ 
+                    id: `polartick-r-negx-${stableIdPart}`, 
+                    content: labelText, 
+                    x: pNegX.x, 
+                    y: origin.y + C.AXIS_TICK_SIZE + C.AXIS_LABEL_OFFSET, 
+                    color: tickLabelColor, 
+                    fontSize: C.AXIS_TICK_FONT_SIZE, 
+                    options: { textAlign: 'center', textBaseline: 'top' } 
+                });
+            }
+        }
+        
+        // Draw ticks on Y-axis (only if X axis is visible)
+        if (isXAxisOnScreen) {
+            const pPosY = dataToScreen({ x: 0, y: r_data });
+            if (pPosY.y > -C.AXIS_LABEL_PADDING && pPosY.y < canvasHeight + C.AXIS_LABEL_PADDING) {
+                ctx.beginPath(); 
+                ctx.moveTo(origin.x - C.AXIS_TICK_SIZE / 2, pPosY.y); 
+                ctx.lineTo(origin.x + C.AXIS_TICK_SIZE / 2, pPosY.y); 
+                ctx.stroke();
+                updateHtmlLabel({ 
+                    id: `polartick-r-posy-${stableIdPart}`, 
+                    content: labelText, 
+                    x: origin.x - C.AXIS_TICK_SIZE - C.AXIS_LABEL_OFFSET, 
+                    y: pPosY.y, 
+                    color: tickLabelColor, 
+                    fontSize: C.AXIS_TICK_FONT_SIZE, 
+                    options: { textAlign: 'right', textBaseline: 'middle' } 
+                });
+            }
+            
+            const pNegY = dataToScreen({ x: 0, y: -r_data });
+            if (pNegY.y > -C.AXIS_LABEL_PADDING && pNegY.y < canvasHeight + C.AXIS_LABEL_PADDING) {
+                ctx.beginPath(); 
+                ctx.moveTo(origin.x - C.AXIS_TICK_SIZE / 2, pNegY.y); 
+                ctx.lineTo(origin.x + C.AXIS_TICK_SIZE / 2, pNegY.y); 
+                ctx.stroke();
+                updateHtmlLabel({ 
+                    id: `polartick-r-negy-${stableIdPart}`, 
+                    content: labelText, 
+                    x: origin.x - C.AXIS_TICK_SIZE - C.AXIS_LABEL_OFFSET, 
+                    y: pNegY.y, 
+                    color: tickLabelColor, 
+                    fontSize: C.AXIS_TICK_FONT_SIZE, 
+                    options: { textAlign: 'right', textBaseline: 'middle' } 
+                });
+            }
+        }
+    });
+}
+
+// Function for drawing polar axis lines and labels
+export function drawPolarAxisLines(ctx, htmlOverlay, { canvas, dpr, colors }, dataToScreen, updateHtmlLabel) {
+    const canvasWidth = canvas.width / dpr;
+    const canvasHeight = canvas.height / dpr;
+    const origin = dataToScreen({ x: 0, y: 0 });
+    
+    const drawAxisWithArrows = (x1, y1, x2, y2) => {
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.stroke();
+        const angle = Math.atan2(y2 - y1, x2 - x1);
+        ctx.beginPath();
+        ctx.moveTo(x2, y2);
+        ctx.lineTo(x2 - C.AXIS_ARROW_SIZE * Math.cos(angle - C.AXIS_ARROW_ANGLE_RAD), y2 - C.AXIS_ARROW_SIZE * Math.sin(angle - C.AXIS_ARROW_ANGLE_RAD));
+        ctx.lineTo(x2 - C.AXIS_ARROW_SIZE * Math.cos(angle + C.AXIS_ARROW_ANGLE_RAD), y2 - C.AXIS_ARROW_SIZE * Math.sin(angle + C.AXIS_ARROW_ANGLE_RAD));
+        ctx.closePath();
+        ctx.fill();
+    };
+    
+    ctx.lineWidth = C.GRID_LINEWIDTH;
+    
+    const posXVisible = canvasWidth > origin.x;
+    const negXVisible = 0 < origin.x;
+    const posYVisible = 0 < origin.y;
+    const negYVisible = canvasHeight > origin.y;
+    
+    if (posXVisible) {
+        drawAxisWithArrows(origin.x, origin.y, canvasWidth, origin.y);
+        updateHtmlLabel({ 
+            id: 'axis-label-r-posx', 
+            content: C.POLAR_RADIUS_SYMBOL, 
+            x: canvasWidth - C.AXIS_ARROW_SIZE - C.X_AXIS_LABEL_ARROW_DIST, 
+            y: origin.y - C.X_AXIS_LABEL_DISTANCE, 
+            color: colors.axis, 
+            fontSize: C.AXIS_NAME_FONT_SIZE, 
+            options: { textAlign: 'center', textBaseline: 'bottom' } 
+        });
+    }
+    
+    if (negXVisible) {
+        drawAxisWithArrows(origin.x, origin.y, 0, origin.y);
+        updateHtmlLabel({ 
+            id: 'axis-label-r-negx', 
+            content: C.POLAR_RADIUS_SYMBOL, 
+            x: C.AXIS_ARROW_SIZE + C.X_AXIS_LABEL_ARROW_DIST, 
+            y: origin.y - C.X_AXIS_LABEL_DISTANCE, 
+            color: colors.axis, 
+            fontSize: C.AXIS_NAME_FONT_SIZE, 
+            options: { textAlign: 'center', textBaseline: 'bottom' } 
+        });
+    }
+    
+    if (posYVisible) {
+        drawAxisWithArrows(origin.x, origin.y, origin.x, 0);
+        updateHtmlLabel({ 
+            id: 'axis-label-r-posy', 
+            content: C.POLAR_RADIUS_SYMBOL, 
+            x: origin.x + C.Y_AXIS_LABEL_DISTANCE, 
+            y: C.AXIS_ARROW_SIZE + C.Y_AXIS_LABEL_ARROW_DIST, 
+            color: colors.axis, 
+            fontSize: C.AXIS_NAME_FONT_SIZE, 
+            options: { textAlign: 'left', textBaseline: 'middle' } 
+        });
+    }
+    
+    if (negYVisible) {
+        drawAxisWithArrows(origin.x, origin.y, origin.x, canvasHeight);
+        updateHtmlLabel({ 
+            id: 'axis-label-r-negy', 
+            content: C.POLAR_RADIUS_SYMBOL, 
+            x: origin.x + C.Y_AXIS_LABEL_DISTANCE, 
+            y: canvasHeight - C.AXIS_ARROW_SIZE - C.Y_AXIS_LABEL_ARROW_DIST, 
+            color: colors.axis, 
+            fontSize: C.AXIS_NAME_FONT_SIZE, 
+            options: { textAlign: 'left', textBaseline: 'middle' } 
+        });
+    }
+}
+
+// Separate function for drawing polar spokes with same optimization as polar reference circle
+function drawPolarSpokes(ctx, { canvas, dpr, colors, gridAlpha }, origin, maxDataRadius, viewTransform, lastAngularGridState) {
+    if (!lastAngularGridState || !Array.isArray(lastAngularGridState)) {
+        return;
+    }
+
+    const canvasWidth = canvas.width / dpr;
+    const canvasHeight = canvas.height / dpr;
+    const screenRadiusForSpokes = maxDataRadius * viewTransform.scale / dpr;
+    const drawnAngles = new Set();
+    
+    // Use same transition logic as polar reference circle  
+    const spokesTransitionRadius = Math.min(canvasWidth, canvasHeight) * 400;
+    const isLineMode = screenRadiusForSpokes > spokesTransitionRadius;
+    
+    let visibleAngleInfo = null;
+    if (isLineMode) {
+        // Same intersection logic as polar reference circle
+        const screenRect = { x: 0, y: 0, w: canvasWidth, h: canvasHeight };
+        const circle = { x: origin.x, y: origin.y, r: screenRadiusForSpokes };
+        const intersections = getCircleRectIntersections(circle, screenRect);
+
+        if (intersections.length >= 2) {
+            let p1 = intersections[0], p2 = intersections[1];
+            let maxDistSq = 0;
+            for (let i = 0; i < intersections.length; i++) {
+                for (let j = i + 1; j < intersections.length; j++) {
+                    const dSq = (intersections[i].x - intersections[j].x)**2 + (intersections[i].y - intersections[j].y)**2;
+                    if (dSq > maxDistSq) {
+                        maxDistSq = dSq;
+                        p1 = intersections[i];
+                        p2 = intersections[j];
+                    }
+                }
+            }
+            const angle1 = (Math.atan2(origin.y - p1.y, p1.x - origin.x) * 180 / Math.PI + 360) % 360;
+            const angle2 = (Math.atan2(origin.y - p2.y, p2.x - origin.x) * 180 / Math.PI + 360) % 360;
+            visibleAngleInfo = { ranges: [[Math.min(angle1, angle2), Math.max(angle1, angle2)]], isFullCircle: false };
+            if (Math.abs(angle1 - angle2) > 180) {
+                visibleAngleInfo = { ranges: [[Math.max(angle1, angle2), Math.min(angle1, angle2) + 360]], isFullCircle: false };
+            }
+        }
+    } else {
+        visibleAngleInfo = { ranges: [[0, 360]], isFullCircle: true };
+    }
+
+    if (!visibleAngleInfo) {
+        return;
+    }
+
+    lastAngularGridState.forEach(level => {
+        if (level.alpha < C.MIN_ALPHA_FOR_DRAWING) return;
+
+        // Remove the spacing check that was stopping fine spokes
+        // Spokes should always be drawn, getting finer as you zoom in
+        // const screenSeparation = screenRadiusForSpokes * (level.angle * Math.PI / 180);
+        // if (screenSeparation < C.GRID_POLAR_SPOKE_MIN_SPACING && screenRadiusForSpokes > C.GRID_POLAR_SPOKE_MIN_RADIUS) return;
+
+        ctx.strokeStyle = `rgba(${colors.grid.join(',')}, ${level.alpha * gridAlpha})`;
+        ctx.lineWidth = C.GRID_LINEWIDTH;
+
+        let anglesToProcess = [];
+        if (visibleAngleInfo.isFullCircle) {
+            for (let deg = 0; deg < C.DEGREES_IN_CIRCLE; deg += level.angle) {
+                anglesToProcess.push(deg);
+            }
+        } else {
+            // Process visible ranges only
+            visibleAngleInfo.ranges.forEach(range => {
+                const [minAngle, maxAngle] = range;
+                const rangeAngles = generateOptimizedAngleSequence(level.angle, minAngle, maxAngle);
+                anglesToProcess.push(...rangeAngles);
+            });
+            anglesToProcess = [...new Set(anglesToProcess)];
+        }
+
+        anglesToProcess.forEach(angle => {
+            if (drawnAngles.has(angle)) return;
+
+            const rad = angle * Math.PI / 180;
+            const endX = origin.x + screenRadiusForSpokes * Math.cos(rad);
+            const endY = origin.y - screenRadiusForSpokes * Math.sin(rad);
+            ctx.beginPath();
+            ctx.moveTo(origin.x, origin.y);
+            ctx.lineTo(endX, endY);
+            ctx.stroke();
+            drawnAngles.add(angle);
+        });
+    });
 }
 
 export function drawGrid(ctx, { gridDisplayMode, canvas, dpr, viewTransform, gridAlpha, colors }, dataToScreen, screenToData, lastGridState, lastAngularGridState) {
@@ -1905,7 +2345,11 @@ export function drawGrid(ctx, { gridDisplayMode, canvas, dpr, viewTransform, gri
 
             ctx.strokeStyle = `rgba(${colors.grid.join(',')}, ${alpha * gridAlpha})`;
             ctx.lineWidth = C.GRID_LINEWIDTH;
-            for (let r = interval; r <= maxDataRadius; r += interval) {
+            const startMultiplier = 1;
+            const endMultiplier = Math.ceil(maxDataRadius / interval);
+            
+            for (let i = startMultiplier; i <= endMultiplier; i++) {
+                const r = i * interval;
                 const screenRadius = r * viewTransform.scale / dpr;
                 
                 if (screenRadius > transitionRadius) {
@@ -1938,83 +2382,40 @@ export function drawGrid(ctx, { gridDisplayMode, canvas, dpr, viewTransform, gri
             }
         };
 
+        // Draw polar circles
         drawPolarCircles(lastGridState.interval1, lastGridState.alpha1);
         drawPolarCircles(lastGridState.interval2, lastGridState.alpha2);
 
-        const screenRadiusForSpokes = maxDataRadius * viewTransform.scale / dpr;
-        const drawnAngles = new Set();
-        
-        let visibleAngleInfo = null;
-        if (screenRadiusForSpokes < canvasWidth * 10) {
-            visibleAngleInfo = { ranges: [[0, 360]], isFullCircle: true };
-        } else {
-            visibleAngleInfo = calculateVisibleAngleRange(origin, screenRadiusForSpokes, canvasWidth, canvasHeight);
-        }
-
-        if (!visibleAngleInfo) {
-            ctx.restore();
-            return;
-        }
-
-        lastAngularGridState.forEach(level => {
-            if (level.alpha < C.MIN_ALPHA_FOR_DRAWING) return;
-
-            const screenSeparation = screenRadiusForSpokes * (level.angle * Math.PI / 180);
-            if (screenSeparation < C.GRID_POLAR_SPOKE_MIN_SPACING && screenRadiusForSpokes > C.GRID_POLAR_SPOKE_MIN_RADIUS) return;
-
-            ctx.strokeStyle = `rgba(${colors.grid.join(',')}, ${level.alpha * gridAlpha})`;
-            ctx.lineWidth = C.GRID_LINEWIDTH;
-
-            let anglesToProcess = [];
-            if (visibleAngleInfo.isFullCircle) {
-                for (let deg = 0; deg < C.DEGREES_IN_CIRCLE; deg += level.angle) {
-                    anglesToProcess.push(deg);
-                }
-            } else {
-                visibleAngleInfo.ranges.forEach(range => {
-                    const [min, max] = range;
-                    anglesToProcess.push(...generateOptimizedAngleSequence(level.angle, min, max));
-                });
-                anglesToProcess = [...new Set(anglesToProcess)];
-            }
-
-            anglesToProcess.forEach(angle => {
-                if (drawnAngles.has(angle)) return;
-
-                const rad = angle * Math.PI / 180;
-                const endX = origin.x + screenRadiusForSpokes * Math.cos(rad);
-                const endY = origin.y - screenRadiusForSpokes * Math.sin(rad);
-                ctx.beginPath();
-                ctx.moveTo(origin.x, origin.y);
-                ctx.lineTo(endX, endY);
-                ctx.stroke();
-                drawnAngles.add(angle);
-            });
-        });
+        // Draw polar spokes using the optimized function
+        drawPolarSpokes(ctx, { canvas, dpr, colors, gridAlpha }, origin, maxDataRadius, viewTransform, lastAngularGridState);
 
     } else {
+        // Rectangular grid modes (lines, points, triangular)
         const drawGridElements = (interval, alpha) => {
             if (!interval || alpha < C.MIN_ALPHA_FOR_DRAWING) return;
             const gridElementColor = `rgba(${colors.grid.join(',')}, ${alpha * gridAlpha})`;
 
             const start = screenToData({ x: 0, y: canvasHeight });
             const end = screenToData({ x: canvasWidth, y: 0 });
-            const startTickX = Math.floor(start.x / interval) * interval;
-            const endTickX = Math.ceil(end.x / interval) * interval;
-            const startTickY = Math.floor(start.y / interval) * interval;
-            const endTickY = Math.ceil(end.y / interval) * interval;
+            
+            const startMultiplierX = Math.floor(start.x / interval);
+            const endMultiplierX = Math.ceil(end.x / interval);
+            const startMultiplierY = Math.floor(start.y / interval);
+            const endMultiplierY = Math.ceil(end.y / interval);
 
             if (gridDisplayMode === C.GRID_DISPLAY_MODE_LINES) {
                 ctx.strokeStyle = gridElementColor;
                 ctx.lineWidth = C.GRID_LINEWIDTH;
-                for (let x = startTickX; x <= endTickX; x += interval) {
+                for (let i = startMultiplierX; i <= endMultiplierX; i++) {
+                    const x = i * interval;
                     const screenX = dataToScreen({ x: x, y: 0 }).x;
                     ctx.beginPath();
                     ctx.moveTo(screenX, 0);
                     ctx.lineTo(screenX, canvasHeight);
                     ctx.stroke();
                 }
-                for (let y = startTickY; y <= endTickY; y += interval) {
+                for (let i = startMultiplierY; i <= endMultiplierY; i++) {
+                    const y = i * interval;
                     const screenY = dataToScreen({ x: 0, y: y }).y;
                     ctx.beginPath();
                     ctx.moveTo(0, screenY);
@@ -2024,8 +2425,10 @@ export function drawGrid(ctx, { gridDisplayMode, canvas, dpr, viewTransform, gri
             } else if (gridDisplayMode === C.GRID_DISPLAY_MODE_POINTS) {
                 ctx.fillStyle = gridElementColor;
                 const vertexRadius = C.GRID_POINT_RADIUS * dpr;
-                for (let x = startTickX; x <= endTickX; x += interval) {
-                    for (let y = startTickY; y <= endTickY; y += interval) {
+                for (let i = startMultiplierX; i <= endMultiplierX; i++) {
+                    const x = i * interval;
+                    for (let j = startMultiplierY; j <= endMultiplierY; j++) {
+                        const y = j * interval;
                         const screenPos = dataToScreen({ x: x, y: y });
                         ctx.beginPath();
                         ctx.arc(screenPos.x, screenPos.y, vertexRadius, 0, C.RADIANS_IN_CIRCLE);
@@ -2037,13 +2440,15 @@ export function drawGrid(ctx, { gridDisplayMode, canvas, dpr, viewTransform, gri
                 const vertexRadius = C.GRID_POINT_RADIUS * dpr;
                 const y_step = interval * C.TRIANGULAR_GRID_Y_STEP_FACTOR;
                 
-                const startTickY_tri = Math.floor(start.y / y_step) * y_step;
-                const endTickY_tri = Math.ceil(end.y / y_step) * y_step;
+                const startMultiplierY_tri = Math.floor(start.y / y_step);
+                const endMultiplierY_tri = Math.ceil(end.y / y_step);
                 
-                for (let y = startTickY_tri; y <= endTickY_tri; y += y_step) {
-                    const rowIndex = Math.round(y / y_step);
+                for (let j = startMultiplierY_tri; j <= endMultiplierY_tri; j++) {
+                    const y = j * y_step;
+                    const rowIndex = j;
                     const x_offset = (rowIndex % 2 !== 0) ? interval / 2 : 0;
-                    for (let x = startTickX; x <= endTickX; x += interval) {
+                    for (let i = startMultiplierX; i <= endMultiplierX; i++) {
+                        const x = i * interval;
                         const finalX = x + x_offset;
                         const screenPos = dataToScreen({ x: finalX, y: y });
                         ctx.beginPath();
@@ -2053,9 +2458,11 @@ export function drawGrid(ctx, { gridDisplayMode, canvas, dpr, viewTransform, gri
                 }
             }
         };
+        
         drawGridElements(lastGridState.interval1, lastGridState.alpha1);
         drawGridElements(lastGridState.interval2, lastGridState.alpha2);
     }
+    
     ctx.restore();
 }
 
@@ -2763,7 +3170,7 @@ export function prepareReferenceElementsTexts(htmlOverlay, context, { showAngles
     }
 }
 
-export function updateMouseCoordinates(htmlOverlay, { coordsDisplayMode, isMouseOverCanvas, currentShiftPressed, ghostVertexPosition, gridDisplayMode, lastGridState, angleDisplayMode, canvas, dpr, mousePos, colors}, screenToData, updateHtmlLabel) {
+export function updateMouseCoordinates(htmlOverlay, { coordsDisplayMode, isMouseOverCanvas, currentShiftPressed, ghostVertexPosition, gridDisplayMode, lastGridState, angleDisplayMode, canvas, dpr, mousePos, colors, useScientific }, screenToData, updateHtmlLabel) {
     
     if (coordsDisplayMode === C.COORDS_DISPLAY_MODE_NONE || !mousePos || !isMouseOverCanvas) {
         return;
@@ -2778,44 +3185,112 @@ export function updateMouseCoordinates(htmlOverlay, { coordsDisplayMode, isMouse
 
     let effectiveGridInterval = 1;
     if (gridDisplayMode !== C.GRID_DISPLAY_MODE_NONE && lastGridState && lastGridState.interval1) {
-        effectiveGridInterval = (lastGridState.alpha2 > lastGridState.alpha1 && lastGridState.interval2) ? lastGridState.interval2 : lastGridState.interval1;
+        effectiveGridInterval = lastGridState.interval1;
     }
 
-    let decimalPlaces = 0;
-    if (effectiveGridInterval > 0) {
-        decimalPlaces = Math.max(0, -Math.floor(Math.log10(effectiveGridInterval * C.COORD_PRECISION_FACTOR)));
-        decimalPlaces = Math.min(decimalPlaces + 1, C.MAX_COORD_DECIMAL_PLACES);
+    // Mouse coordinates should be 1 decimal place more precise than the finest tick spacing
+    let finestInterval = effectiveGridInterval;
+    if (lastGridState && lastGridState.interval2 && lastGridState.interval2 < finestInterval) {
+        finestInterval = lastGridState.interval2;
     }
+    
+    // Mouse coordinates precision based on tick interval:
+    // - 10000+ → round to nearest 100 (2 fewer sig figs)
+    // - 1000 → round to nearest 10 (1 fewer sig fig)  
+    // - 100 → round to nearest 1 (0 decimals)
+    // - 10 → 1 decimal place
+    // - 1 → 2 decimal places
+    // - 0.1 → 3 decimal places, etc.
+    
+    let mouseDecimalPlaces;
+    let roundingFactor = 1;
+    
+    if (finestInterval >= 10000) {
+        // Round to nearest 100, show as integers
+        roundingFactor = 100;
+        mouseDecimalPlaces = 0;
+    } else if (finestInterval >= 1000) {
+        // Round to nearest 10, show as integers  
+        roundingFactor = 10;
+        mouseDecimalPlaces = 0;
+    } else if (finestInterval >= 100) {
+        // Round to nearest 1, show as integers
+        roundingFactor = 1;
+        mouseDecimalPlaces = 0;
+    } else if (finestInterval >= 10) {
+        // Show 1 decimal place
+        mouseDecimalPlaces = 1;
+    } else {
+        // For smaller intervals, add 2 more decimal places than tick precision
+        const tickDecimalPlaces = Math.max(0, -Math.floor(Math.log10(finestInterval)));
+        mouseDecimalPlaces = tickDecimalPlaces + 2;
+    }
+    
+    // Calculate how many significant figures the tick interval has
+    const getSignificantFigures = (value) => {
+        if (value === 0) return 1;
+        // For tick intervals like 100000, 10000, 1000, 100, 10, 1, 0.1, 0.01 etc.
+        // These are typically 1 significant figure
+        return 1;
+    };
+    
+    const tickSigFigs = getSignificantFigures(finestInterval);
+    const mouseSigFigs = tickSigFigs + 2; // Always 2 more sig figs than ticks
+    
+    // Format coordinates with consistent precision
+    const formatCoordinate = (value) => {
+        if (useScientific) {
+            // For scientific notation, ensure both x and y have same decimal places in coefficient
+            // Always use mouseSigFigs - 1 decimal places (since first digit is before decimal)
+            const decimalPlacesInCoeff = mouseSigFigs - 1;
+            const expStr = Math.abs(value).toExponential(decimalPlacesInCoeff);
+            const parts = expStr.split('e');
+            let coefficient = parts[0];
+            let exponent = parseInt(parts[1], 10);
+            const sign = value < 0 ? "-" : "";
+            return `${sign}${coefficient} \\cdot 10^{${exponent}}`;
+        } else {
+            if (roundingFactor > 1) {
+                // Only round for large intervals (≥100)
+                const roundedValue = Math.round(value / roundingFactor) * roundingFactor;
+                return roundedValue.toFixed(mouseDecimalPlaces);
+            } else {
+                // For smaller intervals, just use fixed decimal places without rounding
+                return value.toFixed(mouseDecimalPlaces);
+            }
+        }
+    };
 
-    const angleDecimalPlaces = Math.min(decimalPlaces + 1, C.MAX_ANGLE_DECIMAL_PLACES);
+    const angleDecimalPlaces = Math.min(mouseDecimalPlaces, C.MAX_ANGLE_DECIMAL_PLACES);
+    
     let textContent = '';
 
     switch (coordsDisplayMode) {
         case C.COORDS_DISPLAY_MODE_REGULAR: {
-            let xValue = displayPos.x;
-            let yValue = displayPos.y;
-            let xText = xValue.toFixed(decimalPlaces);
-            if (xValue >= 0) xText = `${C.KATEX_MINUS_PHANTOM}${xText}`;
-            let yText = yValue.toFixed(decimalPlaces);
-            if (yValue >= 0) yText = `${C.KATEX_MINUS_PHANTOM}${yText}`;
+            // Both x and y use the same decimal places
+            let xText = formatCoordinate(displayPos.x);
+            if (displayPos.x >= 0 && !xText.includes('cdot')) xText = `${C.KATEX_MINUS_PHANTOM}${xText}`;
+            let yText = formatCoordinate(displayPos.y);
+            if (displayPos.y >= 0 && !yText.includes('cdot')) yText = `${C.KATEX_MINUS_PHANTOM}${yText}`;
             textContent = `\\begin{pmatrix*}[r] x \\\\ y \\end{pmatrix*} = \\begin{pmatrix*}[r] ${xText} \\\\ ${yText} \\end{pmatrix*}`;
             break;
         }
         case C.COORDS_DISPLAY_MODE_COMPLEX: {
-            let reValue = displayPos.x;
-            let imValue = displayPos.y;
-            let rePart = reValue.toFixed(decimalPlaces);
-            if (reValue >= 0) rePart = `${C.KATEX_MINUS_PHANTOM}${rePart}`;
-            let imPartAbs = Math.abs(imValue).toFixed(decimalPlaces);
-            const sign = imValue < 0 ? '-' : '+';
+            // Both real and imaginary parts use the same decimal places
+            let rePart = formatCoordinate(displayPos.x);
+            if (displayPos.x >= 0 && !rePart.includes('cdot')) rePart = `${C.KATEX_MINUS_PHANTOM}${rePart}`;
+            const imAbs = Math.abs(displayPos.y);
+            let imPartAbs = formatCoordinate(imAbs);
+            const sign = displayPos.y < 0 ? '-' : '+';
             textContent = `z = ${rePart} ${sign} ${imPartAbs}${C.IMAGINARY_UNIT_SYMBOL}`;
             break;
         }
         case C.COORDS_DISPLAY_MODE_POLAR: {
-            let rValue = Math.hypot(displayPos.x, displayPos.y);
-            let thetaRaw = Math.atan2(displayPos.y, displayPos.x);
-            let rText = rValue.toFixed(decimalPlaces);
-            if (rValue >= 0) rText = `${C.KATEX_MINUS_PHANTOM}${rText}`;
+            const rValue = Math.hypot(displayPos.x, displayPos.y);
+            const thetaRaw = Math.atan2(displayPos.y, displayPos.x);
+            
+            let rText = formatCoordinate(rValue);
+            if (rValue >= 0 && !rText.includes('cdot')) rText = `${C.KATEX_MINUS_PHANTOM}${rText}`;
             let angleStr;
             if (angleDisplayMode === C.ANGLE_DISPLAY_MODE_DEGREES) {
                 let thetaDeg = U.normalizeAngleDegrees(thetaRaw * 180 / Math.PI);
@@ -2833,7 +3308,15 @@ export function updateMouseCoordinates(htmlOverlay, { coordsDisplayMode, isMouse
     }
 
     const canvasWidth = canvas.width / dpr;
-    updateHtmlLabel({ id: 'mouse-coord-text', content: textContent, x: canvasWidth - C.UI_PADDING, y: C.UI_PADDING, color: colors.mouseCoords, fontSize: C.MOUSE_COORD_FONT_SIZE, options: { textAlign: 'right', textBaseline: 'top' } }, htmlOverlay);
+    updateHtmlLabel({ 
+        id: 'mouse-coord-text', 
+        content: textContent, 
+        x: canvasWidth - C.UI_PADDING, 
+        y: C.UI_PADDING, 
+        color: colors.mouseCoords, 
+        fontSize: C.MOUSE_COORD_FONT_SIZE, 
+        options: { textAlign: 'right', textBaseline: 'top' } 
+    });
 }
 
 export function createColorWheelIcon(size, dpr) {
@@ -6143,13 +6626,17 @@ function zoomAt(zoomCenterScreen_css_pixels, scaleFactor) {
     if (newScale < C.MIN_SCALE_VALUE) {
         newScale = C.MIN_SCALE_VALUE;
     }
+    if (newScale > C.MAX_SCALE_VALUE) {
+        newScale = C.MAX_SCALE_VALUE;
+    }
+
+    const effectiveScaleFactor = newScale / viewTransform.scale;
 
     const mouseX_physical = zoomCenterScreen_css_pixels.x * dpr;
     const mouseY_physical = zoomCenterScreen_css_pixels.y * dpr;
 
-    viewTransform.offsetX = mouseX_physical * (1 - scaleFactor) + viewTransform.offsetX * scaleFactor;
-
-    viewTransform.offsetY = (canvas.height - mouseY_physical) * (1 - scaleFactor) + viewTransform.offsetY * scaleFactor;
+    viewTransform.offsetX = mouseX_physical * (1 - effectiveScaleFactor) + viewTransform.offsetX * effectiveScaleFactor;
+    viewTransform.offsetY = (canvas.height - mouseY_physical) * (1 - effectiveScaleFactor) + viewTransform.offsetY * effectiveScaleFactor;
 
     viewTransform.scale = newScale;
 }
@@ -7013,6 +7500,7 @@ function getBestDirectionalScaleSnap(center, initialVertexStates, handleVertex, 
 
 function redrawAll() {
     labelsToKeepThisFrame.clear();
+    let axisFormatInfo = { useScientific: false };
     const colors = getColors();
     R.clearCanvas(ctx, { canvas, dpr, colors });
 
@@ -7027,7 +7515,7 @@ function redrawAll() {
 
     if (coordsDisplayMode !== C.COORDS_DISPLAY_MODE_NONE) {
         const stateForAxes = { canvas, dpr, coordsDisplayMode, viewTransform, angleDisplayMode, colors };
-        R.drawAxes(ctx, htmlOverlay, stateForAxes, dataToScreen, screenToData, lastGridState, lastAngularGridState, updateHtmlLabel);
+        axisFormatInfo = R.drawAxes(ctx, htmlOverlay, stateForAxes, dataToScreen, screenToData, lastGridState, lastAngularGridState, updateHtmlLabel);
     }
 
     if (facesVisible && allVertices.length > 0) {
@@ -7247,8 +7735,7 @@ function redrawAll() {
         R.drawTransformIndicators(ctx, htmlOverlay, { transformIndicatorData, angleSigFigs, distanceSigFigs, colors, coordSystemTransformIndicatorData }, dataToScreen, updateHtmlLabel);
     }
 
-    R.updateMouseCoordinates(htmlOverlay, { coordsDisplayMode, isMouseOverCanvas, currentShiftPressed, ghostVertexPosition, gridDisplayMode, lastGridState, angleDisplayMode, canvas, dpr, mousePos, colors }, screenToData, updateHtmlLabel);
-
+    R.updateMouseCoordinates(htmlOverlay, { coordsDisplayMode, isMouseOverCanvas, currentShiftPressed, ghostVertexPosition, gridDisplayMode, lastGridState, angleDisplayMode, canvas, dpr, mousePos, colors, useScientific: axisFormatInfo.useScientific }, screenToData, updateHtmlLabel);
     const stateForUI = {
         dpr, canvasUI, isToolbarExpanded, isColorPaletteExpanded, isTransformPanelExpanded, isDisplayPanelExpanded, isVisibilityPanelExpanded,
         isPlacingTransform, placingTransformType, placingSnapPos, mousePos,
@@ -9988,12 +10475,13 @@ html, body {
 import * as C from './constants.js';
 
 
-export function formatNumber(value, sigFigs) {
+export function formatNumber(value, sigFigs, forceScientific = false) {
     if (value === 0) return "0";
     const absValue = Math.abs(value);
     const sign = value < 0 ? "-" : "";
     let formattedString;
-    if (absValue >= C.SCIENTIFIC_NOTATION_UPPER_BOUND || (absValue !== 0 && absValue < C.SCIENTIFIC_NOTATION_LOWER_BOUND)) {
+    if (forceScientific || absValue >= C.SCIENTIFIC_NOTATION_UPPER_BOUND || (absValue !== 0 && absValue < C.SCIENTIFIC_NOTATION_LOWER_BOUND)) {
+        if (value === 0) return "0";
         const expStr = absValue.toExponential(Math.max(0, sigFigs - 1));
         const parts = expStr.split('e');
         let coefficient = parseFloat(parts[0]).toString();
@@ -10015,7 +10503,6 @@ export function formatNumber(value, sigFigs) {
         } else {
             decimalPlacesToDisplay = Math.max(0, sigFigs - integerDigits);
         }
-        decimalPlacesToDisplay = Math.min(decimalPlacesToDisplay, C.MAX_DECIMAL_PLACES_FORMAT);
         let fixedStr = absValue.toFixed(decimalPlacesToDisplay);
         let num = parseFloat(fixedStr);
         if (Math.abs(num) === 0 && value !== 0) {
