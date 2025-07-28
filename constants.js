@@ -1,6 +1,14 @@
 // constants.js
 
 export const BASE_THEME = {
+    activeCenterGlow: '#00ffff',
+    uiIconDisabled: '#ff0000',
+    helperLine: 'rgba(200, 200, 200, 0.6)',
+    coordSysX: '#ff0000',
+    coordSysY: '#00ff00',
+    coordSysOrigin: '#0000ff',
+    checkerboardColor1: '#808080',
+    checkerboardColor2: '#c0c0c0',
     background: '#1a1a1a',
     htmlBody: '#1e1e1e',
     grid: [136, 136, 136],
@@ -57,6 +65,12 @@ export const HELPER_LINE_DASH_PATTERN = [2, 3];
 export const REF_LINE_DASH_PATTERN = [1, 3];
 
 // --- INTERACTION ---
+export const COORD_SYSTEM_CENTER_SNAP_THRESHOLD = 0.01;
+export const COORD_SYSTEM_ELEMENT_SELECT_RADIUS = 8;
+export const COORD_SYSTEM_AXIS_SELECT_THRESHOLD = 5;
+export const COORD_SYSTEM_AXIS_SNAP_THRESHOLD_RAD = Math.PI / 24;
+export const COORD_SYSTEM_AXIS_SCALE_SNAP_THRESHOLD_PIXELS = 15;
+export const TRANSFORM_SCALE_SNAP_PRIORITY_THRESHOLD = 0.1;
 export const EDGE_ID_DELIMITER = '_EDGE_';
 export const DOUBLE_CLICK_MS = 300;
 export const DRAG_THRESHOLD = 3;
@@ -74,6 +88,11 @@ export const BISECTOR_LINE_EXTENSION_FACTOR = 100000;
 export const GRID_SNAP_THRESHOLD_FACTOR = 0.8;
 
 // --- AXES & TICKS ---
+export const POLAR_REF_TICK_ALPHA_THRESHOLD = 0.01;
+export const POLAR_REF_TICK_LABEL_ALPHA_FACTOR = 0.95;
+export const POLAR_REF_LABEL_MARGIN = 100;
+export const POLAR_REF_LINE_WIDTH = 1.5;
+export const POLAR_GRID_SPOKE_WIDTH_FACTOR = 0.5;
 export const AXIS_LINE_WIDTH = 1.5;
 export const AXIS_TICK_SIZE = 4;
 export const AXIS_TICK_LABEL_ALPHA = 0.9;
@@ -110,6 +129,10 @@ export const DEFAULT_REFERENCE_ANGLE_RAD = Math.PI / 2;
 export const DEFAULT_POLAR_ANGLE_DIFF = 30;
 
 // --- UI & TOOLBAR ---
+export const UI_ICON_DISABLED_FILL = '#808080';
+export const UI_COLOR_TARGET_UNASSIGNED = 'rgba(128, 128, 128, 1)';
+export const FACE_COORD_SYSTEM_ORIGIN_RADIUS = 4;
+export const FACE_GLOW_ALPHA = 0.25;
 export const UI_BUTTON_PADDING = 10;
 export const UI_TOOLBAR_WIDTH = 56;
 export const UI_SWATCH_SIZE = 30;
@@ -147,6 +170,8 @@ export const COLOR_WHEEL_FADE_START_RADIUS_FACTOR = 0.75;
 export const DEFAULT_RECENT_COLORS = ['#ffffff', '#BFC5D0', '#808080', '#ff4444', '#44ff44', '#4444ff', '#ffff44', '#ff44ff']
 
 // --- FEEDBACK LABELS & TEXT ---
+export const TRANSFORM_INDICATOR_PRECISION = 4;
+export const TRANSFORM_INDICATOR_SCALE_SNAP_TOLERANCE = 0.001;
 export const FEEDBACK_LABEL_FONT_SIZE = 12;
 export const FEEDBACK_ARC_RADIUS_SCREEN = 30;
 export const FEEDBACK_DISTANCE_LABEL_OFFSET_SCREEN = 18;

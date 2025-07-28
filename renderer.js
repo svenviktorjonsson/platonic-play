@@ -3538,8 +3538,8 @@ export function drawVisibilityIcon(ctx, rect, colors) {
 function drawColorPalette(ctx, htmlOverlay, state, updateHtmlLabel) {
     const { canvasUI, colors, allColors, namedColors, colorAssignments, activeColorTargets, verticesVisible, edgesVisible, facesVisible, isDraggingColorTarget, draggedColorTargetInfo, mousePos } = state;
 
-    const checkerboardColor1 = '#808080';
-    const checkerboardColor2 = '#c0c0c0';
+    const checkerboardColor1 = colors.checkerboardColor1;
+    const checkerboardColor2 = colors.checkerboardColor2;
     
     function drawCheckerboard(rect) {
         const tileSize = rect.height / 3;
@@ -3888,7 +3888,7 @@ function drawTriangleIcon(ctx, rect, options, colors, isActive = false) {
     const hasDisabledElements = vertexState === 'disabled' || edgeState === 'disabled' || faceState === 'disabled';
     
     if (showAllDisabled) {
-        ctx.strokeStyle = '#ff0000';
+        ctx.strokeStyle = colors.uiIconDisabled;
         ctx.lineWidth = 2;
         ctx.setLineDash([]);
         ctx.beginPath();
@@ -3896,7 +3896,7 @@ function drawTriangleIcon(ctx, rect, options, colors, isActive = false) {
         ctx.lineTo(30, 30);
         ctx.stroke();
     } else if (hasDisabledElements) {
-        ctx.strokeStyle = '#ff0000';
+        ctx.strokeStyle = colors.uiIconDisabled;
         ctx.lineWidth = 2;
         ctx.setLineDash([]);
         ctx.beginPath();
@@ -4614,6 +4614,7 @@ export function drawFaceCoordinateSystems(ctx, { allFaces, selectedFaceIds, colo
     });
 }
 
+
 function drawCoordinateSystemCross(ctx, coordSystem, colors, dataToScreen, coordSystemSnapScale = null) {
     const centerScreen = dataToScreen(coordSystem.origin);
 
@@ -4646,14 +4647,14 @@ function drawCoordinateSystemCross(ctx, coordSystem, colors, dataToScreen, coord
     };
 
     // Determine arrow colors based on snap state
-    const xArrowColor = coordSystemSnapScale !== null ? colors.feedbackSnapped : '#ff0000'; // Red for x-axis
-    const yArrowColor = coordSystemSnapScale !== null ? colors.feedbackSnapped : '#00ff00'; // Green for y-axis
+    const xColor = coordSystemSnapScale !== null ? colors.feedbackSnapped : colors.coordSysX;
+    const yColor = coordSystemSnapScale !== null ? colors.feedbackSnapped : colors.coordSysY;
 
-    drawArrow(centerScreen, xAxisScreenEnd, '#ff0000', xArrowColor);
-    drawArrow(centerScreen, yAxisScreenEnd, '#00ff00', yArrowColor);
+    drawArrow(centerScreen, xAxisScreenEnd, xColor, xColor);
+    drawArrow(centerScreen, yAxisScreenEnd, yColor, yColor);
 
     // The center vertex for grabbing (blue dot)
-    ctx.fillStyle = '#0000ff';
+    ctx.fillStyle = colors.coordSysOrigin;
     ctx.beginPath();
     ctx.arc(centerScreen.x, centerScreen.y, 4, 0, 2 * Math.PI);
     ctx.fill();

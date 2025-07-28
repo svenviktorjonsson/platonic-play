@@ -1209,7 +1209,6 @@ export function drawPolarReferenceCircle(ctx, htmlOverlay, updateHtmlLabel, radi
                 anglesToProcess.push(deg);
             }
         } else {
-            // Handle new format with ranges array
             anglesToProcess = [];
             if (visibleAngleRange.ranges && Array.isArray(visibleAngleRange.ranges)) {
                 visibleAngleRange.ranges.forEach(range => {
@@ -1218,16 +1217,13 @@ export function drawPolarReferenceCircle(ctx, htmlOverlay, updateHtmlLabel, radi
                     anglesToProcess.push(...rangeAngles);
                 });
             } else if (visibleAngleRange.minAngle !== undefined && visibleAngleRange.maxAngle !== undefined) {
-                // Fallback for old format
                 anglesToProcess = generateOptimizedAngleSequence(level.angle, visibleAngleRange.minAngle, visibleAngleRange.maxAngle);
             }
-            // Remove duplicates
             anglesToProcess = [...new Set(anglesToProcess)];
         }
 
         anglesToProcess.forEach(deg => {
-            // Round off floating point inaccuracy
-            deg = Math.round(deg * 1e10) / 1e10; // Round to 10 decimal places to eliminate floating point errors
+            deg = Math.round(deg * 1e10) / 1e10;
             
             if (angleDisplayMode === 'degrees') {
                 if (drawnAnglesSimple.has(deg)) return;
@@ -1239,19 +1235,17 @@ export function drawPolarReferenceCircle(ctx, htmlOverlay, updateHtmlLabel, radi
 
             const angleRad = deg * Math.PI / 180;
             
-            // OPTIMIZATION: Check if this angle's label will be visible before doing expensive calculations
             const labelPos = { 
                 x: originScreen.x + (screenRadius + C.REF_TEXT_DISTANCE_LABEL_OFFSET_SCREEN) * Math.cos(angleRad), 
                 y: originScreen.y - (screenRadius + C.REF_TEXT_DISTANCE_LABEL_OFFSET_SCREEN) * Math.sin(angleRad) 
             };
             
-            // Skip if label would be way off screen
-            const labelMargin = 100; // Reasonable margin for labels
+            const labelMargin = 100;
             const isLabelVisible = labelPos.x > -labelMargin && labelPos.x < canvasWidthCSS + labelMargin && 
                                    labelPos.y > -labelMargin && labelPos.y < canvasHeightCSS + labelMargin;
             
             if (!isLabelVisible) {
-                return; // Skip this angle entirely if label won't be visible
+                return;
             }
             
             let labelOptions = { textAlign: 'center', textBaseline: 'middle' };
@@ -1333,11 +1327,9 @@ export function drawPolarReferenceCircle(ctx, htmlOverlay, updateHtmlLabel, radi
                     precision = Math.max(precision, Math.ceil(-Math.log10(level.angle)) + 1);
                 }
                 
-                // Round to eliminate floating point errors, then format
                 const cleanDeg = Math.round(deg * Math.pow(10, precision)) / Math.pow(10, precision);
                 const formattedDeg = parseFloat(cleanDeg.toFixed(precision));
                 
-                // Additional rounding to eliminate display artifacts
                 const displayValue = Math.round(formattedDeg * 1e10) / 1e10;
                 angleText = `${displayValue}^{\\circ}`;
             } else {
@@ -1349,20 +1341,11 @@ export function drawPolarReferenceCircle(ctx, htmlOverlay, updateHtmlLabel, radi
                     if (isFineTick) {
                         const radianValue = deg * Math.PI / 180;
                         
-                        let precision;
-                        if (level.angle >= 1) {
-                            precision = 3;
-                        } else if (level.angle >= 0.1) {
-                            precision = 4;
-                        } else if (level.angle >= 0.01) {
-                            precision = 5;
-                        } else if (level.angle >= 0.001) {
-                            precision = 6;
-                        } else {
-                            precision = 7;
-                        }
+                        const levelAnglePrecision = Math.max(0, (level.angle.toString().split('.')[1] || '').length);
+                        const radianPrecision = Math.max(3, levelAnglePrecision + 2);
                         
-                        let formattedRadian = radianValue.toFixed(precision);
+                        let formattedRadian = radianValue.toFixed(radianPrecision);
+                        formattedRadian = parseFloat(formattedRadian).toString();
                         
                         if (parseFloat(formattedRadian) !== 0) {
                             angleText = formattedRadian;
@@ -1427,32 +1410,51 @@ export function drawPolarReferenceCircle(ctx, htmlOverlay, updateHtmlLabel, radi
         const screenRect = { x: 0, y: 0, w: canvasWidthCSS, h: canvasHeightCSS };
         const circle = { x: originScreen.x, y: originScreen.y, r: screenRadius };
         const intersections = getCircleRectIntersections(circle, screenRect);
-        let boundaryAngles = intersections.map(p => Math.atan2(originScreen.y - p.y, p.x - originScreen.x));
-        const corners = [{x:0,y:0}, {x:screenRect.w,y:0}, {x:screenRect.w,y:screenRect.h}, {x:0,y:screenRect.h}];
-        corners.forEach(c => {
-            if (U.distance(c, circle) < circle.r) {
-                boundaryAngles.push(Math.atan2(originScreen.y - c.y, c.x - originScreen.x));
-            }
-        });
-
-        if (boundaryAngles.length > 0) {
-            boundaryAngles = boundaryAngles.map(a => (a < 0) ? a + 2 * Math.PI : a).sort((a, b) => a - b);
-            let uniqueAngles = [...new Set(boundaryAngles.map(a => parseFloat(a.toFixed(7))))];
-            if (uniqueAngles.length > 0) {
-                uniqueAngles.push(uniqueAngles[0] + 2 * Math.PI);
-                let lastVisibleEndAngle = -Infinity;
-                for (let i = 0; i < uniqueAngles.length - 1; i++) {
-                    const startAngle = uniqueAngles[i];
-                    const endAngle = uniqueAngles[i+1];
-                    const midAngle = (startAngle + endAngle) / 2;
-                    const midVertex = { x: circle.x + circle.r * Math.cos(midAngle), y: circle.y - circle.r * Math.sin(midAngle) };
-                    if (midVertex.x > 0 && midVertex.x < screenRect.w && midVertex.y > 0 && midVertex.y < screenRect.h) {
-                        lastVisibleEndAngle = endAngle;
+        
+        if (intersections.length > 0) {
+            let largestVisibleAngle = -Infinity;
+            
+            intersections.forEach(p => {
+                const angle = Math.atan2(originScreen.y - p.y, p.x - originScreen.x);
+                const normalizedAngle = angle >= 0 ? angle : angle + 2 * Math.PI;
+                
+                const testPoint = { 
+                    x: originScreen.x + screenRadius * Math.cos(normalizedAngle), 
+                    y: originScreen.y - screenRadius * Math.sin(normalizedAngle) 
+                };
+                
+                const margin = C.AXIS_LABEL_PADDING;
+                const isVisible = testPoint.x > -margin && testPoint.x < canvasWidthCSS + margin && 
+                                 testPoint.y > -margin && testPoint.y < canvasHeightCSS + margin;
+                
+                if (isVisible && normalizedAngle > largestVisibleAngle) {
+                    largestVisibleAngle = normalizedAngle;
+                }
+            });
+            
+            const corners = [{x:0,y:0}, {x:screenRect.w,y:0}, {x:screenRect.w,y:screenRect.h}, {x:0,y:screenRect.h}];
+            corners.forEach(c => {
+                if (U.distance(c, originScreen) < circle.r) {
+                    const angle = Math.atan2(originScreen.y - c.y, c.x - originScreen.x);
+                    const normalizedAngle = angle >= 0 ? angle : angle + 2 * Math.PI;
+                    
+                    const testPoint = { 
+                        x: originScreen.x + screenRadius * Math.cos(normalizedAngle), 
+                        y: originScreen.y - screenRadius * Math.sin(normalizedAngle) 
+                    };
+                    
+                    const margin = C.AXIS_LABEL_PADDING;
+                    const isVisible = testPoint.x > -margin && testPoint.x < canvasWidthCSS + margin && 
+                                     testPoint.y > -margin && testPoint.y < canvasHeightCSS + margin;
+                    
+                    if (isVisible && normalizedAngle > largestVisibleAngle) {
+                        largestVisibleAngle = normalizedAngle;
                     }
                 }
-                if (lastVisibleEndAngle > -Infinity) {
-                    stickyArrowAngle = lastVisibleEndAngle % (2 * Math.PI);
-                }
+            });
+            
+            if (largestVisibleAngle > -Infinity) {
+                stickyArrowAngle = largestVisibleAngle;
             }
         }
     }
@@ -1495,26 +1497,35 @@ function getCircleRectIntersections(circle, rect) {
     const { x: cx, y: cy, r } = circle;
     const { x: rx, y: ry, w: rw, h: rh } = rect;
     const intersections = [];
+    
+    const circleForUtils = { center: { x: cx, y: cy }, radius: r };
+    
     const checkLine = (x1, y1, x2, y2) => {
-        const dx = x2 - x1, dy = y2 - y1;
-        const a = dx * dx + dy * dy;
-        const b = 2 * (dx * (x1 - cx) + dy * (y1 - cy));
-        const c = (x1 - cx) * (x1 - cx) + (y1 - cy) * (y1 - cy) - r * r;
-        const discriminant = b * b - 4 * a * c;
-        if (discriminant < 0) return;
-        const sqrtD = Math.sqrt(discriminant);
-        const t1 = (-b + sqrtD) / (2 * a);
-        const t2 = (-b - sqrtD) / (2 * a);
-        [t1, t2].forEach(t => {
+        const line = { p1: { x: x1, y: y1 }, p2: { x: x2, y: y2 } };
+        const points = U.getLineCircleIntersection(line, circleForUtils);
+        
+        points.forEach(point => {
+            const dx = x2 - x1;
+            const dy = y2 - y1;
+            
+            let t;
+            if (Math.abs(dx) > Math.abs(dy)) {
+                t = (point.x - x1) / dx;
+            } else {
+                t = (point.y - y1) / dy;
+            }
+            
             if (t >= 0 && t <= 1) {
-                intersections.push({ x: x1 + t * dx, y: y1 + t * dy });
+                intersections.push({ x: point.x, y: point.y });
             }
         });
     };
+    
     checkLine(rx, ry, rx + rw, ry);
     checkLine(rx + rw, ry, rx + rw, ry + rh);
     checkLine(rx + rw, ry + rh, rx, ry + rh);
     checkLine(rx, ry + rh, rx, ry);
+    
     return intersections;
 }
 
@@ -2150,7 +2161,6 @@ export function drawPolarRadiusTicks(ctx, htmlOverlay, { canvas, dpr, colors }, 
     });
 }
 
-// Function for drawing polar axis lines and labels
 export function drawPolarAxisLines(ctx, htmlOverlay, { canvas, dpr, colors }, dataToScreen, updateHtmlLabel) {
     const canvasWidth = canvas.width / dpr;
     const canvasHeight = canvas.height / dpr;
@@ -2230,51 +2240,147 @@ export function drawPolarAxisLines(ctx, htmlOverlay, { canvas, dpr, colors }, da
     }
 }
 
-function drawPolarSpokes(ctx, { canvas, dpr, colors, gridAlpha }, origin, maxDataRadius, viewTransform, lastAngularGridState) {
+export function drawPolarGrid(ctx, { canvas, dpr, colors, gridAlpha }, origin, maxDataRadius, viewTransform, lastGridState, lastAngularGridState) {
+    const canvasWidth = canvas.width / dpr;
+    const canvasHeight = canvas.height / dpr;
+    const transitionRadius = Math.min(canvasWidth, canvasHeight) * C.POLAR_TO_LINE_TRANSITION_RADIUS_FACTOR;
+
+    let minViewRadius, maxViewRadius;
+    if (origin.x >= 0 && origin.x <= canvasWidth && origin.y >= 0 && origin.y <= canvasHeight) {
+        minViewRadius = 0;
+    } else {
+        const distances = [
+            U.distanceToSegment(origin.x, origin.y, 0, 0, canvasWidth, 0),
+            U.distanceToSegment(origin.x, origin.y, canvasWidth, 0, canvasWidth, canvasHeight),
+            U.distanceToSegment(origin.x, origin.y, canvasWidth, canvasHeight, 0, canvasHeight),
+            U.distanceToSegment(origin.x, origin.y, 0, canvasHeight, 0, 0)
+        ];
+        minViewRadius = Math.min(...distances);
+    }
+    
+    const corners = [
+        { x: 0, y: 0 },
+        { x: canvasWidth, y: 0 },
+        { x: canvasWidth, y: canvasHeight },
+        { x: 0, y: canvasHeight }
+    ];
+    
+    const cornerDistances = corners.map(corner => 
+        Math.sqrt((corner.x - origin.x) ** 2 + (corner.y - origin.y) ** 2)
+    );
+    
+    maxViewRadius = Math.max(...cornerDistances);
+
+    const minViewRadiusData = minViewRadius * dpr / viewTransform.scale;
+    const maxViewRadiusData = maxViewRadius * dpr / viewTransform.scale;
+
+    const drawPolarCircles = (interval, alpha) => {
+        if (!interval || alpha < C.MIN_ALPHA_FOR_DRAWING) return;
+        
+        const screenSpacing = interval * viewTransform.scale / dpr;
+        if (screenSpacing < C.GRID_POLAR_CIRCLE_MIN_SPACING) return;
+
+        ctx.strokeStyle = `rgba(${colors.grid.join(',')}, ${alpha * gridAlpha})`;
+        ctx.lineWidth = C.GRID_LINEWIDTH;
+        
+        const startMultiplier = minViewRadiusData === 0 ? 1 : Math.ceil(minViewRadiusData / interval);
+        const endMultiplier = Math.floor(maxViewRadiusData / interval);
+        
+        for (let i = startMultiplier; i <= endMultiplier; i++) {
+            const r = i * interval;
+            const screenRadius = r * viewTransform.scale / dpr;
+            
+            if (screenRadius > transitionRadius) {
+                const intersections = [];
+                const circle = { center: { x: origin.x, y: origin.y }, radius: screenRadius };
+                
+                const edges = [
+                    { p1: { x: 0, y: 0 }, p2: { x: canvasWidth, y: 0 } },
+                    { p1: { x: canvasWidth, y: 0 }, p2: { x: canvasWidth, y: canvasHeight } },
+                    { p1: { x: canvasWidth, y: canvasHeight }, p2: { x: 0, y: canvasHeight } },
+                    { p1: { x: 0, y: canvasHeight }, p2: { x: 0, y: 0 } }
+                ];
+                
+                edges.forEach(edge => {
+                    const edgeIntersections = U.getLineCircleIntersection(edge, circle);
+                    edgeIntersections.forEach(point => {
+                        if (point.x >= 0 && point.x <= canvasWidth && point.y >= 0 && point.y <= canvasHeight) {
+                            intersections.push(point);
+                        }
+                    });
+                });
+                
+                if (intersections.length >= 2) {
+                    let p1 = intersections[0], p2 = intersections[1], maxDistSq = 0;
+                    for (let j = 0; j < intersections.length; j++) {
+                        for (let k = j + 1; k < intersections.length; k++) {
+                            const dSq = (intersections[j].x - intersections[k].x)**2 + (intersections[j].y - intersections[k].y)**2;
+                            if (dSq > maxDistSq) {
+                                maxDistSq = dSq;
+                                p1 = intersections[j];
+                                p2 = intersections[k];
+                            }
+                        }
+                    }
+                    ctx.beginPath();
+                    ctx.moveTo(p1.x, p1.y);
+                    ctx.lineTo(p2.x, p2.y);
+                    ctx.stroke();
+                }
+            } else {
+                ctx.beginPath();
+                ctx.arc(origin.x, origin.y, screenRadius, 0, C.RADIANS_IN_CIRCLE);
+                ctx.stroke();
+            }
+        }
+    };
+
+    drawPolarCircles(lastGridState.interval1, lastGridState.alpha1);
+    drawPolarCircles(lastGridState.interval2, lastGridState.alpha2);
+
     if (!lastAngularGridState || !Array.isArray(lastAngularGridState)) {
         return;
     }
 
-    const canvasWidth = canvas.width / dpr;
-    const canvasHeight = canvas.height / dpr;
     const screenCenter = { x: canvasWidth / 2, y: canvasHeight / 2 };
     const baseRadius = Math.min(canvasWidth, canvasHeight) / 4;
     const panDistance = Math.sqrt((origin.x - screenCenter.x) ** 2 + (origin.y - screenCenter.y) ** 2);
-    const screenRadius = baseRadius + panDistance;
-    
-    // Use the original screenRadiusForSpokes for drawing the lines
-    const screenRadiusForSpokes = maxDataRadius * viewTransform.scale / dpr;
+    const spokeReferenceRadius = baseRadius + panDistance;
 
-    const transitionRadius = Math.min(canvasWidth, canvasHeight) * 400;
-    const isLineMode = screenRadius > transitionRadius;
+    if (spokeReferenceRadius < C.REF_CIRCLE_MIN_DISPLAY_RADIUS || !isCircleInView(origin.x, origin.y, spokeReferenceRadius, canvasWidth, canvasHeight)) {
+        return;
+    }
 
+    const isLineMode = spokeReferenceRadius > transitionRadius;
     let visibleAngleRange = null;
 
     if (isLineMode) {
-        // For spokes in line mode, we need to cover all angles from origin to all 4 corners
-        const corners = [
-            { x: 0, y: 0 },
-            { x: canvasWidth, y: 0 },
-            { x: canvasWidth, y: canvasHeight },
-            { x: 0, y: canvasHeight }
-        ];
-        
-        const cornerAngles = corners.map(corner => {
-            const angle = Math.atan2(origin.y - corner.y, corner.x - origin.x) * 180 / Math.PI;
-            return (angle + 360) % 360;
-        });
-        
-        const minAngle = Math.min(...cornerAngles);
-        const maxAngle = Math.max(...cornerAngles);
-        
-        // Check if we span across 0 degrees
-        if (maxAngle - minAngle > 180) {
-            visibleAngleRange = { minAngle: maxAngle, maxAngle: minAngle + 360, isFullCircle: false };
-        } else {
-            visibleAngleRange = { minAngle: minAngle, maxAngle: maxAngle, isFullCircle: false };
+        const screenRect = { x: 0, y: 0, w: canvasWidth, h: canvasHeight };
+        const circle = { x: origin.x, y: origin.y, r: spokeReferenceRadius };
+        const intersections = getCircleRectIntersections(circle, screenRect);
+
+        if (intersections.length >= 2) {
+            let p1 = intersections[0], p2 = intersections[1];
+            let maxDistSq = 0;
+            for (let i = 0; i < intersections.length; i++) {
+                for (let j = i + 1; j < intersections.length; j++) {
+                    const dSq = (intersections[i].x - intersections[j].x)**2 + (intersections[i].y - intersections[j].y)**2;
+                    if (dSq > maxDistSq) {
+                        maxDistSq = dSq;
+                        p1 = intersections[i];
+                        p2 = intersections[j];
+                    }
+                }
+            }
+            const angle1 = (Math.atan2(origin.y - p1.y, p1.x - origin.x) * 180 / Math.PI + 360) % 360;
+            const angle2 = (Math.atan2(origin.y - p2.y, p2.x - origin.x) * 180 / Math.PI + 360) % 360;
+            visibleAngleRange = { minAngle: Math.min(angle1, angle2), maxAngle: Math.max(angle1, angle2), isFullCircle: false };
+            if (Math.abs(angle1 - angle2) > 180) {
+                visibleAngleRange = { minAngle: Math.max(angle1, angle2), maxAngle: Math.min(angle1, angle2) + 360, isFullCircle: false };
+            }
         }
     } else {
-        visibleAngleRange = calculateVisibleAngleRange(origin, screenRadius, canvasWidth, canvasHeight);
+        visibleAngleRange = calculateVisibleAngleRange(origin, spokeReferenceRadius, canvasWidth, canvasHeight);
     }
     
     if (!visibleAngleRange) return;
@@ -2285,11 +2391,10 @@ function drawPolarSpokes(ctx, { canvas, dpr, colors, gridAlpha }, origin, maxDat
         const tickAlpha = level.alpha;
         if (tickAlpha < 0.01) return;
 
-        const screenSeparation = screenRadius * (level.angle * Math.PI / 180);
-        
+        const screenSeparation = spokeReferenceRadius * (level.angle * Math.PI / 180);
         if (screenSeparation < C.REF_CIRCLE_MIN_TICK_SPACING * 0.5) return;
 
-        ctx.strokeStyle = `rgba(${colors.grid.join(',')}, ${level.alpha * gridAlpha})`;
+        ctx.strokeStyle = `rgba(${colors.grid.join(',')}, ${tickAlpha * gridAlpha})`;
         ctx.lineWidth = C.GRID_LINEWIDTH * 0.5;
 
         let anglesToProcess;
@@ -2299,38 +2404,83 @@ function drawPolarSpokes(ctx, { canvas, dpr, colors, gridAlpha }, origin, maxDat
                 anglesToProcess.push(deg);
             }
         } else {
-            // Handle new format with ranges array AND fallback for old format
             anglesToProcess = [];
             if (visibleAngleRange.ranges && Array.isArray(visibleAngleRange.ranges)) {
                 visibleAngleRange.ranges.forEach(range => {
-                    const [minAngle, maxAngle] = range;
+                    let [minAngle, maxAngle] = range;
+                    
+                    if (isLineMode) {
+                        const corners = [
+                            { x: 0, y: 0 },
+                            { x: canvasWidth, y: 0 },
+                            { x: canvasWidth, y: canvasHeight },
+                            { x: 0, y: canvasHeight }
+                        ];
+                        
+                        const cornerAngles = corners.map(corner => {
+                            return (Math.atan2(origin.y - corner.y, corner.x - origin.x) * 180 / Math.PI + 360) % 360;
+                        });
+                        
+                        const allAngles = [...cornerAngles, minAngle, maxAngle].sort((a, b) => a - b);
+                        const extendedMinAngle = Math.min(...allAngles) - level.angle * 2;
+                        const extendedMaxAngle = Math.max(...allAngles) + level.angle * 2;
+                        
+                        minAngle = extendedMinAngle;
+                        maxAngle = extendedMaxAngle;
+                    }
+                    
                     const rangeAngles = generateOptimizedAngleSequence(level.angle, minAngle, maxAngle);
                     anglesToProcess.push(...rangeAngles);
                 });
             } else if (visibleAngleRange.minAngle !== undefined && visibleAngleRange.maxAngle !== undefined) {
-                // Fallback for old format - this is what we need!
-                anglesToProcess = generateOptimizedAngleSequence(level.angle, visibleAngleRange.minAngle, visibleAngleRange.maxAngle);
+                let minAngle = visibleAngleRange.minAngle;
+                let maxAngle = visibleAngleRange.maxAngle;
+                
+                if (isLineMode) {
+                    const corners = [
+                        { x: 0, y: 0 },
+                        { x: canvasWidth, y: 0 },
+                        { x: canvasWidth, y: canvasHeight },
+                        { x: 0, y: canvasHeight }
+                    ];
+                    
+                    const cornerAngles = corners.map(corner => {
+                        return (Math.atan2(origin.y - corner.y, corner.x - origin.x) * 180 / Math.PI + 360) % 360;
+                    });
+                    
+                    const allAngles = [...cornerAngles, minAngle, maxAngle].sort((a, b) => a - b);
+                    const extendedMinAngle = Math.min(...allAngles) - level.angle * 2;
+                    const extendedMaxAngle = Math.max(...allAngles) + level.angle * 2;
+                    
+                    minAngle = extendedMinAngle;
+                    maxAngle = extendedMaxAngle;
+                }
+                
+                anglesToProcess = generateOptimizedAngleSequence(level.angle, minAngle, maxAngle);
             }
-            // Remove duplicates
             anglesToProcess = [...new Set(anglesToProcess)];
         }
 
         anglesToProcess.forEach(deg => {
-            // Round off floating point inaccuracy
             deg = Math.round(deg * 1e10) / 1e10;
-            
             if (drawnAngles.has(deg)) return;
 
             const angleRad = deg * Math.PI / 180;
             
-            // Use screenRadiusForSpokes to extend to proper distance
-            const endX = origin.x + screenRadiusForSpokes * Math.cos(angleRad);
-            const endY = origin.y - screenRadiusForSpokes * Math.sin(angleRad);
-            
+            const tickStart = {
+                x: origin.x + (minViewRadiusData * viewTransform.scale / dpr) * Math.cos(angleRad),
+                y: origin.y - (minViewRadiusData * viewTransform.scale / dpr) * Math.sin(angleRad)
+            };
+            const tickEnd = {
+                x: origin.x + (maxViewRadiusData * viewTransform.scale / dpr) * Math.cos(angleRad),
+                y: origin.y - (maxViewRadiusData * viewTransform.scale / dpr) * Math.sin(angleRad)
+            };
+
             ctx.beginPath();
-            ctx.moveTo(origin.x, origin.y);
-            ctx.lineTo(endX, endY);
+            ctx.moveTo(tickStart.x, tickStart.y);
+            ctx.lineTo(tickEnd.x, tickEnd.y);
             ctx.stroke();
+            
             drawnAngles.add(deg);
         });
     });
@@ -2350,59 +2500,9 @@ export function drawGrid(ctx, { gridDisplayMode, canvas, dpr, viewTransform, gri
         const topLeftData = screenToData({ x: 0, y: 0 });
         const bottomRightData = screenToData({ x: canvasWidth, y: canvasHeight });
         const maxDataRadius = Math.hypot(Math.max(Math.abs(topLeftData.x), Math.abs(bottomRightData.x)), Math.max(Math.abs(topLeftData.y), Math.abs(bottomRightData.y)));
-        const transitionRadius = Math.min(canvasWidth, canvasHeight) * C.POLAR_TO_LINE_TRANSITION_RADIUS_FACTOR;
 
-        const drawPolarCircles = (interval, alpha) => {
-            if (!interval || alpha < C.MIN_ALPHA_FOR_DRAWING) return;
-            
-            const screenSpacing = interval * viewTransform.scale / dpr;
-            if (screenSpacing < C.GRID_POLAR_CIRCLE_MIN_SPACING) return;
-
-            ctx.strokeStyle = `rgba(${colors.grid.join(',')}, ${alpha * gridAlpha})`;
-            ctx.lineWidth = C.GRID_LINEWIDTH;
-            const startMultiplier = 1;
-            const endMultiplier = Math.ceil(maxDataRadius / interval);
-            
-            for (let i = startMultiplier; i <= endMultiplier; i++) {
-                const r = i * interval;
-                const screenRadius = r * viewTransform.scale / dpr;
-                
-                if (screenRadius > transitionRadius) {
-                    const circle = { x: origin.x, y: origin.y, r: screenRadius };
-                    const intersections = getCircleRectIntersections(circle, {x: 0, y: 0, w: canvasWidth, h: canvasHeight});
-                    if (intersections.length >= 2) {
-                        let p1 = intersections[0], p2 = intersections[1], maxDistSq = 0;
-                        for (let i = 0; i < intersections.length; i++) {
-                            for (let j = i + 1; j < intersections.length; j++) {
-                                const dSq = (intersections[i].x - intersections[j].x)**2 + (intersections[i].y - intersections[j].y)**2;
-                                if (dSq > maxDistSq) {
-                                    maxDistSq = dSq;
-                                    p1 = intersections[i];
-                                    p2 = intersections[j];
-                                }
-                            }
-                        }
-                        ctx.beginPath();
-                        ctx.moveTo(p1.x, p1.y);
-                        ctx.lineTo(p2.x, p2.y);
-                        ctx.stroke();
-                    }
-                } else {
-                    if (isCircleInView(origin.x, origin.y, screenRadius, canvasWidth, canvasHeight)) {
-                        ctx.beginPath();
-                        ctx.arc(origin.x, origin.y, screenRadius, 0, C.RADIANS_IN_CIRCLE);
-                        ctx.stroke();
-                    }
-                }
-            }
-        };
-
-        // Draw polar circles
-        drawPolarCircles(lastGridState.interval1, lastGridState.alpha1);
-        drawPolarCircles(lastGridState.interval2, lastGridState.alpha2);
-
-        // Draw polar spokes using the optimized function
-        drawPolarSpokes(ctx, { canvas, dpr, colors, gridAlpha }, origin, maxDataRadius, viewTransform, lastAngularGridState);
+        // Call the new unified polar grid drawing function
+        drawPolarGrid(ctx, { canvas, dpr, colors, gridAlpha }, origin, maxDataRadius, viewTransform, lastGridState, lastAngularGridState);
 
     } else {
         // Rectangular grid modes (lines, points, triangular)
@@ -10536,6 +10636,38 @@ export function getEdgeId(edge) {
     return edge.id1 < edge.id2 
         ? `${edge.id1}${C.EDGE_ID_DELIMITER}${edge.id2}` 
         : `${edge.id2}${C.EDGE_ID_DELIMITER}${edge.id1}`;
+}
+
+export function distanceToSegment(px, py, x1, y1, x2, y2) {
+    // Compute vector AB = (x2 - x1, y2 - y1)
+    const abX = x2 - x1;
+    const abY = y2 - y1;
+    
+    // Compute squared length
+    const lSquared = abX * abX + abY * abY;
+    
+    // If points are the same, distance is to that point
+    if (lSquared === 0) {
+        const dx = px - x1;
+        const dy = py - y1;
+        return Math.sqrt(dx * dx + dy * dy);
+    }
+    
+    // Compute projection parameter t = -((x1 - px) * (x2 - x1) + (y1 - py) * (y2 - y1)) / l_squared
+    let t = -((x1 - px) * abX + (y1 - py) * abY) / lSquared;
+    
+    // Clamp t to [0, 1]
+    if (t < 0) t = 0;
+    if (t > 1) t = 1;
+    
+    // Compute closest point C = (x1 + t * (x2 - x1), y1 + t * (y2 - y1))
+    const cX = x1 + t * abX;
+    const cY = y1 + t * abY;
+    
+    // Compute distance from point to closest point
+    const dx = px - cX;
+    const dy = py - cY;
+    return Math.sqrt(dx * dx + dy * dy);
 }
 
 export function getFaceId(face) {
