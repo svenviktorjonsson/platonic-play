@@ -49,6 +49,38 @@ export function getEdgeId(edge) {
         : `${edge.id2}${C.EDGE_ID_DELIMITER}${edge.id1}`;
 }
 
+export function distanceToSegment(px, py, x1, y1, x2, y2) {
+    // Compute vector AB = (x2 - x1, y2 - y1)
+    const abX = x2 - x1;
+    const abY = y2 - y1;
+    
+    // Compute squared length
+    const lSquared = abX * abX + abY * abY;
+    
+    // If points are the same, distance is to that point
+    if (lSquared === 0) {
+        const dx = px - x1;
+        const dy = py - y1;
+        return Math.sqrt(dx * dx + dy * dy);
+    }
+    
+    // Compute projection parameter t = -((x1 - px) * (x2 - x1) + (y1 - py) * (y2 - y1)) / l_squared
+    let t = -((x1 - px) * abX + (y1 - py) * abY) / lSquared;
+    
+    // Clamp t to [0, 1]
+    if (t < 0) t = 0;
+    if (t > 1) t = 1;
+    
+    // Compute closest point C = (x1 + t * (x2 - x1), y1 + t * (y2 - y1))
+    const cX = x1 + t * abX;
+    const cY = y1 + t * abY;
+    
+    // Compute distance from point to closest point
+    const dx = px - cX;
+    const dy = py - cY;
+    return Math.sqrt(dx * dx + dy * dy);
+}
+
 export function getFaceId(face) {
     if (face.id) return face.id;
     if (face.vertexIds) {
