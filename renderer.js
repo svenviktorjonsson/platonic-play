@@ -168,7 +168,7 @@ export function drawFaceGlows(ctx, { allFaces, hoveredFaceId, selectedFaceIds, c
 
             ctx.save();
             ctx.fillStyle = colors.selectionGlow;
-            ctx.globalAlpha = 0.25;
+            ctx.globalAlpha = C.FACE_GLOW_ALPHA;
             
             ctx.beginPath();
             screenVertices.forEach((vertex, index) => {
@@ -829,13 +829,13 @@ export function drawPolarReferenceCircle(ctx, htmlOverlay, updateHtmlLabel, radi
 
     lastAngularGridState.forEach(level => {
         const tickAlpha = level.alpha;
-        if (tickAlpha < 0.01) return;
+        if (tickAlpha < C.POLAR_REF_TICK_ALPHA_THRESHOLD) return;
 
         const screenSeparation = screenRadius * (level.angle * Math.PI / 180);
         
         if (screenSeparation < C.REF_CIRCLE_MIN_TICK_SPACING * 0.5) return;
 
-        const finalColor = `rgba(${colors.feedbackDefault.join(',')}, ${tickAlpha * 0.95})`;
+        const finalColor = `rgba(${colors.feedbackDefault.join(',')}, ${tickAlpha * C.POLAR_REF_TICK_LABEL_ALPHA_FACTOR})`;
 
         let anglesToProcess;
         if (visibleAngleRange.isFullCircle) {
@@ -875,7 +875,7 @@ export function drawPolarReferenceCircle(ctx, htmlOverlay, updateHtmlLabel, radi
                 y: originScreen.y - (screenRadius + C.REF_TEXT_DISTANCE_LABEL_OFFSET_SCREEN) * Math.sin(angleRad) 
             };
             
-            const labelMargin = 100;
+            const labelMargin = C.POLAR_REF_LABEL_MARGIN;
             const isLabelVisible = labelPos.x > -labelMargin && labelPos.x < canvasWidthCSS + labelMargin && 
                                    labelPos.y > -labelMargin && labelPos.y < canvasHeightCSS + labelMargin;
             
@@ -926,7 +926,7 @@ export function drawPolarReferenceCircle(ctx, htmlOverlay, updateHtmlLabel, radi
                     y: vertexOnCircle.y + tickVec.y * tickLength
                 };
 
-                ctx.lineWidth = 1.5;
+                ctx.lineWidth = C.POLAR_REF_LINE_WIDTH;
                 ctx.beginPath();
                 ctx.moveTo(vertexOnCircle.x, vertexOnCircle.y);
                 ctx.lineTo(tickEnd.x, tickEnd.y);
@@ -2024,13 +2024,13 @@ export function drawPolarGrid(ctx, { canvas, dpr, colors, gridAlpha }, origin, m
 
     lastAngularGridState.forEach(level => {
         const tickAlpha = level.alpha;
-        if (tickAlpha < 0.01) return;
+        if (tickAlpha < C.POLAR_REF_TICK_ALPHA_THRESHOLD) return;
 
         const screenSeparation = spokeReferenceRadius * (level.angle * Math.PI / 180);
         if (screenSeparation < C.REF_CIRCLE_MIN_TICK_SPACING * 0.5) return;
 
         ctx.strokeStyle = `rgba(${colors.grid.join(',')}, ${tickAlpha * gridAlpha})`;
-        ctx.lineWidth = C.GRID_LINEWIDTH * 0.5;
+        ctx.lineWidth = C.GRID_LINEWIDTH * C.POLAR_GRID_SPOKE_WIDTH_FACTOR;
 
         let anglesToProcess;
         if (visibleAngleRange.isFullCircle) {
@@ -2437,7 +2437,7 @@ export function drawTransformIndicators(ctx, htmlOverlay, { transformIndicatorDa
             let scaleText;
             const effectiveScale = isSnapping && snappedScaleValue !== null ? snappedScaleValue : scale;
             
-            if (Math.abs(effectiveScale - 1) < 0.001) {
+            if (Math.abs(effectiveScale - 1) < C.TRANSFORM_INDICATOR_SCALE_SNAP_TOLERANCE) {
                 scaleText = `\\times 1`;
             } else if (isSnapping && gridToGridInfo) {
                 const { startSquaredSum, snapSquaredSum } = gridToGridInfo;
@@ -2456,7 +2456,7 @@ export function drawTransformIndicators(ctx, htmlOverlay, { transformIndicatorDa
             } else if (isSnapping && snappedScaleValue !== null) {
                 scaleText = `\\times ${U.formatFraction(snappedScaleValue, C.FRACTION_FORMAT_TOLERANCE, C.FRACTION_FORMAT_MAX_DENOMINATOR_TRANSFORM)}`;
             } else {
-                const formattedScale = parseFloat(effectiveScale.toFixed(4)).toString();
+                const formattedScale = parseFloat(effectiveScale.toFixed(C.TRANSFORM_INDICATOR_PRECISION)).toString();
                 scaleText = `\\times ${formattedScale}`;
             }
 
@@ -3069,45 +3069,6 @@ export function updateMouseCoordinates(htmlOverlay, { coordsDisplayMode, isMouse
     });
 }
 
-export function createColorWheelIcon(size, dpr) {
-    const tempCanvas = document.createElement('canvas');
-    tempCanvas.width = size * dpr;
-    tempCanvas.height = size * dpr;
-    const tempCtx = tempCanvas.getContext('2d');
-    const imageData = tempCtx.createImageData(tempCanvas.width, tempCanvas.height);
-    const pixels = imageData.data;
-    const centerX = tempCanvas.width / 2;
-    const centerY = tempCanvas.height / 2;
-    const radius = tempCanvas.width / 2;
-    for (let y = 0; y < tempCanvas.height; y++) {
-        for (let x = 0; x < tempCanvas.width; x++) {
-            const i = (y * tempCanvas.width + x) * 4;
-            const dx = x - centerX;
-            const dy = y - centerY;
-            const dist = Math.sqrt(dx * dx + dy * dy);
-            if (dist > radius) continue;
-            const hue = (Math.atan2(dy, dx) * 180 / Math.PI + 360) % 360;
-            const saturation = 100;
-            const lightness = 50;
-            let alpha;
-            const fadeStartRadius = radius * C.COLOR_WHEEL_FADE_START_RADIUS_FACTOR;
-            if (dist < fadeStartRadius) {
-                alpha = 1.0;
-            } else {
-                const fadeDistance = radius - fadeStartRadius;
-                alpha = 1.0 - ((dist - fadeStartRadius) / fadeDistance);
-            }
-            const [R, G, B] = U.hslToRgb(hue / 360, saturation / 100, lightness / 100);
-            pixels[i] = R;
-            pixels[i + 1] = G;
-            pixels[i + 2] = B;
-            pixels[i + 3] = Math.round(Math.max(0, alpha) * 255);
-        }
-    }
-    tempCtx.putImageData(imageData, 0, 0);
-    return tempCanvas;
-}
-
 function drawThemeIcon(ctx, rect, activeThemeName, colors) {
     ctx.save();
     const centerX = rect.x + rect.width / 2;
@@ -3645,7 +3606,7 @@ function drawColorPalette(ctx, htmlOverlay, state, updateHtmlLabel) {
             if (target === C.COLOR_TARGET_VERTEX) {
                 options.vertexState = verticesVisible ? 'filled' : 'disabled';
                 if (targetColorIndex === -1) {
-                    options.vertexColor = 'rgba(128, 128, 128, 1)';
+                    options.vertexColor = C.UI_COLOR_TARGET_UNASSIGNED;
                 } else if (colorItem && colorItem.type === 'color') {
                     options.vertexColor = colorItem.value;
                 } else if (colorItem && colorItem.type === 'colormap') {
@@ -3654,7 +3615,7 @@ function drawColorPalette(ctx, htmlOverlay, state, updateHtmlLabel) {
             } else if (target === C.COLOR_TARGET_EDGE) {
                 options.edgeState = edgesVisible ? 'solid' : 'disabled';
                 if (targetColorIndex === -1) {
-                    options.edgeColor = 'rgba(128, 128, 128, 1)';
+                    options.edgeColor = C.UI_COLOR_TARGET_UNASSIGNED;
                 } else if (colorItem && colorItem.type === 'color') {
                     options.edgeColor = colorItem.value;
                 } else if (colorItem && colorItem.type === 'colormap') {
@@ -3663,7 +3624,7 @@ function drawColorPalette(ctx, htmlOverlay, state, updateHtmlLabel) {
             } else if (target === C.COLOR_TARGET_FACE) {
                 options.faceState = facesVisible ? 'filled' : 'disabled';
                 if (targetColorIndex === -1) {
-                    options.faceColor = 'rgba(128, 128, 128, 1)';
+                    options.faceColor = C.UI_COLOR_TARGET_UNASSIGNED;
                 } else if (colorItem && colorItem.type === 'color') {
                     options.faceColor = colorItem.value;
                 } else if (colorItem && colorItem.type === 'colormap') {
@@ -3827,7 +3788,7 @@ function drawTriangleIcon(ctx, rect, options, colors, isActive = false) {
         }
         ctx.fill(facePath);
     } else if (faceState === 'disabled') {
-        ctx.fillStyle = '#808080';
+        ctx.fillStyle = C.UI_ICON_DISABLED_FILL;
         ctx.fill(facePath);
     }
     
@@ -4030,7 +3991,7 @@ function drawVisibilityPanel(ctx, htmlOverlay, state, updateHtmlLabel) {
     const getColor = (target) => {
         if (!colorAssignments || !allColors) return colors.uiIcon;
         const colorIndex = colorAssignments[target];
-        if (colorIndex === -1) return 'rgba(128, 128, 128, 1)';
+        if (colorIndex === -1) return C.UI_COLOR_TARGET_UNASSIGNED;
         const item = allColors[colorIndex];
         if (!item) return colors.uiIcon;
         if (item.type === 'color') return item.value;
@@ -4205,7 +4166,7 @@ export function getIconPreviewColor(target, draggedColorTargetInfo, allColors, c
     // Fallback to current assignment
     const colorIndex = colorAssignments[target];
     if (colorIndex === -1) {
-        return 'rgba(128, 128, 128, 1)';
+        return C.UI_COLOR_TARGET_UNASSIGNED;
     }
     const item = allColors[colorIndex];
     if (!item) return colors.uiIcon;
@@ -4656,7 +4617,7 @@ function drawCoordinateSystemCross(ctx, coordSystem, colors, dataToScreen, coord
     // The center vertex for grabbing (blue dot)
     ctx.fillStyle = colors.coordSysOrigin;
     ctx.beginPath();
-    ctx.arc(centerScreen.x, centerScreen.y, 4, 0, 2 * Math.PI);
+    ctx.arc(centerScreen.x, centerScreen.y, C.FACE_COORD_SYSTEM_ORIGIN_RADIUS, 0, 2 * Math.PI);
     ctx.fill();
 
     ctx.restore();

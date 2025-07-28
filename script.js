@@ -193,24 +193,8 @@ function ensureFaceCoordinateSystems() {
     U.updateFaceLocalCoordinateSystems(allFaces, findVertexById);
 }
 
-function createFaceWithCoordinateSystem(vertexIds) {
-    const newFace = {
-        id: U.getFaceId({ vertexIds }),
-        vertexIds: vertexIds,
-        localCoordSystem: null,
-        color: getColorForTarget(C.COLOR_TARGET_FACE)
-    };
-
-    if (!allFaces.some(f => f.id === newFace.id)) {
-        allFaces.push(newFace);
-    }
-
-    ensureFaceCoordinateSystems();
-    return newFace;
-}
-
 function getColors() {
-    const theme = U.getCurrentTheme(activeThemeName, C.BASE_THEME);
+    const theme = U.getCurrentTheme(activeThemeName, C.DARK_THEME);
     return theme;
 }
 
@@ -241,37 +225,6 @@ function getColorForTarget(targetType, index = 0, total = 1) {
     if (targetType === C.COLOR_TARGET_FACE) return colors.face;
     
     return colors.vertex;
-}
-
-function applyColormapToEdge(edge, index = 0, total = 1) {
-    const colorIndex = colorAssignments[C.COLOR_TARGET_EDGE];
-    if (colorIndex === -1) {
-        edge.color = generateRandomColor();
-        return;
-    }
-    
-    const colorItem = allColors[colorIndex];
-    if (colorItem && colorItem.type === 'colormap') {
-        const startT = total > 1 ? index / total : 0;
-        const endT = total > 1 ? (index + 1) / total : 1;
-        edge.gradientStart = startT;
-        edge.gradientEnd = endT;
-        edge.colormapItem = colorItem;
-        delete edge.colormapOffset;
-        delete edge.color;
-    } else if (colorItem && colorItem.type === 'color') {
-        edge.color = colorItem.value;
-        delete edge.gradientStart;
-        delete edge.gradientEnd;
-        delete edge.colormapItem;
-        delete edge.colormapOffset;
-    } else {
-        edge.color = getColors().edge;
-        delete edge.gradientStart;
-        delete edge.gradientEnd;
-        delete edge.colormapItem;
-        delete edge.colormapOffset;
-    }
 }
 
 function applyColorsToSelection() {
@@ -355,18 +308,6 @@ function applyColorsToSelection() {
                         }
                     });
                 }
-            }
-        }
-    });
-}
-
-function invertVertexColors() {
-    allVertices.forEach(vertex => {
-        if (vertex.type === C.VERTEX_TYPE_REGULAR) {
-            if (vertex.color) {
-                vertex.color = U.invertGrayscaleValue(vertex.color);
-            } else {
-                vertex.color = getColors().vertex;
             }
         }
     });
@@ -1073,28 +1014,6 @@ function removeColorAtIndex(indexToRemove) {
     buildColorPaletteUI();
 }
 
-function buildVisibilityPanelUI() {
-    canvasUI.visibilityIcons = [];
-    if (!canvasUI.visibilityToolButton) return;
-
-    const panelX = C.UI_TOOLBAR_WIDTH + C.UI_BUTTON_PADDING;
-    const iconY = canvasUI.visibilityToolButton.y;
-    const iconSize = C.DISPLAY_ICON_SIZE;
-    const iconPadding = C.DISPLAY_ICON_PADDING;
-
-    const iconGroups = ['angles', 'distances'];
-
-    iconGroups.forEach((group, index) => {
-        canvasUI.visibilityIcons.push({
-            id: `visibility-icon-${group}`,
-            group: group,
-            x: panelX + index * (iconSize + iconPadding),
-            y: iconY,
-            width: iconSize,
-            height: iconSize
-        });
-    });
-}
 
 function buildMainToolbarUI() {
     const canvasHeight = canvas.height / dpr;
@@ -1537,8 +1456,6 @@ function findAllVerticesInSubgraph(startVertexId) {
     }
     return subgraphVertexIds;
 }
-
-
 
 function handleCut() {
     if (selectedVertexIds.length === 0 && selectedEdgeIds.length === 0 && selectedCenterIds.length === 0) return;
@@ -2437,7 +2354,7 @@ function getBestScaleSnap(center, initialVertexStates, handleVertex, rawScale) {
         allPossibleSnaps.sort((a, b) => a.priority - b.priority);
         const bestSnap = allPossibleSnaps[0];
 
-        if (bestSnap.priority < 0.1) {
+        if (bestSnap.priority < C.TRANSFORM_SCALE_SNAP_PRIORITY_THRESHOLD) {
             const finalPos = U.applyTransformToVertex(handleVertex, center, 0, bestSnap.scale, false, null);
             return {
                 scale: bestSnap.scale,
@@ -2567,7 +2484,7 @@ function getBestDirectionalScaleSnap(center, initialVertexStates, handleVertex, 
     if (allPossibleSnaps.length > 0) {
         allPossibleSnaps.sort((a, b) => a.priority - b.priority);
         const bestSnap = allPossibleSnaps[0];
-        if (bestSnap.priority < 0.1) {
+        if (bestSnap.priority < C.TRANSFORM_SCALE_SNAP_PRIORITY_THRESHOLD) {
             const finalPos = U.applyTransformToVertex(handleVertex, center, 0, bestSnap.scale, true, startVector);
             return {
                 scale: bestSnap.scale,
@@ -3745,8 +3662,7 @@ function handleColorToolButtonClick() {
 function handleThemeToggle() {
     saveStateForUndo();
     activeThemeName = activeThemeName === 'dark' ? 'light' : 'dark';
-    invertVertexColors();
-    invertColors();
+    invertColors(); // This now only inverts the user-defined swatches
     if (isColorPaletteExpanded) {
         buildColorPaletteUI();
     }
@@ -4630,22 +4546,36 @@ if (isDragConfirmed) {
         });
 
         if (affectedFaces.size > 0) {
-            affectedFaces.forEach(face => {
-                const initialSystem = initialCoordSystemStates.get(face.id);
-                if (face.localCoordSystem && initialSystem) {
-                    if (transformIndicatorData && !transformIndicatorData.directionalScale) {
-                        const { center, rotation, scale, startPos } = transformIndicatorData;
-                        const startVector = { x: startPos.x - center.x, y: startPos.y - center.y };
-                        const newOrigin = U.applyTransformToVertex(initialSystem.origin, center, rotation, scale, false, startVector);
-                        face.localCoordSystem.origin = newOrigin;
-                        face.localCoordSystem.angle = U.normalizeAngle(initialSystem.angle + rotation);
-                        face.localCoordSystem.scale = initialSystem.scale * scale;
-                    } else {
-                        applyCoordinateSystemConstraintsOnDragEnd(face, initialSystem, initialDragVertexStates, dragPreviewVertices, findVertexById);
-                    }
-                }
-            });
+    affectedFaces.forEach(face => {
+        const initialSystem = initialCoordSystemStates.get(face.id);
+        if (face.localCoordSystem && initialSystem) {
+            const faceVertexIds = new Set(face.vertexIds);
+            const draggedVertexIds = new Set(initialDragVertexStates.map(v => v.id));
+            const isRigidFaceDrag = [...faceVertexIds].every(vId => draggedVertexIds.has(vId));
+
+            if (isRigidFaceDrag && !transformIndicatorData) {
+                // This is a simple translation of the entire face
+                const delta = {
+                    x: dragPreviewVertices[0].x - initialDragVertexStates[0].x,
+                    y: dragPreviewVertices[0].y - initialDragVertexStates[0].y
+                };
+                face.localCoordSystem.origin.x = initialSystem.origin.x + delta.x;
+                face.localCoordSystem.origin.y = initialSystem.origin.y + delta.y;
+            } else if (transformIndicatorData && !transformIndicatorData.directionalScale) {
+                // This is a rotation/scale transform
+                const { center, rotation, scale, startPos } = transformIndicatorData;
+                const startVector = { x: startPos.x - center.x, y: startPos.y - center.y };
+                const newOrigin = U.applyTransformToVertex(initialSystem.origin, center, rotation, scale, false, startVector);
+                face.localCoordSystem.origin = newOrigin;
+                face.localCoordSystem.angle = U.normalizeAngle(initialSystem.angle + rotation);
+                face.localCoordSystem.scale = initialSystem.scale * scale;
+            } else {
+                // This is a deformation (only some vertices moved)
+                applyCoordinateSystemConstraintsOnDragEnd(face, initialSystem, initialDragVertexStates, dragPreviewVertices, findVertexById);
+            }
         }
+    });
+}
     }
 
     const mergeRadius = C.MERGE_RADIUS_SCREEN / viewTransform.scale;
@@ -4793,98 +4723,97 @@ if (isDragConfirmed) {
         } else {
             const startVertex = findVertexById(previewLineStartVertexId);
             if (isDrawingMode && startVertex) {
-                
-                saveStateForUndo();
-                const edgesBefore = JSON.parse(JSON.stringify(allEdges));
-                const snappedData = getSnappedPosition(startVertex, mousePos, shiftKey);
-                let newVertex = null;
+            saveStateForUndo();
+            const edgesBefore = JSON.parse(JSON.stringify(allEdges));
+            const snappedData = getSnappedPosition(startVertex, mousePos, shiftKey);
+            let newVertex = null;
+            const gridInterval = (lastGridState.alpha2 > lastGridState.alpha1 && lastGridState.interval2) ? lastGridState.interval2 : lastGridState.interval1;
 
-                if (snappedData.snapType === 'vertex' && snappedData.targetVertex) {
-                    newVertex = snappedData.targetVertex;
-                } else if (snappedData.snapType === 'edge' && snappedData.targetEdge) {
-                    newVertex = insertVertexOnEdgeWithFaces(snappedData.targetEdge, { x: snappedData.x, y: snappedData.y });
-                } else {
-                    let newVertexColor = getColorForTarget(C.COLOR_TARGET_VERTEX);
-                    const colorIndex = colorAssignments[C.COLOR_TARGET_VERTEX];
-                    if (colorIndex !== -1) {
-                        const colorItem = allColors[colorIndex];
-                        if (colorItem && colorItem.type === 'colormap') {
-                            newVertexColor = U.sampleColormap(colorItem, 0.5);
-                        }
+            if (snappedData.snapType === 'vertex' && snappedData.targetVertex) {
+                newVertex = snappedData.targetVertex;
+            } else if (snappedData.snapType === 'edge' && snappedData.targetEdge) {
+                newVertex = insertVertexOnEdgeWithFaces(snappedData.targetEdge, { x: snappedData.x, y: snappedData.y }, gridInterval, getColorForTarget);
+            } else {
+                let newVertexColor = getColorForTarget(C.COLOR_TARGET_VERTEX);
+                const colorIndex = colorAssignments[C.COLOR_TARGET_VERTEX];
+                if (colorIndex !== -1) {
+                    const colorItem = allColors[colorIndex];
+                    if (colorItem && colorItem.type === 'colormap') {
+                        newVertexColor = U.sampleColormap(colorItem, 0.5);
                     }
-
-                    newVertex = { id: U.generateUniqueId(), x: snappedData.x, y: snappedData.y, type: 'regular', color: newVertexColor };
-                    allVertices.push(newVertex);
                 }
 
-                if (newVertex) {
-                    const edgeExists = allEdges.some(e => (e.id1 === startVertex.id && e.id2 === newVertex.id) || (e.id2 === startVertex.id && e.id1 === newVertex.id));
-                    if (!edgeExists) {
-                        const gridInterval = (lastGridState.alpha2 > lastGridState.alpha1 && lastGridState.interval2) ? lastGridState.interval2 : lastGridState.interval1;
-                        const newEdge = U.createEdge(startVertex, newVertex, gridInterval, getColorForTarget);
-                        allEdges.push(newEdge);
-                        updateFaces(edgesBefore, allEdges);
+                newVertex = { id: U.generateUniqueId(), x: snappedData.x, y: snappedData.y, type: 'regular', color: newVertexColor };
+                allVertices.push(newVertex);
+            }
 
-                        // Assign colors to any newly created faces
-                        allFaces.forEach(face => {
-                            if (!face.color) {
-                                face.color = getColorForTarget(C.COLOR_TARGET_FACE);
-                            }
-                        });
-                    }
-                    
-                    const completedSegmentProps = getCompletedSegmentProperties(startVertex, newVertex, allEdges);
-                    if (completedSegmentProps) {
-                        if (drawingSequence.length > 0) {
-                            drawingSequence[drawingSequence.length - 1].turn = completedSegmentProps.turnAngleRad;
+            if (newVertex) {
+                const edgeExists = allEdges.some(e => (e.id1 === startVertex.id && e.id2 === newVertex.id) || (e.id2 === startVertex.id && e.id1 === newVertex.id));
+                if (!edgeExists) {
+                    const newEdge = U.createEdge(startVertex, newVertex, gridInterval, getColorForTarget);
+                    allEdges.push(newEdge);
+                    updateFaces(edgesBefore, allEdges);
+
+                    // Assign colors to any newly created faces
+                    allFaces.forEach(face => {
+                        if (!face.color) {
+                            face.color = getColorForTarget(C.COLOR_TARGET_FACE);
                         }
-                        drawingSequence.push({ 
-                            length: completedSegmentProps.length, 
-                            turn: 0, 
-                            endVertexColor: newVertex.color 
-                        });
-                        currentSequenceIndex = drawingSequence.length - 1;
-                    }
-                    
-                    currentDrawingPath.push(newVertex.id);
-                    window.currentDrawingPath = currentDrawingPath;
-
-                    // Update both vertex and edge colors in the drawing sequence
-                    updateDrawingSequenceColors();
-                    updateDrawingSequenceEdgeColors();
-                    
-                    previewLineStartVertexId = newVertex.id;
+                    });
                 }
                 
-                if (shiftKey && newVertex && snappedData) {
-                    const completedSegmentProps = getCompletedSegmentProperties(startVertex, newVertex, allEdges);
-                    if (completedSegmentProps) {
-                        frozenReference_Origin_Data = completedSegmentProps.startVertex;
-                        
-                        if (snappedData.gridToGridSquaredSum > 0 && snappedData.gridInterval) {
-                            frozenReference_D_du = snappedData.gridInterval * Math.sqrt(snappedData.gridToGridSquaredSum);
-                        } else {
-                            frozenReference_D_du = completedSegmentProps.length;
-                        }
-                        
-                        frozenReference_D_g2g = snappedData.gridToGridSquaredSum > 0 ? { 
-                            g2gSquaredSum: snappedData.gridToGridSquaredSum, 
-                            interval: snappedData.gridInterval 
-                        } : null;
-                        
-                        frozenReference_A_rad = completedSegmentProps.turnAngleRad;
-                        frozenReference_A_baseRad = completedSegmentProps.precedingSegmentAbsoluteAngleRad;
+                const completedSegmentProps = getCompletedSegmentProperties(startVertex, newVertex, allEdges);
+                if (completedSegmentProps) {
+                    if (drawingSequence.length > 0) {
+                        drawingSequence[drawingSequence.length - 1].turn = completedSegmentProps.turnAngleRad;
                     }
-                } else {
-                    frozenReference_D_du = null;
-                    frozenReference_D_g2g = null;
-                    frozenReference_A_rad = null;
-                    frozenReference_A_baseRad = null;
-                    frozenReference_Origin_Data = null;
+                    drawingSequence.push({ 
+                        length: completedSegmentProps.length, 
+                        turn: 0, 
+                        endVertexColor: newVertex.color 
+                    });
+                    currentSequenceIndex = drawingSequence.length - 1;
                 }
+                
+                currentDrawingPath.push(newVertex.id);
+                window.currentDrawingPath = currentDrawingPath;
 
-                clickData.count = 0;
-            } else if (actionContext.target === 'canvas') {
+                // Update both vertex and edge colors in the drawing sequence
+                updateDrawingSequenceColors();
+                updateDrawingSequenceEdgeColors();
+                
+                previewLineStartVertexId = newVertex.id;
+            }
+            
+            if (shiftKey && newVertex && snappedData) {
+                const completedSegmentProps = getCompletedSegmentProperties(startVertex, newVertex, allEdges);
+                if (completedSegmentProps) {
+                    frozenReference_Origin_Data = completedSegmentProps.startVertex;
+                    
+                    if (snappedData.gridToGridSquaredSum > 0 && snappedData.gridInterval) {
+                        frozenReference_D_du = snappedData.gridInterval * Math.sqrt(snappedData.gridToGridSquaredSum);
+                    } else {
+                        frozenReference_D_du = completedSegmentProps.length;
+                    }
+                    
+                    frozenReference_D_g2g = snappedData.gridToGridSquaredSum > 0 ? { 
+                        g2gSquaredSum: snappedData.gridToGridSquaredSum, 
+                        interval: snappedData.gridInterval 
+                    } : null;
+                    
+                    frozenReference_A_rad = completedSegmentProps.turnAngleRad;
+                    frozenReference_A_baseRad = completedSegmentProps.precedingSegmentAbsoluteAngleRad;
+                }
+            } else {
+                frozenReference_D_du = null;
+                frozenReference_D_g2g = null;
+                frozenReference_A_rad = null;
+                frozenReference_A_baseRad = null;
+                frozenReference_Origin_Data = null;
+            }
+
+            clickData.count = 0;
+        } else if (actionContext.target === 'canvas') {
                 saveStateForUndo();
                 const startCoords = ghostVertexPosition ? ghostVertexPosition : screenToData(mousePos);
                 
@@ -5256,9 +5185,6 @@ function applyCoordinateSystemConstraintsOnDragEnd(face, initialSystem, initialD
     }
 }
 
-
-
-
 function backupFaceCoordinateSystemsBeforeMerge(allFaces, findRoot) {
     const faceCoordSystemBackup = new Map();
     allFaces.forEach(face => {
@@ -5435,8 +5361,6 @@ function handleRemoveFaceFromMenu() {
     contextMenu.style.display = 'none';
 }
 
-
-// Event listeners setup
 canvas.addEventListener('wheel', (event) => {
     event.preventDefault();
     const mouseScreen = U.getMousePosOnCanvas(event, canvas);

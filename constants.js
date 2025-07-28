@@ -1,6 +1,6 @@
 // constants.js
 
-export const BASE_THEME = {
+export const DARK_THEME = {
     activeCenterGlow: '#00ffff',
     uiIconDisabled: '#ff0000',
     helperLine: 'rgba(200, 200, 200, 0.6)',
@@ -33,6 +33,39 @@ export const BASE_THEME = {
     selectionGlow: '#4da6ff',
     activeCenterGlow: '#00ffff',
     helperLine: 'rgba(200, 200, 200, 0.6)'
+};
+
+export const LIGHT_THEME = {
+    background: '#e5e5e5',
+    htmlBody: '#e1e1e1',
+    grid: [119, 119, 119],
+    axis: 'rgba(0, 0, 0, 1)',
+    axisTickLabel: [0, 0, 0],
+    defaultStroke: 'black',
+    vertex: '#000000',
+    edge: '#403A2F',
+    face: '#7F7F7F',
+    frozenReference: 'rgba(217, 119, 6, 0.95)',
+    feedbackDefault: [25, 25, 25],
+    feedbackSnapped: 'rgba(217, 119, 6, 0.95)',
+    geometryInfoText: 'rgba(0, 0, 0, 0.95)',
+    geometryInfoTextSnapped: 'rgba(217, 119, 6, 0.95)',
+    mouseCoords: 'rgba(0, 0, 0, 0.7)',
+    uiIcon: 'black',
+    uiIconDefault: '#635C50',
+    uiIconSelected: '#060504',
+    uiTextSelected: '#1F0D01',
+    uiTextDefault: '#2E2A24',
+    uiDefault: 'rgba(0, 0, 0, 0.8)',
+    selectionGlow: '#0059B3', // High-contrast blue
+    activeCenterGlow: '#008080', // High-contrast teal
+    helperLine: 'rgba(55, 55, 55, 0.6)',
+    coordSysX: '#ff0000',
+    coordSysY: '#008000', // Darker green for light bg
+    coordSysOrigin: '#0000ff',
+    checkerboardColor1: '#ffffff',
+    checkerboardColor2: '#e0e0e0',
+    uiIconDisabled: '#cc0000'
 };
 
 export const CONTEXT_MENU_INSET = 5;

@@ -370,13 +370,13 @@ export function findCoordinateSystemElement(screenPos, face, dataToScreen) {
     if (!coordSystem) return null;
 
     const centerScreen = dataToScreen(coordSystem.origin);
-    const centerSelectRadius = 8;
+    const centerSelectRadius = C.COORD_SYSTEM_ELEMENT_SELECT_RADIUS;
 
     if (distance(screenPos, centerScreen) < centerSelectRadius) {
         return { face, type: 'center' };
     }
 
-    const armSelectThreshold = 5;
+    const armSelectThreshold = C.COORD_SYSTEM_AXIS_SELECT_THRESHOLD;
 
     const xAxisEndGlobal = localToGlobal({ x: 1, y: 0 }, coordSystem);
     const xAxisScreenEnd = dataToScreen(xAxisEndGlobal);
@@ -662,7 +662,7 @@ export function getAxisSnapAngle(mouseDataPos, origin, isShiftPressed, snapTarge
         return { angle: rawAngle, edgeIndex: null, snapType: null, snapped: false, targetVertexId: null };
     }
     
-    const snapThreshold = Math.PI / 24; // About 7.5 degrees
+    const snapThreshold = C.COORD_SYSTEM_AXIS_SNAP_THRESHOLD_RAD;
     let bestSnap = { angle: rawAngle, difference: Infinity, edgeIndex: null, snapType: null, targetVertexId: null };
 
     const priorities = {
@@ -726,7 +726,7 @@ export function getAxisScaleSnap(origin, axisAngle, snapTargets, face, findVerte
         return { snapped: false };
     }
     
-    const pixelSnapThreshold = 15 / viewTransform.scale;
+    const pixelSnapThreshold = C.COORD_SYSTEM_AXIS_SCALE_SNAP_THRESHOLD_PIXELS / viewTransform.scale;
     let snapCandidates = [];
     
     const { v1Id, v2Id } = snapTargets.alignedEdgeInfo;
@@ -780,55 +780,49 @@ export function getCoordinateSystemCenterSnap(mouseDataPos, snapTargets, gridDis
     
     if (snapTargets) {
         // Check vertex snaps
-        snapTargets.vertices.forEach(vertex => {
-            const dist = distance(mouseDataPos, vertex);
-            if (dist < minDistance) {
-                minDistance = dist;
-                bestSnap = {
-                    snapped: true,
-                    snapPoint: vertex,
-                    snapType: 'vertex',
-                    vertexId: vertex.id
-                };
-            }
-        });
-        
-        // Check edge fractional snaps
-        for (let edgeIndex = 0; edgeIndex < snapTargets.edgeMidvertices.length; edgeIndex++) {
-            const v1Id = snapTargets.edgeVertexIds[edgeIndex * 2];
-            const v2Id = snapTargets.edgeVertexIds[edgeIndex * 2 + 1];
-            
-            // Find vertices (assuming findVertexById is available in scope)
-            const v1 = { id: v1Id, ...snapTargets.vertices.find(v => v.id === v1Id) };
-            const v2 = { id: v2Id, ...snapTargets.vertices.find(v => v.id === v2Id) };
-            
-            if (v1 && v2) {
-                const fractions = [0, 0.25, 1/3, 0.5, 2/3, 0.75, 1];
-                
-                fractions.forEach(frac => {
-                    const fracPoint = {
-                        x: v1.x + frac * (v2.x - v1.x),
-                        y: v1.y + frac * (v2.y - v1.y)
+        if (snapTargets.vertices) {
+            snapTargets.vertices.forEach(vertex => {
+                const dist = distance(mouseDataPos, vertex);
+                if (dist < minDistance) {
+                    minDistance = dist;
+                    bestSnap = {
+                        snapped: true,
+                        snapPoint: vertex,
+                        snapType: 'vertex',
+                        vertexId: vertex.id
                     };
-                    
-                    const dist = distance(mouseDataPos, fracPoint);
-                    if (dist < minDistance) {
-                        minDistance = dist;
-                        bestSnap = {
-                            snapped: true,
-                            snapPoint: fracPoint,
-                            snapType: 'edge',
-                            edgeInfo: {
-                                v1: v1Id,
-                                v2: v2Id,
-                                t: frac,
-                                originalAngle: snapTargets.edgeAngles[edgeIndex],
-                                edgeIndex: edgeIndex
-                            }
-                        };
-                    }
-                });
-            }
+                }
+            });
+        }
+        
+        // Check edge midpoints
+        if (snapTargets.edgeMidvertices) {
+            snapTargets.edgeMidvertices.forEach(midpoint => {
+                const dist = distance(mouseDataPos, midpoint);
+                if (dist < minDistance) {
+                    minDistance = dist;
+                    bestSnap = {
+                        snapped: true,
+                        snapPoint: midpoint,
+                        snapType: 'edge'
+                    };
+                }
+            });
+        }
+        
+        // Check other face centers
+        if (snapTargets.faceCenters) {
+            snapTargets.faceCenters.forEach(center => {
+                const dist = distance(mouseDataPos, center);
+                if (dist < minDistance) {
+                    minDistance = dist;
+                    bestSnap = {
+                        snapped: true,
+                        snapPoint: center,
+                        snapType: 'faceCenter'
+                    };
+                }
+            });
         }
     }
     
@@ -921,7 +915,6 @@ export function computeAngle(prev, curr, next) {
     return Math.acos(clamp(cos_theta, -1, 1));
 }
 
-
 export function triangulatePolygon(vertices) {
     let n = vertices.length;
     if (n < 3) return [];
@@ -1003,20 +996,11 @@ export function triangulatePolygon(vertices) {
     return triangles;
 }
 
-export function getCurrentTheme(activeThemeName, baseTheme) {
-    if (activeThemeName === 'dark') {
-        return baseTheme;
-    } else {
-        const lightTheme = {};
-        for (const [key, value] of Object.entries(baseTheme)) {
-            if (key === 'frozenReference' || key === 'feedbackSnapped' || key === 'geometryInfoTextSnapped') {
-                lightTheme[key] = 'rgba(217, 119, 6, 0.95)';
-            } else {
-                lightTheme[key] = invertGrayscaleValue(value);
-            }
-        }
-        return lightTheme;
+export function getCurrentTheme(activeThemeName, darkTheme) {
+    if (activeThemeName === 'light') {
+        return C.LIGHT_THEME;
     }
+    return darkTheme;
 }
 
 export function hslToRgb(h, s, l) {
@@ -1205,7 +1189,6 @@ export function distancePointToLineSegment(point, lineStart, lineEnd) {
     return getClosestPointOnLineSegment(point, lineStart, lineEnd).distance;
 }
 
-
 export function updateFaceLocalCoordinateSystems(allFaces, findPointById) {
     allFaces.forEach(face => {
         if (!face.localCoordSystem) {
@@ -1248,39 +1231,6 @@ function walkMinimalFaceDirected(startVertex, secondVertex, adjacencyMap) {
         currentNode = nextNode;
     }
     return null;
-}
-
-function findAllTriangularFaces(adjacencyMap, vertices) {
-    const triangularFaces = [];
-    const processedTriangles = new Set();
-    
-    for (const [v1, neighbors1] of adjacencyMap.entries()) {
-        for (let i = 0; i < neighbors1.length; i++) {
-            const v2 = neighbors1[i];
-            const neighbors2 = adjacencyMap.get(v2) || [];
-            
-            for (let j = 0; j < neighbors2.length; j++) {
-                const v3 = neighbors2[j];
-                if (v3 === v1) continue;
-                
-                const neighbors3 = adjacencyMap.get(v3) || [];
-                
-                if (neighbors3.includes(v1)) {
-                    if (v1 !== v2 && v2 !== v3 && v3 !== v1) {
-                        const triangle = [v1, v2, v3];
-                        const triangleKey = triangle.slice().sort().join('_');
-                        
-                        if (!processedTriangles.has(triangleKey)) {
-                            processedTriangles.add(triangleKey);
-                            triangularFaces.push(triangle);
-                        }
-                    }
-                }
-            }
-        }
-    }
-    
-    return triangularFaces;
 }
 
 function filterCompositeFaces(allFaces, allEdges, findPointById) {
@@ -1334,42 +1284,6 @@ function filterCompositeFaces(allFaces, allEdges, findPointById) {
 
         return true;
     });
-}
-
-function isSelfIntersectingImproved(vertices) {
-    const n = vertices.length;
-    if (n <= 3) return false;
-    
-    for (let i = 0; i < n; i++) {
-        const p1 = vertices[i];
-        const p2 = vertices[(i + 1) % n];
-        
-        for (let j = i + 2; j < n; j++) {
-            if (j === (i + n - 1) % n || (j + 1) % n === i) continue;
-            
-            const q1 = vertices[j];
-            const q2 = vertices[(j + 1) % n];
-            
-            if (linesIntersectProper(p1, p2, q1, q2)) {
-                return true;
-            }
-        }
-    }
-    return false;
-}
-
-function linesIntersectProper(a, b, c, d) {
-    function ccw(A, B, C) {
-        return (C.y - A.y) * (B.x - A.x) > (B.y - A.y) * (C.x - A.x);
-    }
-    
-    const intersect = ccw(a, c, d) !== ccw(b, c, d) && ccw(a, b, c) !== ccw(a, b, d);
-    
-    if (!intersect) return false;
-    
-    const samePoint = (p1, p2) => Math.abs(p1.x - p2.x) < 1e-10 && Math.abs(p1.y - p2.y) < 1e-10;
-    
-    return !(samePoint(a, c) || samePoint(a, d) || samePoint(b, c) || samePoint(b, d));
 }
 
 export function detectClosedPolygons(allEdges, findPointById) {
@@ -1519,7 +1433,6 @@ export function findClosestUIElement(pos, elements) {
     return closest;
 }
 
-
 export function convertColorToColormapFormat(colormapData) {
     // Handle colormap selector format (uses 'points' instead of 'vertices')
     if (colormapData && colormapData.points) {
@@ -1607,7 +1520,6 @@ export function sampleColormap(colormapItem, t) {
     return `rgba(${r},${g},${b},${alpha})`;
 }
 
-
 export function createFaceLocalCoordinateSystem(face, findPointById) {
     const vertices = face.vertexIds
         .map(id => findPointById(id))
@@ -1688,8 +1600,6 @@ export function getPerpendicularBisector(p1, p2) {
         }
     };
 }
-
-
 
 export function getCircleCircleIntersection(c1, c2) {
     const d = distance(c1.center, c2.center);
