@@ -449,6 +449,7 @@ function calculatePreviewCoordSystem(face, { initialSystem, dragPreviewVertices,
     return previewSystem;
 }
 
+
 export function drawCopyPreviews(ctx, { copyCount, isDragConfirmed, initialDragVertexStates, dragPreviewVertices, transformIndicatorData, allEdges, allFaces, findVertexById, findNeighbors, colors }, dataToScreen) {
     const verticesToCopy = initialDragVertexStates.filter(p => p.type === 'regular');
     const vertexIdsToCopy = new Set(verticesToCopy.map(p => p.id));
