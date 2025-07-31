@@ -1309,6 +1309,73 @@ function getCurrentState() {
     };
 }
 
+function updateFaceHierarchy() {
+    // 1. Reset all hierarchy links
+    allFaces.forEach(f => {
+        f.parentFaceId = null;
+        f.childFaceIds = [];
+    });
+
+    // 2. Prepare candidate data for efficient lookup
+    const faceCandidates = allFaces.map(face => {
+        const vertices = face.vertexIds.map(id => findVertexById(id));
+        if (vertices.some(v => !v)) {
+            return null; // Skip faces with invalid vertices
+        }
+        return {
+            face: face,
+            vertices: vertices,
+            area: Math.abs(U.shoelaceArea(vertices))
+        };
+    }).filter(Boolean);
+
+    // 3. Determine the direct (smallest) parent for each face
+    faceCandidates.forEach(childCandidate => {
+        let bestParent = null;
+        let minParentArea = Infinity;
+
+        faceCandidates.forEach(parentCandidate => {
+            if (childCandidate.face.id === parentCandidate.face.id) return;
+            if (parentCandidate.area <= childCandidate.area) return; // Optimization
+
+            const childGraphVertexIds = findAllVerticesInSubgraph(childCandidate.face.vertexIds[0]);
+            const childGraphVertices = childGraphVertexIds.map(id => findVertexById(id));
+            if (childGraphVertices.some(v => !v)) return;
+
+            // Check if all vertices of the child's graph are contained
+            const verticesAreContained = U.areVerticesContainedInPolygon(childGraphVertices, parentCandidate.vertices);
+            
+            if (verticesAreContained) {
+                const childGraphVertexIdSet = new Set(childGraphVertexIds);
+                const childGraphEdges = allEdges.filter(edge => 
+                    childGraphVertexIdSet.has(edge.id1) && childGraphVertexIdSet.has(edge.id2)
+                );
+                
+                const edgesDoIntersect = U.doGraphEdgesIntersectPolygon(childGraphEdges, parentCandidate.vertices, findVertexById);
+
+                if (!edgesDoIntersect && parentCandidate.area < minParentArea) {
+                    minParentArea = parentCandidate.area;
+                    bestParent = parentCandidate.face;
+                }
+            }
+        });
+
+        if (bestParent) {
+            childCandidate.face.parentFaceId = bestParent.id;
+        }
+    });
+
+    // 4. Populate the childFaceIds arrays based on the determined parent links
+    allFaces.forEach(f => {
+        if (f.parentFaceId) {
+            const parent = allFaces.find(p => p.id === f.parentFaceId);
+            if (parent && !parent.childFaceIds.includes(f.id)) {
+                parent.childFaceIds.push(f.id);
+            }
+        }
+    });
+}
+
 function handleUndo() {
     if (undoStack.length === 0) return;
     
@@ -1568,6 +1635,8 @@ function handlePaste() {
                     newFace.localCoordSystem.scaleAttachedToEdge.v2 = oldToNewIdMap.get(newFace.localCoordSystem.scaleAttachedToEdge.v2);
                 }
             }
+            newFace.parentFaceId = null;
+            newFace.childFaceIds = [];
             allFaces.push(newFace);
             newPastedFaceIds.push(newFace.id);
         }
@@ -2035,6 +2104,8 @@ function updateFaces(edgesBefore, edgesAfter) {
             delete newFace.colormapDistribution;
         }
         
+        newFace.parentFaceId = null;
+        newFace.childFaceIds = [];
         allFaces.push(newFace);
     });
 
@@ -4727,6 +4798,7 @@ if (isDragConfirmed) {
         }
 
         initialCoordSystemStates.clear();
+        updateFaceHierarchy();
     } else {
         if (actionContext.target === 'ui-icon') {
             // This was a simple click on an icon, already handled by setting activeColorTarget in mouseDown.

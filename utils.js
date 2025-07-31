@@ -1623,5 +1623,80 @@ export function getCircleCircleIntersection(c1, c2) {
     return [pA, pB];
 }
 
+/**
+ * A helper function to find the intersection point of two line segments.
+ * It only returns a point if the segments properly cross each other, ignoring shared endpoints.
+ */
+function getLineSegmentIntersection(p1, p2, p3, p4) {
+    const den = (p1.x - p2.x) * (p3.y - p4.y) - (p1.y - p2.y) * (p3.x - p4.x);
+    if (Math.abs(den) < C.GEOMETRY_CALCULATION_EPSILON) {
+        return null; // Lines are parallel or collinear
+    }
 
+    const t = ((p1.x - p3.x) * (p3.y - p4.y) - (p1.y - p3.y) * (p3.x - p4.x)) / den;
+    const u = -((p1.x - p2.x) * (p1.y - p3.y) - (p1.y - p2.y) * (p1.x - p3.x)) / den;
+
+    // Check if intersection occurs strictly within both line segments (not at endpoints)
+    if (t > C.GEOMETRY_CALCULATION_EPSILON && t < 1 - C.GEOMETRY_CALCULATION_EPSILON &&
+        u > C.GEOMETRY_CALCULATION_EPSILON && u < 1 - C.GEOMETRY_CALCULATION_EPSILON) {
+        return { x: p1.x + t * (p2.x - p1.x), y: p1.y + t * (p2.y - p1.y) };
+    }
+
+    return null;
+}
+
+/**
+ * Checks if a list of vertices is located inside or on the boundary of a given polygon.
+ */
+export function areVerticesContainedInPolygon(verticesToCheck, boundaryVertices) {
+    if (!verticesToCheck || !boundaryVertices || verticesToCheck.length === 0 || boundaryVertices.length < 3) {
+        return false;
+    }
+
+    for (const vertex of verticesToCheck) {
+        let onBoundary = false;
+        for (let i = 0; i < boundaryVertices.length; i++) {
+            const p1 = boundaryVertices[i];
+            const p2 = boundaryVertices[(i + 1) % boundaryVertices.length];
+            if (distancePointToLineSegment(vertex, p1, p2) < C.GEOMETRY_CALCULATION_EPSILON) {
+                onBoundary = true;
+                break;
+            }
+        }
+
+        if (!onBoundary && !isVertexInPolygon(vertex, boundaryVertices)) {
+            return false;
+        }
+    }
+    
+    return true;
+}
+
+/**
+ * Checks if any edges of a child graph improperly intersect with the boundary edges of a parent polygon.
+ */
+export function doGraphEdgesIntersectPolygon(childEdges, parentBoundaryVertices, findVertexById) {
+    const parentEdges = [];
+    for (let i = 0; i < parentBoundaryVertices.length; i++) {
+        parentEdges.push({
+            p1: parentBoundaryVertices[i],
+            p2: parentBoundaryVertices[(i + 1) % parentBoundaryVertices.length]
+        });
+    }
+
+    for (const childEdge of childEdges) {
+        const c1 = findVertexById(childEdge.id1);
+        const c2 = findVertexById(childEdge.id2);
+        if (!c1 || !c2) continue;
+
+        for (const parentEdge of parentEdges) {
+            if (getLineSegmentIntersection(c1, c2, parentEdge.p1, parentEdge.p2)) {
+                // A proper intersection was found, meaning the child graph is not fully contained.
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
 
