@@ -367,11 +367,10 @@ function calculatePreviewCoordSystem(face, { initialSystem, dragPreviewVertices,
         const incircle = U.calculateIncenter(liveVertices);
         if (incircle) {
             const rotation = transformIndicatorData ? transformIndicatorData.rotation : 0;
-            const scale = transformIndicatorData ? transformIndicatorData.scale : 1;
             return {
                 ...initialSystem,
                 origin: incircle.center,
-                scale: initialSystem.scale * scale,
+                scale: incircle.radius,
                 angle: U.normalizeAngle(initialSystem.angle + rotation)
             };
         }
@@ -386,7 +385,11 @@ function calculatePreviewCoordSystem(face, { initialSystem, dragPreviewVertices,
 
         previewSystem.origin = U.applyTransformToVertex(initialSystem.origin, center, rotation, scale, directionalScale, startVector);
 
-        if (!directionalScale) {
+        if (directionalScale) {
+            const p_unit_x_initial = U.localToGlobal({ x: 1, y: 0 }, initialSystem);
+            const p_unit_x_final = U.applyTransformToVertex(p_unit_x_initial, center, rotation, scale, directionalScale, startVector);
+            previewSystem.scale = U.distance(previewSystem.origin, p_unit_x_final);
+        } else {
             previewSystem.angle = U.normalizeAngle(initialSystem.angle + rotation);
             previewSystem.scale = initialSystem.scale * scale;
         }

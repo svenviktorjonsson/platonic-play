@@ -8,6 +8,7 @@ Relevant files and folders (excluding specified patterns):
 ├── package.json
 ├── readme.md
 ├── renderer.js
+├── replace_literals_with_constants.py
 ├── script.js
 ├── style.css
 ├── utils.js
@@ -19,7 +20,15 @@ Relevant files and folders (excluding specified patterns):
 === constants.js ===
 // constants.js
 
-export const BASE_THEME = {
+export const DARK_THEME = {
+    activeCenterGlow: '#00ffff',
+    uiIconDisabled: '#ff0000',
+    helperLine: 'rgba(200, 200, 200, 0.6)',
+    coordSysX: '#ff0000',
+    coordSysY: '#00ff00',
+    coordSysOrigin: '#0000ff',
+    checkerboardColor1: '#808080',
+    checkerboardColor2: '#c0c0c0',
     background: '#1a1a1a',
     htmlBody: '#1e1e1e',
     grid: [136, 136, 136],
@@ -44,6 +53,39 @@ export const BASE_THEME = {
     selectionGlow: '#4da6ff',
     activeCenterGlow: '#00ffff',
     helperLine: 'rgba(200, 200, 200, 0.6)'
+};
+
+export const LIGHT_THEME = {
+    background: '#e5e5e5',
+    htmlBody: '#e1e1e1',
+    grid: [119, 119, 119],
+    axis: 'rgba(0, 0, 0, 1)',
+    axisTickLabel: [0, 0, 0],
+    defaultStroke: 'black',
+    vertex: '#000000',
+    edge: '#403A2F',
+    face: '#7F7F7F',
+    frozenReference: 'rgba(217, 119, 6, 0.95)',
+    feedbackDefault: [25, 25, 25],
+    feedbackSnapped: 'rgba(217, 119, 6, 0.95)',
+    geometryInfoText: 'rgba(0, 0, 0, 0.95)',
+    geometryInfoTextSnapped: 'rgba(217, 119, 6, 0.95)',
+    mouseCoords: 'rgba(0, 0, 0, 0.7)',
+    uiIcon: 'black',
+    uiIconDefault: '#635C50',
+    uiIconSelected: '#060504',
+    uiTextSelected: '#1F0D01',
+    uiTextDefault: '#2E2A24',
+    uiDefault: 'rgba(0, 0, 0, 0.8)',
+    selectionGlow: '#0059B3', // High-contrast blue
+    activeCenterGlow: '#008080', // High-contrast teal
+    helperLine: 'rgba(55, 55, 55, 0.6)',
+    coordSysX: '#ff0000',
+    coordSysY: '#008000', // Darker green for light bg
+    coordSysOrigin: '#0000ff',
+    checkerboardColor1: '#ffffff',
+    checkerboardColor2: '#e0e0e0',
+    uiIconDisabled: '#cc0000'
 };
 
 export const CONTEXT_MENU_INSET = 5;
@@ -76,6 +118,12 @@ export const HELPER_LINE_DASH_PATTERN = [2, 3];
 export const REF_LINE_DASH_PATTERN = [1, 3];
 
 // --- INTERACTION ---
+export const COORD_SYSTEM_CENTER_SNAP_THRESHOLD = 0.01;
+export const COORD_SYSTEM_ELEMENT_SELECT_RADIUS = 8;
+export const COORD_SYSTEM_AXIS_SELECT_THRESHOLD = 5;
+export const COORD_SYSTEM_AXIS_SNAP_THRESHOLD_RAD = Math.PI / 24;
+export const COORD_SYSTEM_AXIS_SCALE_SNAP_THRESHOLD_PIXELS = 15;
+export const TRANSFORM_SCALE_SNAP_PRIORITY_THRESHOLD = 0.1;
 export const EDGE_ID_DELIMITER = '_EDGE_';
 export const DOUBLE_CLICK_MS = 300;
 export const DRAG_THRESHOLD = 3;
@@ -93,6 +141,11 @@ export const BISECTOR_LINE_EXTENSION_FACTOR = 100000;
 export const GRID_SNAP_THRESHOLD_FACTOR = 0.8;
 
 // --- AXES & TICKS ---
+export const POLAR_REF_TICK_ALPHA_THRESHOLD = 0.01;
+export const POLAR_REF_TICK_LABEL_ALPHA_FACTOR = 0.95;
+export const POLAR_REF_LABEL_MARGIN = 100;
+export const POLAR_REF_LINE_WIDTH = 1.5;
+export const POLAR_GRID_SPOKE_WIDTH_FACTOR = 0.5;
 export const AXIS_LINE_WIDTH = 1.5;
 export const AXIS_TICK_SIZE = 4;
 export const AXIS_TICK_LABEL_ALPHA = 0.9;
@@ -129,6 +182,10 @@ export const DEFAULT_REFERENCE_ANGLE_RAD = Math.PI / 2;
 export const DEFAULT_POLAR_ANGLE_DIFF = 30;
 
 // --- UI & TOOLBAR ---
+export const UI_ICON_DISABLED_FILL = '#808080';
+export const UI_COLOR_TARGET_UNASSIGNED = 'rgba(128, 128, 128, 1)';
+export const FACE_COORD_SYSTEM_ORIGIN_RADIUS = 4;
+export const FACE_GLOW_ALPHA = 0.25;
 export const UI_BUTTON_PADDING = 10;
 export const UI_TOOLBAR_WIDTH = 56;
 export const UI_SWATCH_SIZE = 30;
@@ -166,6 +223,8 @@ export const COLOR_WHEEL_FADE_START_RADIUS_FACTOR = 0.75;
 export const DEFAULT_RECENT_COLORS = ['#ffffff', '#BFC5D0', '#808080', '#ff4444', '#44ff44', '#4444ff', '#ffff44', '#ff44ff']
 
 // --- FEEDBACK LABELS & TEXT ---
+export const TRANSFORM_INDICATOR_PRECISION = 4;
+export const TRANSFORM_INDICATOR_SCALE_SNAP_TOLERANCE = 0.001;
 export const FEEDBACK_LABEL_FONT_SIZE = 12;
 export const FEEDBACK_ARC_RADIUS_SCREEN = 30;
 export const FEEDBACK_DISTANCE_LABEL_OFFSET_SCREEN = 18;
@@ -533,7 +592,7 @@ export function drawFaceGlows(ctx, { allFaces, hoveredFaceId, selectedFaceIds, c
 
             ctx.save();
             ctx.fillStyle = colors.selectionGlow;
-            ctx.globalAlpha = 0.25;
+            ctx.globalAlpha = C.FACE_GLOW_ALPHA;
             
             ctx.beginPath();
             screenVertices.forEach((vertex, index) => {
@@ -813,6 +872,7 @@ function calculatePreviewCoordSystem(face, { initialSystem, dragPreviewVertices,
 
     return previewSystem;
 }
+
 
 export function drawCopyPreviews(ctx, { copyCount, isDragConfirmed, initialDragVertexStates, dragPreviewVertices, transformIndicatorData, allEdges, allFaces, findVertexById, findNeighbors, colors }, dataToScreen) {
     const verticesToCopy = initialDragVertexStates.filter(p => p.type === 'regular');
@@ -1194,13 +1254,13 @@ export function drawPolarReferenceCircle(ctx, htmlOverlay, updateHtmlLabel, radi
 
     lastAngularGridState.forEach(level => {
         const tickAlpha = level.alpha;
-        if (tickAlpha < 0.01) return;
+        if (tickAlpha < C.POLAR_REF_TICK_ALPHA_THRESHOLD) return;
 
         const screenSeparation = screenRadius * (level.angle * Math.PI / 180);
         
         if (screenSeparation < C.REF_CIRCLE_MIN_TICK_SPACING * 0.5) return;
 
-        const finalColor = `rgba(${colors.feedbackDefault.join(',')}, ${tickAlpha * 0.95})`;
+        const finalColor = `rgba(${colors.feedbackDefault.join(',')}, ${tickAlpha * C.POLAR_REF_TICK_LABEL_ALPHA_FACTOR})`;
 
         let anglesToProcess;
         if (visibleAngleRange.isFullCircle) {
@@ -1240,7 +1300,7 @@ export function drawPolarReferenceCircle(ctx, htmlOverlay, updateHtmlLabel, radi
                 y: originScreen.y - (screenRadius + C.REF_TEXT_DISTANCE_LABEL_OFFSET_SCREEN) * Math.sin(angleRad) 
             };
             
-            const labelMargin = 100;
+            const labelMargin = C.POLAR_REF_LABEL_MARGIN;
             const isLabelVisible = labelPos.x > -labelMargin && labelPos.x < canvasWidthCSS + labelMargin && 
                                    labelPos.y > -labelMargin && labelPos.y < canvasHeightCSS + labelMargin;
             
@@ -1291,7 +1351,7 @@ export function drawPolarReferenceCircle(ctx, htmlOverlay, updateHtmlLabel, radi
                     y: vertexOnCircle.y + tickVec.y * tickLength
                 };
 
-                ctx.lineWidth = 1.5;
+                ctx.lineWidth = C.POLAR_REF_LINE_WIDTH;
                 ctx.beginPath();
                 ctx.moveTo(vertexOnCircle.x, vertexOnCircle.y);
                 ctx.lineTo(tickEnd.x, tickEnd.y);
@@ -2389,13 +2449,13 @@ export function drawPolarGrid(ctx, { canvas, dpr, colors, gridAlpha }, origin, m
 
     lastAngularGridState.forEach(level => {
         const tickAlpha = level.alpha;
-        if (tickAlpha < 0.01) return;
+        if (tickAlpha < C.POLAR_REF_TICK_ALPHA_THRESHOLD) return;
 
         const screenSeparation = spokeReferenceRadius * (level.angle * Math.PI / 180);
         if (screenSeparation < C.REF_CIRCLE_MIN_TICK_SPACING * 0.5) return;
 
         ctx.strokeStyle = `rgba(${colors.grid.join(',')}, ${tickAlpha * gridAlpha})`;
-        ctx.lineWidth = C.GRID_LINEWIDTH * 0.5;
+        ctx.lineWidth = C.GRID_LINEWIDTH * C.POLAR_GRID_SPOKE_WIDTH_FACTOR;
 
         let anglesToProcess;
         if (visibleAngleRange.isFullCircle) {
@@ -2802,7 +2862,7 @@ export function drawTransformIndicators(ctx, htmlOverlay, { transformIndicatorDa
             let scaleText;
             const effectiveScale = isSnapping && snappedScaleValue !== null ? snappedScaleValue : scale;
             
-            if (Math.abs(effectiveScale - 1) < 0.001) {
+            if (Math.abs(effectiveScale - 1) < C.TRANSFORM_INDICATOR_SCALE_SNAP_TOLERANCE) {
                 scaleText = `\\times 1`;
             } else if (isSnapping && gridToGridInfo) {
                 const { startSquaredSum, snapSquaredSum } = gridToGridInfo;
@@ -2821,7 +2881,7 @@ export function drawTransformIndicators(ctx, htmlOverlay, { transformIndicatorDa
             } else if (isSnapping && snappedScaleValue !== null) {
                 scaleText = `\\times ${U.formatFraction(snappedScaleValue, C.FRACTION_FORMAT_TOLERANCE, C.FRACTION_FORMAT_MAX_DENOMINATOR_TRANSFORM)}`;
             } else {
-                const formattedScale = parseFloat(effectiveScale.toFixed(4)).toString();
+                const formattedScale = parseFloat(effectiveScale.toFixed(C.TRANSFORM_INDICATOR_PRECISION)).toString();
                 scaleText = `\\times ${formattedScale}`;
             }
 
@@ -3434,45 +3494,6 @@ export function updateMouseCoordinates(htmlOverlay, { coordsDisplayMode, isMouse
     });
 }
 
-export function createColorWheelIcon(size, dpr) {
-    const tempCanvas = document.createElement('canvas');
-    tempCanvas.width = size * dpr;
-    tempCanvas.height = size * dpr;
-    const tempCtx = tempCanvas.getContext('2d');
-    const imageData = tempCtx.createImageData(tempCanvas.width, tempCanvas.height);
-    const pixels = imageData.data;
-    const centerX = tempCanvas.width / 2;
-    const centerY = tempCanvas.height / 2;
-    const radius = tempCanvas.width / 2;
-    for (let y = 0; y < tempCanvas.height; y++) {
-        for (let x = 0; x < tempCanvas.width; x++) {
-            const i = (y * tempCanvas.width + x) * 4;
-            const dx = x - centerX;
-            const dy = y - centerY;
-            const dist = Math.sqrt(dx * dx + dy * dy);
-            if (dist > radius) continue;
-            const hue = (Math.atan2(dy, dx) * 180 / Math.PI + 360) % 360;
-            const saturation = 100;
-            const lightness = 50;
-            let alpha;
-            const fadeStartRadius = radius * C.COLOR_WHEEL_FADE_START_RADIUS_FACTOR;
-            if (dist < fadeStartRadius) {
-                alpha = 1.0;
-            } else {
-                const fadeDistance = radius - fadeStartRadius;
-                alpha = 1.0 - ((dist - fadeStartRadius) / fadeDistance);
-            }
-            const [R, G, B] = U.hslToRgb(hue / 360, saturation / 100, lightness / 100);
-            pixels[i] = R;
-            pixels[i + 1] = G;
-            pixels[i + 2] = B;
-            pixels[i + 3] = Math.round(Math.max(0, alpha) * 255);
-        }
-    }
-    tempCtx.putImageData(imageData, 0, 0);
-    return tempCanvas;
-}
-
 function drawThemeIcon(ctx, rect, activeThemeName, colors) {
     ctx.save();
     const centerX = rect.x + rect.width / 2;
@@ -3903,8 +3924,8 @@ export function drawVisibilityIcon(ctx, rect, colors) {
 function drawColorPalette(ctx, htmlOverlay, state, updateHtmlLabel) {
     const { canvasUI, colors, allColors, namedColors, colorAssignments, activeColorTargets, verticesVisible, edgesVisible, facesVisible, isDraggingColorTarget, draggedColorTargetInfo, mousePos } = state;
 
-    const checkerboardColor1 = '#808080';
-    const checkerboardColor2 = '#c0c0c0';
+    const checkerboardColor1 = colors.checkerboardColor1;
+    const checkerboardColor2 = colors.checkerboardColor2;
     
     function drawCheckerboard(rect) {
         const tileSize = rect.height / 3;
@@ -4010,7 +4031,7 @@ function drawColorPalette(ctx, htmlOverlay, state, updateHtmlLabel) {
             if (target === C.COLOR_TARGET_VERTEX) {
                 options.vertexState = verticesVisible ? 'filled' : 'disabled';
                 if (targetColorIndex === -1) {
-                    options.vertexColor = 'rgba(128, 128, 128, 1)';
+                    options.vertexColor = C.UI_COLOR_TARGET_UNASSIGNED;
                 } else if (colorItem && colorItem.type === 'color') {
                     options.vertexColor = colorItem.value;
                 } else if (colorItem && colorItem.type === 'colormap') {
@@ -4019,7 +4040,7 @@ function drawColorPalette(ctx, htmlOverlay, state, updateHtmlLabel) {
             } else if (target === C.COLOR_TARGET_EDGE) {
                 options.edgeState = edgesVisible ? 'solid' : 'disabled';
                 if (targetColorIndex === -1) {
-                    options.edgeColor = 'rgba(128, 128, 128, 1)';
+                    options.edgeColor = C.UI_COLOR_TARGET_UNASSIGNED;
                 } else if (colorItem && colorItem.type === 'color') {
                     options.edgeColor = colorItem.value;
                 } else if (colorItem && colorItem.type === 'colormap') {
@@ -4028,7 +4049,7 @@ function drawColorPalette(ctx, htmlOverlay, state, updateHtmlLabel) {
             } else if (target === C.COLOR_TARGET_FACE) {
                 options.faceState = facesVisible ? 'filled' : 'disabled';
                 if (targetColorIndex === -1) {
-                    options.faceColor = 'rgba(128, 128, 128, 1)';
+                    options.faceColor = C.UI_COLOR_TARGET_UNASSIGNED;
                 } else if (colorItem && colorItem.type === 'color') {
                     options.faceColor = colorItem.value;
                 } else if (colorItem && colorItem.type === 'colormap') {
@@ -4192,7 +4213,7 @@ function drawTriangleIcon(ctx, rect, options, colors, isActive = false) {
         }
         ctx.fill(facePath);
     } else if (faceState === 'disabled') {
-        ctx.fillStyle = '#808080';
+        ctx.fillStyle = C.UI_ICON_DISABLED_FILL;
         ctx.fill(facePath);
     }
     
@@ -4253,7 +4274,7 @@ function drawTriangleIcon(ctx, rect, options, colors, isActive = false) {
     const hasDisabledElements = vertexState === 'disabled' || edgeState === 'disabled' || faceState === 'disabled';
     
     if (showAllDisabled) {
-        ctx.strokeStyle = '#ff0000';
+        ctx.strokeStyle = colors.uiIconDisabled;
         ctx.lineWidth = 2;
         ctx.setLineDash([]);
         ctx.beginPath();
@@ -4261,7 +4282,7 @@ function drawTriangleIcon(ctx, rect, options, colors, isActive = false) {
         ctx.lineTo(30, 30);
         ctx.stroke();
     } else if (hasDisabledElements) {
-        ctx.strokeStyle = '#ff0000';
+        ctx.strokeStyle = colors.uiIconDisabled;
         ctx.lineWidth = 2;
         ctx.setLineDash([]);
         ctx.beginPath();
@@ -4395,7 +4416,7 @@ function drawVisibilityPanel(ctx, htmlOverlay, state, updateHtmlLabel) {
     const getColor = (target) => {
         if (!colorAssignments || !allColors) return colors.uiIcon;
         const colorIndex = colorAssignments[target];
-        if (colorIndex === -1) return 'rgba(128, 128, 128, 1)';
+        if (colorIndex === -1) return C.UI_COLOR_TARGET_UNASSIGNED;
         const item = allColors[colorIndex];
         if (!item) return colors.uiIcon;
         if (item.type === 'color') return item.value;
@@ -4570,7 +4591,7 @@ export function getIconPreviewColor(target, draggedColorTargetInfo, allColors, c
     // Fallback to current assignment
     const colorIndex = colorAssignments[target];
     if (colorIndex === -1) {
-        return 'rgba(128, 128, 128, 1)';
+        return C.UI_COLOR_TARGET_UNASSIGNED;
     }
     const item = allColors[colorIndex];
     if (!item) return colors.uiIcon;
@@ -4979,6 +5000,7 @@ export function drawFaceCoordinateSystems(ctx, { allFaces, selectedFaceIds, colo
     });
 }
 
+
 function drawCoordinateSystemCross(ctx, coordSystem, colors, dataToScreen, coordSystemSnapScale = null) {
     const centerScreen = dataToScreen(coordSystem.origin);
 
@@ -5011,20 +5033,106 @@ function drawCoordinateSystemCross(ctx, coordSystem, colors, dataToScreen, coord
     };
 
     // Determine arrow colors based on snap state
-    const xArrowColor = coordSystemSnapScale !== null ? colors.feedbackSnapped : '#ff0000'; // Red for x-axis
-    const yArrowColor = coordSystemSnapScale !== null ? colors.feedbackSnapped : '#00ff00'; // Green for y-axis
+    const xColor = coordSystemSnapScale !== null ? colors.feedbackSnapped : colors.coordSysX;
+    const yColor = coordSystemSnapScale !== null ? colors.feedbackSnapped : colors.coordSysY;
 
-    drawArrow(centerScreen, xAxisScreenEnd, '#ff0000', xArrowColor);
-    drawArrow(centerScreen, yAxisScreenEnd, '#00ff00', yArrowColor);
+    drawArrow(centerScreen, xAxisScreenEnd, xColor, xColor);
+    drawArrow(centerScreen, yAxisScreenEnd, yColor, yColor);
 
     // The center vertex for grabbing (blue dot)
-    ctx.fillStyle = '#0000ff';
+    ctx.fillStyle = colors.coordSysOrigin;
     ctx.beginPath();
-    ctx.arc(centerScreen.x, centerScreen.y, 4, 0, 2 * Math.PI);
+    ctx.arc(centerScreen.x, centerScreen.y, C.FACE_COORD_SYSTEM_ORIGIN_RADIUS, 0, 2 * Math.PI);
     ctx.fill();
 
     ctx.restore();
 }
+
+
+=== replace_literals_with_constants.py ===
+import os
+import re
+
+# --- Configuration ---
+
+# A list of tuples: (file_path, string_to_find, string_to_replace)
+# This list now only contains replacements for magic numbers and hardcoded colors.
+REPLACEMENTS = [
+    # renderer.js replacements
+    ("renderer.js", "ctx.globalAlpha = 0.25;", "ctx.globalAlpha = C.FACE_GLOW_ALPHA;"),
+    ("renderer.js", "if (tickAlpha < 0.01) return;", "if (tickAlpha < C.POLAR_REF_TICK_ALPHA_THRESHOLD) return;"),
+    ("renderer.js", "const finalColor = `rgba(${colors.feedbackDefault.join(',')}, ${tickAlpha * 0.95})`;", "const finalColor = `rgba(${colors.feedbackDefault.join(',')}, ${tickAlpha * C.POLAR_REF_TICK_LABEL_ALPHA_FACTOR})`;"),
+    ("renderer.js", "const labelMargin = 100;", "const labelMargin = C.POLAR_REF_LABEL_MARGIN;"),
+    ("renderer.js", "ctx.lineWidth = 1.5;", "ctx.lineWidth = C.POLAR_REF_LINE_WIDTH;"),
+    ("renderer.js", "ctx.lineWidth = C.GRID_LINEWIDTH * 0.5;", "ctx.lineWidth = C.GRID_LINEWIDTH * C.POLAR_GRID_SPOKE_WIDTH_FACTOR;"),
+    ("renderer.js", "const angleText = `${parseFloat(angleDeg.toFixed(4)).toString()}^{\\circ}`;", "const angleText = `${parseFloat(angleDeg.toFixed(C.TRANSFORM_INDICATOR_PRECISION)).toString()}^{\\circ}`;"),
+    ("renderer.js", "if (Math.abs(effectiveScale - 1) < 0.001) {", "if (Math.abs(effectiveScale - 1) < C.TRANSFORM_INDICATOR_SCALE_SNAP_TOLERANCE) {"),
+    ("renderer.js", "const formattedScale = parseFloat(effectiveScale.toFixed(4)).toString();", "const formattedScale = parseFloat(effectiveScale.toFixed(C.TRANSFORM_INDICATOR_PRECISION)).toString();"),
+    ("renderer.js", "'rgba(128, 128, 128, 1)'", "C.UI_COLOR_TARGET_UNASSIGNED"),
+    ("renderer.js", "ctx.fillStyle = '#808080';", "ctx.fillStyle = C.UI_ICON_DISABLED_FILL;"),
+    ("renderer.js", "ctx.arc(centerScreen.x, centerScreen.y, 4, 0, 2 * Math.PI);", "ctx.arc(centerScreen.x, centerScreen.y, C.FACE_COORD_SYSTEM_ORIGIN_RADIUS, 0, 2 * Math.PI);"),
+    ("renderer.js", "ctx.strokeStyle = '#ff0000';", "ctx.strokeStyle = colors.uiIconDisabled;"), # For the disabled icon line
+    ("renderer.js", "const checkerboardColor1 = '#808080';", "const checkerboardColor1 = colors.checkerboardColor1;"),
+    ("renderer.js", "const checkerboardColor2 = '#c0c0c0';", "const checkerboardColor2 = colors.checkerboardColor2;"),
+    ("renderer.js", "const xArrowColor = coordSystemSnapScale !== null ? colors.feedbackSnapped : '#ff0000';", "const xArrowColor = coordSystemSnapScale !== null ? colors.feedbackSnapped : colors.coordSysX;"),
+    ("renderer.js", "const yArrowColor = coordSystemSnapScale !== null ? colors.feedbackSnapped : '#00ff00';", "const yArrowColor = coordSystemSnapScale !== null ? colors.feedbackSnapped : colors.coordSysY;"),
+    ("renderer.js", "drawArrow(centerScreen, xAxisScreenEnd, '#ff0000', xArrowColor);", "drawArrow(centerScreen, xAxisScreenEnd, xColor, xColor);"), # Corrected logic to use the new variable
+    ("renderer.js", "drawArrow(centerScreen, yAxisScreenEnd, '#00ff00', yArrowColor);", "drawArrow(centerScreen, yAxisScreenEnd, yColor, yColor);"), # Corrected logic to use the new variable
+    ("renderer.js", "ctx.fillStyle = '#0000ff';", "ctx.fillStyle = colors.coordSysOrigin;"),
+
+
+    # script.js replacements
+    ("script.js", "if (bestSnap.priority < 0.1) {", "if (bestSnap.priority < C.TRANSFORM_SCALE_SNAP_PRIORITY_THRESHOLD) {"),
+
+    # utils.js replacements
+    ("utils.js", "const centerSelectRadius = 8;", "const centerSelectRadius = C.COORD_SYSTEM_ELEMENT_SELECT_RADIUS;"),
+    ("utils.js", "const armSelectThreshold = 5;", "const armSelectThreshold = C.COORD_SYSTEM_AXIS_SELECT_THRESHOLD;"),
+    ("utils.js", "const snapThreshold = Math.PI / 24; // About 7.5 degrees", "const snapThreshold = C.COORD_SYSTEM_AXIS_SNAP_THRESHOLD_RAD;"),
+    ("utils.js", "const pixelSnapThreshold = 15 / viewTransform.scale;", "const pixelSnapThreshold = C.COORD_SYSTEM_AXIS_SCALE_SNAP_THRESHOLD_PIXELS / viewTransform.scale;"),
+    ("utils.js", "const fractions = [0, 0.25, 1/3, 0.5, 2/3, 0.75, 1];", "const fractions = C.COORD_SYSTEM_CENTER_EDGE_SNAP_FRACTIONS;"),
+]
+
+
+# --- Main Script Logic ---
+
+def perform_replacements():
+    """Iterates through the configuration and replaces strings in files."""
+    print("--- Starting File Replacements ---\n")
+    
+    # Handle simple string replacements
+    for file_path, find_str, replace_str in REPLACEMENTS:
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            
+            # Use regex for more robust replacement of whole lines/phrases
+            # This helps avoid replacing substrings incorrectly
+            # We escape the find_str to treat it as a literal string in the regex
+            find_regex = re.escape(find_str)
+            
+            if re.search(find_regex, content):
+                new_content = re.sub(find_regex, replace_str, content)
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    f.write(new_content)
+                print(f"✅ Replaced in '{file_path}':\n   -'{find_str}'\n   +'{replace_str}'\n")
+            else:
+                print(f"⚠️  String not found in '{file_path}': '{find_str}'")
+
+        except FileNotFoundError:
+            print(f"❌ ERROR: File not found: {file_path}")
+        except Exception as e:
+            print(f"❌ ERROR processing {file_path}: {e}")
+            
+    print("\n--- Refactoring Complete ---")
+
+
+if __name__ == "__main__":
+    # Verify we are in the correct directory
+    if os.path.exists('script.js') and os.path.exists('constants.js'):
+        perform_replacements()
+    else:
+        print("❌ ERROR: This script must be run from the root of your project directory.")
+        print("         (The directory containing 'script.js', 'index.html', etc.)")
 
 
 === script.js ===
@@ -5223,24 +5331,8 @@ function ensureFaceCoordinateSystems() {
     U.updateFaceLocalCoordinateSystems(allFaces, findVertexById);
 }
 
-function createFaceWithCoordinateSystem(vertexIds) {
-    const newFace = {
-        id: U.getFaceId({ vertexIds }),
-        vertexIds: vertexIds,
-        localCoordSystem: null,
-        color: getColorForTarget(C.COLOR_TARGET_FACE)
-    };
-
-    if (!allFaces.some(f => f.id === newFace.id)) {
-        allFaces.push(newFace);
-    }
-
-    ensureFaceCoordinateSystems();
-    return newFace;
-}
-
 function getColors() {
-    const theme = U.getCurrentTheme(activeThemeName, C.BASE_THEME);
+    const theme = U.getCurrentTheme(activeThemeName, C.DARK_THEME);
     return theme;
 }
 
@@ -5271,37 +5363,6 @@ function getColorForTarget(targetType, index = 0, total = 1) {
     if (targetType === C.COLOR_TARGET_FACE) return colors.face;
     
     return colors.vertex;
-}
-
-function applyColormapToEdge(edge, index = 0, total = 1) {
-    const colorIndex = colorAssignments[C.COLOR_TARGET_EDGE];
-    if (colorIndex === -1) {
-        edge.color = generateRandomColor();
-        return;
-    }
-    
-    const colorItem = allColors[colorIndex];
-    if (colorItem && colorItem.type === 'colormap') {
-        const startT = total > 1 ? index / total : 0;
-        const endT = total > 1 ? (index + 1) / total : 1;
-        edge.gradientStart = startT;
-        edge.gradientEnd = endT;
-        edge.colormapItem = colorItem;
-        delete edge.colormapOffset;
-        delete edge.color;
-    } else if (colorItem && colorItem.type === 'color') {
-        edge.color = colorItem.value;
-        delete edge.gradientStart;
-        delete edge.gradientEnd;
-        delete edge.colormapItem;
-        delete edge.colormapOffset;
-    } else {
-        edge.color = getColors().edge;
-        delete edge.gradientStart;
-        delete edge.gradientEnd;
-        delete edge.colormapItem;
-        delete edge.colormapOffset;
-    }
 }
 
 function applyColorsToSelection() {
@@ -5385,18 +5446,6 @@ function applyColorsToSelection() {
                         }
                     });
                 }
-            }
-        }
-    });
-}
-
-function invertVertexColors() {
-    allVertices.forEach(vertex => {
-        if (vertex.type === C.VERTEX_TYPE_REGULAR) {
-            if (vertex.color) {
-                vertex.color = U.invertGrayscaleValue(vertex.color);
-            } else {
-                vertex.color = getColors().vertex;
             }
         }
     });
@@ -6103,28 +6152,6 @@ function removeColorAtIndex(indexToRemove) {
     buildColorPaletteUI();
 }
 
-function buildVisibilityPanelUI() {
-    canvasUI.visibilityIcons = [];
-    if (!canvasUI.visibilityToolButton) return;
-
-    const panelX = C.UI_TOOLBAR_WIDTH + C.UI_BUTTON_PADDING;
-    const iconY = canvasUI.visibilityToolButton.y;
-    const iconSize = C.DISPLAY_ICON_SIZE;
-    const iconPadding = C.DISPLAY_ICON_PADDING;
-
-    const iconGroups = ['angles', 'distances'];
-
-    iconGroups.forEach((group, index) => {
-        canvasUI.visibilityIcons.push({
-            id: `visibility-icon-${group}`,
-            group: group,
-            x: panelX + index * (iconSize + iconPadding),
-            y: iconY,
-            width: iconSize,
-            height: iconSize
-        });
-    });
-}
 
 function buildMainToolbarUI() {
     const canvasHeight = canvas.height / dpr;
@@ -6567,8 +6594,6 @@ function findAllVerticesInSubgraph(startVertexId) {
     }
     return subgraphVertexIds;
 }
-
-
 
 function handleCut() {
     if (selectedVertexIds.length === 0 && selectedEdgeIds.length === 0 && selectedCenterIds.length === 0) return;
@@ -7467,7 +7492,7 @@ function getBestScaleSnap(center, initialVertexStates, handleVertex, rawScale) {
         allPossibleSnaps.sort((a, b) => a.priority - b.priority);
         const bestSnap = allPossibleSnaps[0];
 
-        if (bestSnap.priority < 0.1) {
+        if (bestSnap.priority < C.TRANSFORM_SCALE_SNAP_PRIORITY_THRESHOLD) {
             const finalPos = U.applyTransformToVertex(handleVertex, center, 0, bestSnap.scale, false, null);
             return {
                 scale: bestSnap.scale,
@@ -7597,7 +7622,7 @@ function getBestDirectionalScaleSnap(center, initialVertexStates, handleVertex, 
     if (allPossibleSnaps.length > 0) {
         allPossibleSnaps.sort((a, b) => a.priority - b.priority);
         const bestSnap = allPossibleSnaps[0];
-        if (bestSnap.priority < 0.1) {
+        if (bestSnap.priority < C.TRANSFORM_SCALE_SNAP_PRIORITY_THRESHOLD) {
             const finalPos = U.applyTransformToVertex(handleVertex, center, 0, bestSnap.scale, true, startVector);
             return {
                 scale: bestSnap.scale,
@@ -8775,8 +8800,7 @@ function handleColorToolButtonClick() {
 function handleThemeToggle() {
     saveStateForUndo();
     activeThemeName = activeThemeName === 'dark' ? 'light' : 'dark';
-    invertVertexColors();
-    invertColors();
+    invertColors(); // This now only inverts the user-defined swatches
     if (isColorPaletteExpanded) {
         buildColorPaletteUI();
     }
@@ -9660,22 +9684,36 @@ if (isDragConfirmed) {
         });
 
         if (affectedFaces.size > 0) {
-            affectedFaces.forEach(face => {
-                const initialSystem = initialCoordSystemStates.get(face.id);
-                if (face.localCoordSystem && initialSystem) {
-                    if (transformIndicatorData && !transformIndicatorData.directionalScale) {
-                        const { center, rotation, scale, startPos } = transformIndicatorData;
-                        const startVector = { x: startPos.x - center.x, y: startPos.y - center.y };
-                        const newOrigin = U.applyTransformToVertex(initialSystem.origin, center, rotation, scale, false, startVector);
-                        face.localCoordSystem.origin = newOrigin;
-                        face.localCoordSystem.angle = U.normalizeAngle(initialSystem.angle + rotation);
-                        face.localCoordSystem.scale = initialSystem.scale * scale;
-                    } else {
-                        applyCoordinateSystemConstraintsOnDragEnd(face, initialSystem, initialDragVertexStates, dragPreviewVertices, findVertexById);
-                    }
-                }
-            });
+    affectedFaces.forEach(face => {
+        const initialSystem = initialCoordSystemStates.get(face.id);
+        if (face.localCoordSystem && initialSystem) {
+            const faceVertexIds = new Set(face.vertexIds);
+            const draggedVertexIds = new Set(initialDragVertexStates.map(v => v.id));
+            const isRigidFaceDrag = [...faceVertexIds].every(vId => draggedVertexIds.has(vId));
+
+            if (isRigidFaceDrag && !transformIndicatorData) {
+                // This is a simple translation of the entire face
+                const delta = {
+                    x: dragPreviewVertices[0].x - initialDragVertexStates[0].x,
+                    y: dragPreviewVertices[0].y - initialDragVertexStates[0].y
+                };
+                face.localCoordSystem.origin.x = initialSystem.origin.x + delta.x;
+                face.localCoordSystem.origin.y = initialSystem.origin.y + delta.y;
+            } else if (transformIndicatorData && !transformIndicatorData.directionalScale) {
+                // This is a rotation/scale transform
+                const { center, rotation, scale, startPos } = transformIndicatorData;
+                const startVector = { x: startPos.x - center.x, y: startPos.y - center.y };
+                const newOrigin = U.applyTransformToVertex(initialSystem.origin, center, rotation, scale, false, startVector);
+                face.localCoordSystem.origin = newOrigin;
+                face.localCoordSystem.angle = U.normalizeAngle(initialSystem.angle + rotation);
+                face.localCoordSystem.scale = initialSystem.scale * scale;
+            } else {
+                // This is a deformation (only some vertices moved)
+                applyCoordinateSystemConstraintsOnDragEnd(face, initialSystem, initialDragVertexStates, dragPreviewVertices, findVertexById);
+            }
         }
+    });
+}
     }
 
     const mergeRadius = C.MERGE_RADIUS_SCREEN / viewTransform.scale;
@@ -9823,98 +9861,97 @@ if (isDragConfirmed) {
         } else {
             const startVertex = findVertexById(previewLineStartVertexId);
             if (isDrawingMode && startVertex) {
-                
-                saveStateForUndo();
-                const edgesBefore = JSON.parse(JSON.stringify(allEdges));
-                const snappedData = getSnappedPosition(startVertex, mousePos, shiftKey);
-                let newVertex = null;
+            saveStateForUndo();
+            const edgesBefore = JSON.parse(JSON.stringify(allEdges));
+            const snappedData = getSnappedPosition(startVertex, mousePos, shiftKey);
+            let newVertex = null;
+            const gridInterval = (lastGridState.alpha2 > lastGridState.alpha1 && lastGridState.interval2) ? lastGridState.interval2 : lastGridState.interval1;
 
-                if (snappedData.snapType === 'vertex' && snappedData.targetVertex) {
-                    newVertex = snappedData.targetVertex;
-                } else if (snappedData.snapType === 'edge' && snappedData.targetEdge) {
-                    newVertex = insertVertexOnEdgeWithFaces(snappedData.targetEdge, { x: snappedData.x, y: snappedData.y });
-                } else {
-                    let newVertexColor = getColorForTarget(C.COLOR_TARGET_VERTEX);
-                    const colorIndex = colorAssignments[C.COLOR_TARGET_VERTEX];
-                    if (colorIndex !== -1) {
-                        const colorItem = allColors[colorIndex];
-                        if (colorItem && colorItem.type === 'colormap') {
-                            newVertexColor = U.sampleColormap(colorItem, 0.5);
-                        }
+            if (snappedData.snapType === 'vertex' && snappedData.targetVertex) {
+                newVertex = snappedData.targetVertex;
+            } else if (snappedData.snapType === 'edge' && snappedData.targetEdge) {
+                newVertex = insertVertexOnEdgeWithFaces(snappedData.targetEdge, { x: snappedData.x, y: snappedData.y }, gridInterval, getColorForTarget);
+            } else {
+                let newVertexColor = getColorForTarget(C.COLOR_TARGET_VERTEX);
+                const colorIndex = colorAssignments[C.COLOR_TARGET_VERTEX];
+                if (colorIndex !== -1) {
+                    const colorItem = allColors[colorIndex];
+                    if (colorItem && colorItem.type === 'colormap') {
+                        newVertexColor = U.sampleColormap(colorItem, 0.5);
                     }
-
-                    newVertex = { id: U.generateUniqueId(), x: snappedData.x, y: snappedData.y, type: 'regular', color: newVertexColor };
-                    allVertices.push(newVertex);
                 }
 
-                if (newVertex) {
-                    const edgeExists = allEdges.some(e => (e.id1 === startVertex.id && e.id2 === newVertex.id) || (e.id2 === startVertex.id && e.id1 === newVertex.id));
-                    if (!edgeExists) {
-                        const gridInterval = (lastGridState.alpha2 > lastGridState.alpha1 && lastGridState.interval2) ? lastGridState.interval2 : lastGridState.interval1;
-                        const newEdge = U.createEdge(startVertex, newVertex, gridInterval, getColorForTarget);
-                        allEdges.push(newEdge);
-                        updateFaces(edgesBefore, allEdges);
+                newVertex = { id: U.generateUniqueId(), x: snappedData.x, y: snappedData.y, type: 'regular', color: newVertexColor };
+                allVertices.push(newVertex);
+            }
 
-                        // Assign colors to any newly created faces
-                        allFaces.forEach(face => {
-                            if (!face.color) {
-                                face.color = getColorForTarget(C.COLOR_TARGET_FACE);
-                            }
-                        });
-                    }
-                    
-                    const completedSegmentProps = getCompletedSegmentProperties(startVertex, newVertex, allEdges);
-                    if (completedSegmentProps) {
-                        if (drawingSequence.length > 0) {
-                            drawingSequence[drawingSequence.length - 1].turn = completedSegmentProps.turnAngleRad;
+            if (newVertex) {
+                const edgeExists = allEdges.some(e => (e.id1 === startVertex.id && e.id2 === newVertex.id) || (e.id2 === startVertex.id && e.id1 === newVertex.id));
+                if (!edgeExists) {
+                    const newEdge = U.createEdge(startVertex, newVertex, gridInterval, getColorForTarget);
+                    allEdges.push(newEdge);
+                    updateFaces(edgesBefore, allEdges);
+
+                    // Assign colors to any newly created faces
+                    allFaces.forEach(face => {
+                        if (!face.color) {
+                            face.color = getColorForTarget(C.COLOR_TARGET_FACE);
                         }
-                        drawingSequence.push({ 
-                            length: completedSegmentProps.length, 
-                            turn: 0, 
-                            endVertexColor: newVertex.color 
-                        });
-                        currentSequenceIndex = drawingSequence.length - 1;
-                    }
-                    
-                    currentDrawingPath.push(newVertex.id);
-                    window.currentDrawingPath = currentDrawingPath;
-
-                    // Update both vertex and edge colors in the drawing sequence
-                    updateDrawingSequenceColors();
-                    updateDrawingSequenceEdgeColors();
-                    
-                    previewLineStartVertexId = newVertex.id;
+                    });
                 }
                 
-                if (shiftKey && newVertex && snappedData) {
-                    const completedSegmentProps = getCompletedSegmentProperties(startVertex, newVertex, allEdges);
-                    if (completedSegmentProps) {
-                        frozenReference_Origin_Data = completedSegmentProps.startVertex;
-                        
-                        if (snappedData.gridToGridSquaredSum > 0 && snappedData.gridInterval) {
-                            frozenReference_D_du = snappedData.gridInterval * Math.sqrt(snappedData.gridToGridSquaredSum);
-                        } else {
-                            frozenReference_D_du = completedSegmentProps.length;
-                        }
-                        
-                        frozenReference_D_g2g = snappedData.gridToGridSquaredSum > 0 ? { 
-                            g2gSquaredSum: snappedData.gridToGridSquaredSum, 
-                            interval: snappedData.gridInterval 
-                        } : null;
-                        
-                        frozenReference_A_rad = completedSegmentProps.turnAngleRad;
-                        frozenReference_A_baseRad = completedSegmentProps.precedingSegmentAbsoluteAngleRad;
+                const completedSegmentProps = getCompletedSegmentProperties(startVertex, newVertex, allEdges);
+                if (completedSegmentProps) {
+                    if (drawingSequence.length > 0) {
+                        drawingSequence[drawingSequence.length - 1].turn = completedSegmentProps.turnAngleRad;
                     }
-                } else {
-                    frozenReference_D_du = null;
-                    frozenReference_D_g2g = null;
-                    frozenReference_A_rad = null;
-                    frozenReference_A_baseRad = null;
-                    frozenReference_Origin_Data = null;
+                    drawingSequence.push({ 
+                        length: completedSegmentProps.length, 
+                        turn: 0, 
+                        endVertexColor: newVertex.color 
+                    });
+                    currentSequenceIndex = drawingSequence.length - 1;
                 }
+                
+                currentDrawingPath.push(newVertex.id);
+                window.currentDrawingPath = currentDrawingPath;
 
-                clickData.count = 0;
-            } else if (actionContext.target === 'canvas') {
+                // Update both vertex and edge colors in the drawing sequence
+                updateDrawingSequenceColors();
+                updateDrawingSequenceEdgeColors();
+                
+                previewLineStartVertexId = newVertex.id;
+            }
+            
+            if (shiftKey && newVertex && snappedData) {
+                const completedSegmentProps = getCompletedSegmentProperties(startVertex, newVertex, allEdges);
+                if (completedSegmentProps) {
+                    frozenReference_Origin_Data = completedSegmentProps.startVertex;
+                    
+                    if (snappedData.gridToGridSquaredSum > 0 && snappedData.gridInterval) {
+                        frozenReference_D_du = snappedData.gridInterval * Math.sqrt(snappedData.gridToGridSquaredSum);
+                    } else {
+                        frozenReference_D_du = completedSegmentProps.length;
+                    }
+                    
+                    frozenReference_D_g2g = snappedData.gridToGridSquaredSum > 0 ? { 
+                        g2gSquaredSum: snappedData.gridToGridSquaredSum, 
+                        interval: snappedData.gridInterval 
+                    } : null;
+                    
+                    frozenReference_A_rad = completedSegmentProps.turnAngleRad;
+                    frozenReference_A_baseRad = completedSegmentProps.precedingSegmentAbsoluteAngleRad;
+                }
+            } else {
+                frozenReference_D_du = null;
+                frozenReference_D_g2g = null;
+                frozenReference_A_rad = null;
+                frozenReference_A_baseRad = null;
+                frozenReference_Origin_Data = null;
+            }
+
+            clickData.count = 0;
+        } else if (actionContext.target === 'canvas') {
                 saveStateForUndo();
                 const startCoords = ghostVertexPosition ? ghostVertexPosition : screenToData(mousePos);
                 
@@ -10286,9 +10323,6 @@ function applyCoordinateSystemConstraintsOnDragEnd(face, initialSystem, initialD
     }
 }
 
-
-
-
 function backupFaceCoordinateSystemsBeforeMerge(allFaces, findRoot) {
     const faceCoordSystemBackup = new Map();
     allFaces.forEach(face => {
@@ -10465,8 +10499,6 @@ function handleRemoveFaceFromMenu() {
     contextMenu.style.display = 'none';
 }
 
-
-// Event listeners setup
 canvas.addEventListener('wheel', (event) => {
     event.preventDefault();
     const mouseScreen = U.getMousePosOnCanvas(event, canvas);
@@ -10959,13 +10991,13 @@ export function findCoordinateSystemElement(screenPos, face, dataToScreen) {
     if (!coordSystem) return null;
 
     const centerScreen = dataToScreen(coordSystem.origin);
-    const centerSelectRadius = 8;
+    const centerSelectRadius = C.COORD_SYSTEM_ELEMENT_SELECT_RADIUS;
 
     if (distance(screenPos, centerScreen) < centerSelectRadius) {
         return { face, type: 'center' };
     }
 
-    const armSelectThreshold = 5;
+    const armSelectThreshold = C.COORD_SYSTEM_AXIS_SELECT_THRESHOLD;
 
     const xAxisEndGlobal = localToGlobal({ x: 1, y: 0 }, coordSystem);
     const xAxisScreenEnd = dataToScreen(xAxisEndGlobal);
@@ -11251,7 +11283,7 @@ export function getAxisSnapAngle(mouseDataPos, origin, isShiftPressed, snapTarge
         return { angle: rawAngle, edgeIndex: null, snapType: null, snapped: false, targetVertexId: null };
     }
     
-    const snapThreshold = Math.PI / 24; // About 7.5 degrees
+    const snapThreshold = C.COORD_SYSTEM_AXIS_SNAP_THRESHOLD_RAD;
     let bestSnap = { angle: rawAngle, difference: Infinity, edgeIndex: null, snapType: null, targetVertexId: null };
 
     const priorities = {
@@ -11315,7 +11347,7 @@ export function getAxisScaleSnap(origin, axisAngle, snapTargets, face, findVerte
         return { snapped: false };
     }
     
-    const pixelSnapThreshold = 15 / viewTransform.scale;
+    const pixelSnapThreshold = C.COORD_SYSTEM_AXIS_SCALE_SNAP_THRESHOLD_PIXELS / viewTransform.scale;
     let snapCandidates = [];
     
     const { v1Id, v2Id } = snapTargets.alignedEdgeInfo;
@@ -11369,55 +11401,49 @@ export function getCoordinateSystemCenterSnap(mouseDataPos, snapTargets, gridDis
     
     if (snapTargets) {
         // Check vertex snaps
-        snapTargets.vertices.forEach(vertex => {
-            const dist = distance(mouseDataPos, vertex);
-            if (dist < minDistance) {
-                minDistance = dist;
-                bestSnap = {
-                    snapped: true,
-                    snapPoint: vertex,
-                    snapType: 'vertex',
-                    vertexId: vertex.id
-                };
-            }
-        });
-        
-        // Check edge fractional snaps
-        for (let edgeIndex = 0; edgeIndex < snapTargets.edgeMidvertices.length; edgeIndex++) {
-            const v1Id = snapTargets.edgeVertexIds[edgeIndex * 2];
-            const v2Id = snapTargets.edgeVertexIds[edgeIndex * 2 + 1];
-            
-            // Find vertices (assuming findVertexById is available in scope)
-            const v1 = { id: v1Id, ...snapTargets.vertices.find(v => v.id === v1Id) };
-            const v2 = { id: v2Id, ...snapTargets.vertices.find(v => v.id === v2Id) };
-            
-            if (v1 && v2) {
-                const fractions = [0, 0.25, 1/3, 0.5, 2/3, 0.75, 1];
-                
-                fractions.forEach(frac => {
-                    const fracPoint = {
-                        x: v1.x + frac * (v2.x - v1.x),
-                        y: v1.y + frac * (v2.y - v1.y)
+        if (snapTargets.vertices) {
+            snapTargets.vertices.forEach(vertex => {
+                const dist = distance(mouseDataPos, vertex);
+                if (dist < minDistance) {
+                    minDistance = dist;
+                    bestSnap = {
+                        snapped: true,
+                        snapPoint: vertex,
+                        snapType: 'vertex',
+                        vertexId: vertex.id
                     };
-                    
-                    const dist = distance(mouseDataPos, fracPoint);
-                    if (dist < minDistance) {
-                        minDistance = dist;
-                        bestSnap = {
-                            snapped: true,
-                            snapPoint: fracPoint,
-                            snapType: 'edge',
-                            edgeInfo: {
-                                v1: v1Id,
-                                v2: v2Id,
-                                t: frac,
-                                originalAngle: snapTargets.edgeAngles[edgeIndex],
-                                edgeIndex: edgeIndex
-                            }
-                        };
-                    }
-                });
-            }
+                }
+            });
+        }
+        
+        // Check edge midpoints
+        if (snapTargets.edgeMidvertices) {
+            snapTargets.edgeMidvertices.forEach(midpoint => {
+                const dist = distance(mouseDataPos, midpoint);
+                if (dist < minDistance) {
+                    minDistance = dist;
+                    bestSnap = {
+                        snapped: true,
+                        snapPoint: midpoint,
+                        snapType: 'edge'
+                    };
+                }
+            });
+        }
+        
+        // Check other face centers
+        if (snapTargets.faceCenters) {
+            snapTargets.faceCenters.forEach(center => {
+                const dist = distance(mouseDataPos, center);
+                if (dist < minDistance) {
+                    minDistance = dist;
+                    bestSnap = {
+                        snapped: true,
+                        snapPoint: center,
+                        snapType: 'faceCenter'
+                    };
+                }
+            });
         }
     }
     
@@ -11510,7 +11536,6 @@ export function computeAngle(prev, curr, next) {
     return Math.acos(clamp(cos_theta, -1, 1));
 }
 
-
 export function triangulatePolygon(vertices) {
     let n = vertices.length;
     if (n < 3) return [];
@@ -11592,20 +11617,11 @@ export function triangulatePolygon(vertices) {
     return triangles;
 }
 
-export function getCurrentTheme(activeThemeName, baseTheme) {
-    if (activeThemeName === 'dark') {
-        return baseTheme;
-    } else {
-        const lightTheme = {};
-        for (const [key, value] of Object.entries(baseTheme)) {
-            if (key === 'frozenReference' || key === 'feedbackSnapped' || key === 'geometryInfoTextSnapped') {
-                lightTheme[key] = 'rgba(217, 119, 6, 0.95)';
-            } else {
-                lightTheme[key] = invertGrayscaleValue(value);
-            }
-        }
-        return lightTheme;
+export function getCurrentTheme(activeThemeName, darkTheme) {
+    if (activeThemeName === 'light') {
+        return C.LIGHT_THEME;
     }
+    return darkTheme;
 }
 
 export function hslToRgb(h, s, l) {
@@ -11794,7 +11810,6 @@ export function distancePointToLineSegment(point, lineStart, lineEnd) {
     return getClosestPointOnLineSegment(point, lineStart, lineEnd).distance;
 }
 
-
 export function updateFaceLocalCoordinateSystems(allFaces, findPointById) {
     allFaces.forEach(face => {
         if (!face.localCoordSystem) {
@@ -11837,39 +11852,6 @@ function walkMinimalFaceDirected(startVertex, secondVertex, adjacencyMap) {
         currentNode = nextNode;
     }
     return null;
-}
-
-function findAllTriangularFaces(adjacencyMap, vertices) {
-    const triangularFaces = [];
-    const processedTriangles = new Set();
-    
-    for (const [v1, neighbors1] of adjacencyMap.entries()) {
-        for (let i = 0; i < neighbors1.length; i++) {
-            const v2 = neighbors1[i];
-            const neighbors2 = adjacencyMap.get(v2) || [];
-            
-            for (let j = 0; j < neighbors2.length; j++) {
-                const v3 = neighbors2[j];
-                if (v3 === v1) continue;
-                
-                const neighbors3 = adjacencyMap.get(v3) || [];
-                
-                if (neighbors3.includes(v1)) {
-                    if (v1 !== v2 && v2 !== v3 && v3 !== v1) {
-                        const triangle = [v1, v2, v3];
-                        const triangleKey = triangle.slice().sort().join('_');
-                        
-                        if (!processedTriangles.has(triangleKey)) {
-                            processedTriangles.add(triangleKey);
-                            triangularFaces.push(triangle);
-                        }
-                    }
-                }
-            }
-        }
-    }
-    
-    return triangularFaces;
 }
 
 function filterCompositeFaces(allFaces, allEdges, findPointById) {
@@ -11923,42 +11905,6 @@ function filterCompositeFaces(allFaces, allEdges, findPointById) {
 
         return true;
     });
-}
-
-function isSelfIntersectingImproved(vertices) {
-    const n = vertices.length;
-    if (n <= 3) return false;
-    
-    for (let i = 0; i < n; i++) {
-        const p1 = vertices[i];
-        const p2 = vertices[(i + 1) % n];
-        
-        for (let j = i + 2; j < n; j++) {
-            if (j === (i + n - 1) % n || (j + 1) % n === i) continue;
-            
-            const q1 = vertices[j];
-            const q2 = vertices[(j + 1) % n];
-            
-            if (linesIntersectProper(p1, p2, q1, q2)) {
-                return true;
-            }
-        }
-    }
-    return false;
-}
-
-function linesIntersectProper(a, b, c, d) {
-    function ccw(A, B, C) {
-        return (C.y - A.y) * (B.x - A.x) > (B.y - A.y) * (C.x - A.x);
-    }
-    
-    const intersect = ccw(a, c, d) !== ccw(b, c, d) && ccw(a, b, c) !== ccw(a, b, d);
-    
-    if (!intersect) return false;
-    
-    const samePoint = (p1, p2) => Math.abs(p1.x - p2.x) < 1e-10 && Math.abs(p1.y - p2.y) < 1e-10;
-    
-    return !(samePoint(a, c) || samePoint(a, d) || samePoint(b, c) || samePoint(b, d));
 }
 
 export function detectClosedPolygons(allEdges, findPointById) {
@@ -12108,7 +12054,6 @@ export function findClosestUIElement(pos, elements) {
     return closest;
 }
 
-
 export function convertColorToColormapFormat(colormapData) {
     // Handle colormap selector format (uses 'points' instead of 'vertices')
     if (colormapData && colormapData.points) {
@@ -12196,7 +12141,6 @@ export function sampleColormap(colormapItem, t) {
     return `rgba(${r},${g},${b},${alpha})`;
 }
 
-
 export function createFaceLocalCoordinateSystem(face, findPointById) {
     const vertices = face.vertexIds
         .map(id => findPointById(id))
@@ -12277,8 +12221,6 @@ export function getPerpendicularBisector(p1, p2) {
         }
     };
 }
-
-
 
 export function getCircleCircleIntersection(c1, c2) {
     const d = distance(c1.center, c2.center);

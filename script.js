@@ -4553,22 +4553,32 @@ if (isDragConfirmed) {
             const draggedVertexIds = new Set(initialDragVertexStates.map(v => v.id));
             const isRigidFaceDrag = [...faceVertexIds].every(vId => draggedVertexIds.has(vId));
 
-            if (isRigidFaceDrag && !transformIndicatorData) {
-                // This is a simple translation of the entire face
-                const delta = {
-                    x: dragPreviewVertices[0].x - initialDragVertexStates[0].x,
-                    y: dragPreviewVertices[0].y - initialDragVertexStates[0].y
-                };
-                face.localCoordSystem.origin.x = initialSystem.origin.x + delta.x;
-                face.localCoordSystem.origin.y = initialSystem.origin.y + delta.y;
-            } else if (transformIndicatorData && !transformIndicatorData.directionalScale) {
-                // This is a rotation/scale transform
-                const { center, rotation, scale, startPos } = transformIndicatorData;
-                const startVector = { x: startPos.x - center.x, y: startPos.y - center.y };
-                const newOrigin = U.applyTransformToVertex(initialSystem.origin, center, rotation, scale, false, startVector);
-                face.localCoordSystem.origin = newOrigin;
-                face.localCoordSystem.angle = U.normalizeAngle(initialSystem.angle + rotation);
-                face.localCoordSystem.scale = initialSystem.scale * scale;
+            if (isRigidFaceDrag) {
+                if (transformIndicatorData) {
+                    // This is a rigid transform (rotation, scale, or directional scale)
+                    const { center, rotation, scale, directionalScale, startPos } = transformIndicatorData;
+                    const startVector = { x: startPos.x - center.x, y: startPos.y - center.y };
+                    const newOrigin = U.applyTransformToVertex(initialSystem.origin, center, rotation, scale, directionalScale, startVector);
+                    face.localCoordSystem.origin = newOrigin;
+                    
+                    if (directionalScale) {
+                        const p_unit_x_initial = U.localToGlobal({ x: 1, y: 0 }, initialSystem);
+                        const p_unit_x_final = U.applyTransformToVertex(p_unit_x_initial, center, rotation, scale, directionalScale, startVector);
+                        face.localCoordSystem.scale = U.distance(newOrigin, p_unit_x_final);
+                        // Angle remains unchanged in directional scale
+                    } else {
+                        face.localCoordSystem.angle = U.normalizeAngle(initialSystem.angle + rotation);
+                        face.localCoordSystem.scale = initialSystem.scale * scale;
+                    }
+                } else {
+                    // This is a simple translation of the entire face
+                    const delta = {
+                        x: dragPreviewVertices[0].x - initialDragVertexStates[0].x,
+                        y: dragPreviewVertices[0].y - initialDragVertexStates[0].y
+                    };
+                    face.localCoordSystem.origin.x = initialSystem.origin.x + delta.x;
+                    face.localCoordSystem.origin.y = initialSystem.origin.y + delta.y;
+                }
             } else {
                 // This is a deformation (only some vertices moved)
                 applyCoordinateSystemConstraintsOnDragEnd(face, initialSystem, initialDragVertexStates, dragPreviewVertices, findVertexById);
