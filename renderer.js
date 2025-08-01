@@ -2469,7 +2469,7 @@ export function drawTransformIndicators(ctx, htmlOverlay, { transformIndicatorDa
 
         if (transformType === C.TRANSFORMATION_TYPE_ROTATION && Math.abs(rotation) > C.MIN_TRANSFORM_ACTION_THRESHOLD) {
             const angleDeg = rotation * (180 / Math.PI);
-            const angleText = `${parseFloat(angleDeg.toFixed(4)).toString()}^{\\circ}`;
+            const angleText = `${parseFloat(angleDeg.toFixed(C.TRANSFORM_INDICATOR_PRECISION)).toString()}^{\\circ}`;
             const startVecScreen = { x: startScreen.x - centerScreen.x, y: startScreen.y - centerScreen.y };
             
             const bisectorAngle = Math.atan2(startVecScreen.y, startVecScreen.x) + (-rotation) / 2;
@@ -2478,7 +2478,12 @@ export function drawTransformIndicators(ctx, htmlOverlay, { transformIndicatorDa
             const angleTextX = centerScreen.x + labelRadius * Math.cos(bisectorAngle);
             const angleTextY = centerScreen.y + labelRadius * Math.sin(bisectorAngle);
 
-            updateHtmlLabel({ id: 'transform-angle-indicator', content: angleText, x: angleTextX, y: angleTextY, color: color, fontSize: C.FEEDBACK_LABEL_FONT_SIZE, options: { textAlign: 'center', textBaseline: 'middle' } });
+            let rotationDeg = bisectorAngle * (180 / Math.PI);
+            if (rotationDeg > 90 || rotationDeg < -90) {
+                rotationDeg += 180;
+            }
+
+            updateHtmlLabel({ id: 'transform-angle-indicator', content: angleText, x: angleTextX, y: angleTextY, color: color, fontSize: C.FEEDBACK_LABEL_FONT_SIZE, options: {  rotation: rotationDeg } });
         } else {
             updateHtmlLabel({ id: 'transform-angle-indicator', content: '', x: 0, y: 0, color: color, fontSize: C.FEEDBACK_LABEL_FONT_SIZE, options: { textAlign: 'center', textBaseline: 'middle' } }, htmlOverlay);
         }
@@ -2599,7 +2604,7 @@ export function drawReferenceElementsGeometry(ctx, context, dataToScreen, screen
     ctx.strokeStyle = refElementColor;
 
     if (showAngles && context.displayAngleA_valueRad_for_A_equals_label !== null && Math.abs(context.displayAngleA_valueRad_for_A_equals_label) > C.GEOMETRY_CALCULATION_EPSILON) {
-        const effectiveRadiusForLine = C.REF_ARC_RADIUS_SCREEN + ctx.lineWidth / 2;
+        const effectiveRadiusForLine = C.FEEDBACK_ARC_RADIUS_SCREEN + ctx.lineWidth / 2;
 
         const dottedLineEndVertexData = {
             x: startVertexData.x + Math.cos(baseAngleData) * (effectiveRadiusForLine / viewTransform.scale),
@@ -2613,7 +2618,7 @@ export function drawReferenceElementsGeometry(ctx, context, dataToScreen, screen
         ctx.setLineDash(C.REF_LINE_DASH_PATTERN);
         ctx.stroke();
 
-        drawAngleArc(ctx, frozenOriginScreen, baseAngleData, absoluteAngleForRefLine, C.REF_ARC_RADIUS_SCREEN, refElementColor, false);
+        drawAngleArc(ctx, frozenOriginScreen, baseAngleData, absoluteAngleForRefLine, C.FEEDBACK_ARC_RADIUS_SCREEN, refElementColor, false);
     }
     ctx.restore();
 }
@@ -2733,7 +2738,7 @@ export function prepareSnapInfoTexts(ctx, htmlOverlay, startVertexData, targetDa
             if (rotationDeg > C.DEGREES_IN_QUADRANT || rotationDeg < -C.DEGREES_IN_QUADRANT) {
                 rotationDeg += C.DEGREES_IN_HALF_CIRCLE;
             }
-            updateHtmlLabel({ id: 'snap-dist', content: distanceText, x: distanceTextX, y: distanceTextY, color: currentElementColor, fontSize: C.FEEDBACK_LABEL_FONT_SIZE, options: { textAlign: 'center', textBaseline: 'middle', rotation: rotationDeg } }, htmlOverlay);
+            updateHtmlLabel({ id: 'snap-dist', content: distanceText, x: distanceTextX, y: distanceTextY, color: currentElementColor, fontSize: C.FEEDBACK_LABEL_FONT_SIZE, options: {  rotation: rotationDeg } }, htmlOverlay);
         }
     }
 
@@ -2848,15 +2853,33 @@ export function prepareSnapInfoTexts(ctx, htmlOverlay, startVertexData, targetDa
         }
 
         if (angleText) {
-            const canvasStartAngle = -baseAngleForArc;
-            const canvasEndAngle = -currentLineAbsoluteAngle;
-            const sumCos = Math.cos(canvasStartAngle) + Math.cos(canvasEndAngle);
-            const sumSin = Math.sin(canvasStartAngle) + Math.sin(canvasEndAngle);
-            let bisectorCanvasAngle = Math.atan2(sumSin, sumCos);
-            const angleTextX = startScreen.x + Math.cos(bisectorCanvasAngle) * C.SNAP_ANGLE_LABEL_OFFSET;
-            const angleTextY = startScreen.y + Math.sin(bisectorCanvasAngle) * C.SNAP_ANGLE_LABEL_OFFSET;
-            updateHtmlLabel({ id: 'snap-angle', content: angleText, x: angleTextX, y: angleTextY, color: currentElementColor, fontSize: C.FEEDBACK_LABEL_FONT_SIZE, options: { textAlign: 'center', textBaseline: 'middle' } }, htmlOverlay);
-        }
+    const canvasStartAngle = -baseAngleForArc;
+    const canvasEndAngle = -currentLineAbsoluteAngle;
+    const sumCos = Math.cos(canvasStartAngle) + Math.cos(canvasEndAngle);
+    const sumSin = Math.sin(canvasStartAngle) + Math.sin(canvasEndAngle);
+    const bisectorCanvasAngle = Math.atan2(sumSin, sumCos);
+    
+    const offset = C.UI_ANGLE_LABEL_OFFSET;
+    let rotationDeg = bisectorCanvasAngle * (180 / Math.PI);
+    let horizontalShift = offset;
+
+    if (rotationDeg > 90 || rotationDeg < -90) {
+        horizontalShift = -offset;
+        rotationDeg += 180;
+    }
+
+    const rotatedPoint = {
+        x: horizontalShift * Math.cos(bisectorCanvasAngle),
+        y: horizontalShift * Math.sin(bisectorCanvasAngle)
+    };
+
+    const labelScreenPos = {
+        x: startScreen.x + rotatedPoint.x,
+        y: startScreen.y + rotatedPoint.y
+    };
+
+    updateHtmlLabel({ id: 'snap-angle', content: angleText, x: labelScreenPos.x, y: labelScreenPos.y, color: currentElementColor, fontSize: C.FEEDBACK_LABEL_FONT_SIZE, options: { rotation: rotationDeg } }, htmlOverlay);
+}
     }
 }
 
@@ -2920,17 +2943,45 @@ export function prepareReferenceElementsTexts(htmlOverlay, context, { showAngles
         let textPerpAngle;
 
         if (showAngles && turnAngleData !== null && Math.abs(turnAngleData) > C.GEOMETRY_CALCULATION_EPSILON) {
-            const canvasStartAngle = -baseAngleData;
-            const canvasEndAngle = -(baseAngleData + turnAngleData);
-            const sumCos = Math.cos(canvasStartAngle) + Math.cos(canvasEndAngle);
-            const sumSin = Math.sin(canvasStartAngle) + Math.sin(canvasEndAngle);
-            const angleLabelBisectorRad = Math.atan2(sumSin, sumCos);
-            const perp1 = edgeAngleScreen - Math.PI / 2;
-            const perp2 = edgeAngleScreen + Math.PI / 2;
-            const diff1 = Math.abs(U.normalizeAngleToPi(perp1 - angleLabelBisectorRad));
-            const diff2 = Math.abs(U.normalizeAngleToPi(perp2 - angleLabelBisectorRad));
-            textPerpAngle = diff1 > diff2 ? perp1 : perp2;
-        } else {
+    const startAngleCanvas = -baseAngleData;
+    const endAngleCanvas = -(baseAngleData + turnAngleData);
+    const sumCos = Math.cos(startAngleCanvas) + Math.cos(endAngleCanvas);
+    const sumSin = Math.sin(startAngleCanvas) + Math.sin(endAngleCanvas);
+    const bisectorCanvasAngle = Math.atan2(sumSin, sumCos);
+
+    const offset = C.UI_ANGLE_LABEL_OFFSET;
+    let rotationDeg = bisectorCanvasAngle * (180 / Math.PI);
+    let horizontalShift = offset;
+
+    if (rotationDeg > 90 || rotationDeg < -90) {
+        horizontalShift = -offset;
+        rotationDeg += 180;
+    }
+
+    const rotatedPoint = {
+        x: horizontalShift * Math.cos(bisectorCanvasAngle),
+        y: horizontalShift * Math.sin(bisectorCanvasAngle)
+    };
+
+    const labelScreenPos = {
+        x: startVertexScreen.x + rotatedPoint.x,
+        y: startVertexScreen.y + rotatedPoint.y
+    };
+
+    let aKatexText = '';
+    if (angleDisplayMode === C.ANGLE_DISPLAY_MODE_DEGREES) {
+        let aValueDeg = turnAngleData * (C.DEGREES_IN_HALF_CIRCLE / Math.PI);
+        aKatexText = `${C.THETA_EQUALS_KATEX}${U.formatNumber(aValueDeg, angleSigFigs)}^{\\circ}`;
+    } else if (angleDisplayMode === C.ANGLE_DISPLAY_MODE_RADIANS) {
+        let aValueRad = turnAngleData;
+        aKatexText = `${C.THETA_EQUALS_KATEX}${U.formatFraction(aValueRad / Math.PI, C.FRACTION_FORMAT_TOLERANCE, C.FRACTION_FORMAT_MAX_DENOMINATOR)}${C.PI_SYMBOL_KATEX}`;
+        if (aKatexText === `${C.THETA_EQUALS_KATEX}1${C.PI_SYMBOL_KATEX}`) aKatexText = C.PI_SYMBOL_KATEX;
+        if (aKatexText === `${C.THETA_EQUALS_KATEX}-1${C.PI_SYMBOL_KATEX}`) aKatexText = `-${C.PI_SYMBOL_KATEX}`;
+        if (aKatexText === `${C.THETA_EQUALS_KATEX}0${C.PI_SYMBOL_KATEX}`) aKatexText = "0";
+    }
+
+    updateHtmlLabel({ id: 'ref-angle', content: aKatexText, x: labelScreenPos.x, y: labelScreenPos.y, color: refElementColor, fontSize: C.REF_TEXT_KATEX_FONT_SIZE, options: { rotation: rotationDeg } }, htmlOverlay);
+} else {
             textPerpAngle = edgeAngleScreen - Math.PI / 2;
             if (Math.sin(textPerpAngle) > 0) {
                 textPerpAngle += Math.PI;
@@ -2939,7 +2990,7 @@ export function prepareReferenceElementsTexts(htmlOverlay, context, { showAngles
         const textDistLabelX_D = midX_screen + Math.cos(textPerpAngle) * C.REF_TEXT_DISTANCE_LABEL_OFFSET_SCREEN;
         const textDistLabelY_D = midY_screen + Math.sin(textPerpAngle) * C.REF_TEXT_DISTANCE_LABEL_OFFSET_SCREEN;
 
-        updateHtmlLabel({ id: 'ref-dist', content: distanceText, x: textDistLabelX_D, y: textDistLabelY_D, color: refElementColor, fontSize: C.REF_TEXT_KATEX_FONT_SIZE, options: { textAlign: 'center', textBaseline: 'middle', rotation: rotationDeg } }, htmlOverlay);
+        updateHtmlLabel({ id: 'ref-dist', content: distanceText, x: textDistLabelX_D, y: textDistLabelY_D, color: refElementColor, fontSize: C.REF_TEXT_KATEX_FONT_SIZE, options: {  rotation: rotationDeg } }, htmlOverlay);
     }
 
     if (showAngles && turnAngleData !== null && Math.abs(turnAngleData) > C.GEOMETRY_CALCULATION_EPSILON) {
@@ -2948,11 +2999,16 @@ export function prepareReferenceElementsTexts(htmlOverlay, context, { showAngles
 
         const sumCos = Math.cos(startAngleCanvas) + Math.cos(endAngleCanvas);
         const sumSin = Math.sin(startAngleCanvas) + Math.sin(endAngleCanvas);
-        let bisectorCanvasAngle = Math.atan2(sumSin, sumCos);
-        const angleLabelOffsetDistance = C.REF_TEXT_ANGLE_LABEL_OFFSET_SCREEN;
+        const bisectorCanvasAngle = Math.atan2(sumSin, sumCos);
+        const angleLabelOffsetDistance = C.UI_ANGLE_LABEL_OFFSET;
 
         const textAngleLabelX_A = startVertexScreen.x + Math.cos(bisectorCanvasAngle) * angleLabelOffsetDistance;
         const textAngleLabelY_A = startVertexScreen.y + Math.sin(bisectorCanvasAngle) * angleLabelOffsetDistance;
+        
+        let rotationDeg = bisectorCanvasAngle * (180 / Math.PI);
+        if (rotationDeg > 90 || rotationDeg < -90) {
+            rotationDeg += 180;
+        }
 
         let aKatexText = '';
         if (angleDisplayMode === C.ANGLE_DISPLAY_MODE_DEGREES) {
@@ -2966,7 +3022,7 @@ export function prepareReferenceElementsTexts(htmlOverlay, context, { showAngles
             if (aKatexText === `${C.THETA_EQUALS_KATEX}0${C.PI_SYMBOL_KATEX}`) aKatexText = "0";
         }
 
-        updateHtmlLabel({ id: 'ref-angle', content: aKatexText, x: textAngleLabelX_A, y: textAngleLabelY_A, color: refElementColor, fontSize: C.REF_TEXT_KATEX_FONT_SIZE, options: { textAlign: 'center', textBaseline: 'middle' } }, htmlOverlay);
+        updateHtmlLabel({ id: 'ref-angle', content: aKatexText, x: textAngleLabelX_A, y: textAngleLabelY_A, color: refElementColor, fontSize: C.REF_TEXT_KATEX_FONT_SIZE, options: {  rotation: rotationDeg } }, htmlOverlay);
     }
 }
 
@@ -4302,7 +4358,7 @@ export function drawSelectedEdgeDistances(ctx, htmlOverlay, selectedEdgeIds, all
                     y: distanceTextY, 
                     color: `rgba(${colors.feedbackDefault.join(',')}, 1.0)`, 
                     fontSize: C.FEEDBACK_LABEL_FONT_SIZE, 
-                    options: { textAlign: 'center', textBaseline: 'middle', rotation: rotationDeg } 
+                    options: {  rotation: rotationDeg } 
                 });
             }
         }
@@ -4386,7 +4442,7 @@ export function drawDragFeedback(ctx, htmlOverlay, targetVertexId, currentVertex
             if (rotationDeg > 90 || rotationDeg < -90) {
                 rotationDeg += 180;
             }
-            updateHtmlLabel({ id: `drag-dist-vector-${vertex.id}`, content: distText, x: distanceTextX, y: distanceTextY, color: feedbackColor, fontSize: C.FEEDBACK_LABEL_FONT_SIZE, options: { textAlign: 'center', textBaseline: 'middle', rotation: rotationDeg } }, htmlOverlay);
+            updateHtmlLabel({ id: `drag-dist-vector-${vertex.id}`, content: distText, x: distanceTextX, y: distanceTextY, color: feedbackColor, fontSize: C.FEEDBACK_LABEL_FONT_SIZE, options: {  rotation: rotationDeg } }, htmlOverlay);
         }
 
         ctx.save();
@@ -4411,13 +4467,35 @@ export function drawDragFeedback(ctx, htmlOverlay, targetVertexId, currentVertex
             }
 
             if (angleText) {
-                const bisectorAngle = -dataAngle / 2.0;
-                const angleLabelScreenPos = {
-                    x: p1Screen.x + C.ANGLE_LABEL_RADIUS_SCREEN * Math.cos(bisectorAngle),
-                    y: p1Screen.y + C.ANGLE_LABEL_RADIUS_SCREEN * Math.sin(bisectorAngle)
-                };
-                updateHtmlLabel({ id: `drag-angle-vector-${vertex.id}`, content: angleText, x: angleLabelScreenPos.x, y: angleLabelScreenPos.y, color: feedbackColor, fontSize: C.FEEDBACK_LABEL_FONT_SIZE, options: { textAlign: 'center', textBaseline: 'middle' } }, htmlOverlay);
-            }
+    const bisectorAngleRad = -dataAngle / 2.0; // This is a screen-space angle
+    const offset = C.UI_ANGLE_LABEL_OFFSET;
+
+    // 1. Calculate position by rotating a simple offset vector
+    const rotatedPoint = {
+        x: offset * Math.cos(bisectorAngleRad),
+        y: offset * Math.sin(bisectorAngleRad)
+    };
+    const labelScreenPos = {
+        x: p1Screen.x + rotatedPoint.x,
+        y: p1Screen.y + rotatedPoint.y
+    };
+
+    // 2. Separately calculate the text's rotation to keep it readable
+    let rotationDeg = bisectorAngleRad * (180 / Math.PI);
+    if (rotationDeg > 90 || rotationDeg < -90) {
+        rotationDeg += 180;
+    }
+
+    updateHtmlLabel({
+        id: `drag-angle-vector-${vertex.id}`,
+        content: angleText,
+        x: labelScreenPos.x,
+        y: labelScreenPos.y,
+        color: feedbackColor,
+        fontSize: C.FEEDBACK_LABEL_FONT_SIZE,
+        options: { rotation: rotationDeg }
+    }, htmlOverlay);
+}
         }
     }
     
@@ -4476,7 +4554,7 @@ export function drawDragFeedback(ctx, htmlOverlay, targetVertexId, currentVertex
                     y: distanceTextY, 
                     color: feedbackColor, 
                     fontSize: C.FEEDBACK_LABEL_FONT_SIZE, 
-                    options: { textAlign: 'center', textBaseline: 'middle', rotation: rotationDeg } 
+                    options: {  rotation: rotationDeg } 
                 });
             }
         });
@@ -4533,14 +4611,44 @@ export function drawDragFeedback(ctx, htmlOverlay, targetVertexId, currentVertex
             }
 
             if (angleText) {
-                const angleLabelDataPos = {
-                    x: vertex.x + (C.ANGLE_LABEL_RADIUS_SCREEN / viewTransform.scale) * Math.cos(bisectorAngle),
-                    y: vertex.y + (C.ANGLE_LABEL_RADIUS_SCREEN / viewTransform.scale) * Math.sin(bisectorAngle)
-                };
-                const angleLabelScreenPos = dataToScreen(angleLabelDataPos);
-                const labelId = `drag-angle-${vertex.id}-${p1.id}-${p2.id}`;
-                updateHtmlLabel({ id: labelId, content: angleText, x: angleLabelScreenPos.x, y: angleLabelScreenPos.y, color: feedbackColor, fontSize: C.FEEDBACK_LABEL_FONT_SIZE, options: { textAlign: 'center', textBaseline: 'middle' } }, htmlOverlay);
-            }
+    const labelId = `drag-angle-${vertex.id}-${p1.id}-${p2.id}`;
+    
+    // First, reliably find the bisector angle in screen-space
+    const pointOnBisectorData = {
+        x: vertex.x + Math.cos(bisectorAngle),
+        y: vertex.y + Math.sin(bisectorAngle)
+    };
+    const pointOnBisectorScreen = dataToScreen(pointOnBisectorData);
+    const screenBisectorAngleRad = Math.atan2(pointOnBisectorScreen.y - vertexScreen.y, pointOnBisectorScreen.x - vertexScreen.x);
+
+    const offset = C.UI_ANGLE_LABEL_OFFSET;
+
+    // 1. Calculate position by rotating a simple offset vector
+    const rotatedPoint = {
+        x: offset * Math.cos(screenBisectorAngleRad),
+        y: offset * Math.sin(screenBisectorAngleRad)
+    };
+    const labelScreenPos = {
+        x: vertexScreen.x + rotatedPoint.x,
+        y: vertexScreen.y + rotatedPoint.y
+    };
+
+    // 2. Separately calculate the text's rotation to keep it readable
+    let rotationDeg = screenBisectorAngleRad * (180 / Math.PI);
+    if (rotationDeg > 90 || rotationDeg < -90) {
+        rotationDeg += 180;
+    }
+
+    updateHtmlLabel({
+        id: labelId,
+        content: angleText,
+        x: labelScreenPos.x,
+        y: labelScreenPos.y,
+        color: feedbackColor,
+        fontSize: C.FEEDBACK_LABEL_FONT_SIZE,
+        options: { rotation: rotationDeg }
+    }, htmlOverlay);
+}
         }
     }
 }

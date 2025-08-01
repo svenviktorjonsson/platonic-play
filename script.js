@@ -326,26 +326,12 @@ function updateHtmlLabel({ id, content, x, y, color, fontSize, options = {} }) {
         activeHtmlLabels.set(id, el);
     }
 
-    let transform = '';
-    if (options.textAlign === 'center') {
-        transform += ' translateX(-50%)';
-    } else if (options.textAlign === 'right') {
-        transform += ' translateX(-100%)';
-    }
-
-    if (options.textBaseline === 'middle') {
-        transform += ' translateY(-50%)';
-    } else if (options.textBaseline === 'bottom') {
-        transform += ' translateY(-100%)';
-    }
-
-    if (options.rotation !== undefined) {
-        transform += ` rotate(${options.rotation}deg)`;
-    }
-
-    el.style.transform = transform.trim();
+    // Position the label's center at (x, y) and apply rotation.
     el.style.left = `${x}px`;
     el.style.top = `${y}px`;
+    el.style.transform = `translate(-50%, -50%) rotate(${options.rotation || 0}deg)`;
+    el.style.transformOrigin = 'center';
+    
     el.style.color = color;
     el.style.fontSize = `${fontSize}px`;
 
