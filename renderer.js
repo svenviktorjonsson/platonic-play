@@ -160,17 +160,21 @@ export function drawFaceGlows(ctx, { allFaces, hoveredFaceId, selectedFaceIds, c
         const isSelected = selectedFaceIds.includes(faceId);
         const isHovered = faceId === hoveredFaceId;
 
-        if (isSelected || isHovered) {
-            const vertices = face.vertexIds.map(id => getLiveVertex(id)).filter(p => p && p.type === 'regular');
-            if (vertices.length < 3) return;
-
-            const screenVertices = vertices.map(v => dataToScreen(v));
-
+        // Draw glow only for selected/hovered faces that are not holes themselves.
+        if ((isSelected || isHovered) && face.color !== 'transparent') {
             ctx.save();
             ctx.fillStyle = colors.selectionGlow;
             ctx.globalAlpha = C.FACE_GLOW_ALPHA;
             
             ctx.beginPath();
+
+            // 1. Add the outer boundary to the path
+            const vertices = face.vertexIds.map(id => getLiveVertex(id)).filter(p => p && p.type === 'regular');
+            if (vertices.length < 3) {
+                ctx.restore();
+                return;
+            }
+            const screenVertices = vertices.map(v => dataToScreen(v));
             screenVertices.forEach((vertex, index) => {
                 if (index === 0) {
                     ctx.moveTo(vertex.x, vertex.y);
@@ -179,7 +183,25 @@ export function drawFaceGlows(ctx, { allFaces, hoveredFaceId, selectedFaceIds, c
                 }
             });
             ctx.closePath();
-            ctx.fill();
+
+            // 2. Add all child boundaries to the path to create holes for the glow
+            if (face.childFaceIds && face.childFaceIds.length > 0) {
+                face.childFaceIds.forEach(childId => {
+                    const childFace = allFaces.find(f => f.id === childId);
+                    if (childFace) {
+                        const childLiveVertices = childFace.vertexIds.map(id => getLiveVertex(id)).filter(p => p && p.type === 'regular');
+                        if (childLiveVertices.length >= 3) {
+                            const childScreenVertices = childLiveVertices.map(v => dataToScreen(v));
+                            ctx.moveTo(childScreenVertices[0].x, childScreenVertices[0].y);
+                            childScreenVertices.slice(1).forEach(vertex => ctx.lineTo(vertex.x, vertex.y));
+                            ctx.closePath();
+                        }
+                    }
+                });
+            }
+
+            // 3. Fill the complex path using the 'evenodd' rule
+            ctx.fill('evenodd');
             
             ctx.restore();
         }
@@ -335,7 +357,9 @@ export function drawFaces(ctx, { allFaces, facesVisible, isDragConfirmed, dragPr
         return findVertexById(vertexId);
     };
 
-    allFaces.forEach((face) => {
+    // First pass: Draw top-level faces with their holes
+    const topLevelFaces = allFaces.filter(f => !f.parentFaceId);
+    topLevelFaces.forEach((face) => {
         if (!face || !face.vertexIds || face.vertexIds.length < 3) return;
         
         const liveVertices = face.vertexIds.map(id => getLiveVertex(id)).filter(p => p && p.type === 'regular');
@@ -351,7 +375,29 @@ export function drawFaces(ctx, { allFaces, facesVisible, isDragConfirmed, dragPr
         }
         
         if (screenVertices.every(v => v && typeof v.x === 'number' && typeof v.y === 'number')) {
-            drawFace(ctx, screenVertices, faceToDraw, colors, dataToScreen, findVertexById);
+            drawFace(ctx, screenVertices, faceToDraw, colors, dataToScreen, findVertexById, allFaces, getLiveVertex, true);
+        }
+    });
+
+    // Second pass: Draw the fills for child faces that are not meant to be holes yet
+    const childFaces = allFaces.filter(f => f.parentFaceId && f.color !== 'transparent');
+    childFaces.forEach((face) => {
+        if (!face || !face.vertexIds || face.vertexIds.length < 3) return;
+
+        const liveVertices = face.vertexIds.map(id => getLiveVertex(id)).filter(p => p && p.type === 'regular');
+        if (liveVertices.length < 3) return;
+
+        const screenVertices = liveVertices.map(v => dataToScreen(v));
+        
+        let faceToDraw = face;
+        if (isDragConfirmed && face.localCoordSystem && face.vertexIds.some(vid => dragPreviewVertices.some(pv => pv.id === vid))) {
+            const initialSystem = initialCoordSystemStates.get(face.id);
+            const previewSystem = calculatePreviewCoordSystem(face, { initialSystem, dragPreviewVertices, initialDragVertexStates, findVertexById, transformIndicatorData });
+            faceToDraw = { ...face, localCoordSystem: previewSystem };
+        }
+
+        if (screenVertices.every(v => v && typeof v.x === 'number' && typeof v.y === 'number')) {
+            drawFace(ctx, screenVertices, faceToDraw, colors, dataToScreen, findVertexById, allFaces, getLiveVertex, false);
         }
     });
 }
@@ -3873,7 +3919,7 @@ function drawTriangleIcon(ctx, rect, options, colors, isActive = false) {
     ctx.restore();
 }
 
-export function drawFace(ctx, screenVertices, face, colors, dataToScreen, findVertexById) {
+export function drawFace(ctx, screenVertices, face, colors, dataToScreen, findVertexById, allFaces, getLiveVertex, drawHoles) {
     if (!screenVertices || screenVertices.length < 3) return;
 
     ctx.save();
@@ -3888,6 +3934,24 @@ export function drawFace(ctx, screenVertices, face, colors, dataToScreen, findVe
         }
     });
     ctx.closePath();
+
+    // If instructed, add child face boundaries to the path to create holes.
+    if (drawHoles && face.childFaceIds && face.childFaceIds.length > 0) {
+        face.childFaceIds.forEach(childId => {
+            const childFace = allFaces.find(f => f.id === childId);
+            if (childFace) {
+                const childLiveVertices = childFace.vertexIds.map(id => getLiveVertex(id)).filter(p => p && p.type === 'regular');
+                if (childLiveVertices.length >= 3) {
+                    const childScreenVertices = childLiveVertices.map(v => dataToScreen(v));
+                    ctx.moveTo(childScreenVertices[0].x, childScreenVertices[0].y);
+                    childScreenVertices.slice(1).forEach(vertex => {
+                        ctx.lineTo(vertex.x, vertex.y);
+                    });
+                    ctx.closePath();
+                }
+            }
+        });
+    }
 
     if (face && face.colormapItem && face.localCoordSystem) {
         const isCycled = face.colormapItem.isCyclic === true;
@@ -3940,7 +4004,7 @@ export function drawFace(ctx, screenVertices, face, colors, dataToScreen, findVe
             pattern.setTransform(matrix);
             
             ctx.fillStyle = pattern;
-            ctx.fill();
+            ctx.fill(drawHoles ? 'evenodd' : 'nonzero');
 
         } else {
             // --- Logic for SATURATING (Regular) Colormaps ---
@@ -3962,18 +4026,16 @@ export function drawFace(ctx, screenVertices, face, colors, dataToScreen, findVe
                 }
             });
             ctx.fillStyle = gradient;
-            ctx.fill();
+            ctx.fill(drawHoles ? 'evenodd' : 'nonzero');
         }
     } else {
         // Default solid color fill
         ctx.fillStyle = face?.color || colors.face;
-        ctx.fill();
+        ctx.fill(drawHoles ? 'evenodd' : 'nonzero');
     }
     
     ctx.restore();
 }
-
-
 
 function drawVisibilityPanelIcon(ctx, icon, state, htmlOverlay, updateHtmlLabel, iconColors) {
     const {angleDisplayMode, distanceDisplayMode, colors } = state;

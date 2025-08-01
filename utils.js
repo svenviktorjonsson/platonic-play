@@ -293,23 +293,37 @@ export function formatFraction(decimal, tolerance = C.FRACTION_FORMAT_TOLERANCE,
 
 export function isVertexInPolygon(vertex, vertices) {
     if (vertices.length < 3) return false;
-    
-    let inside = false;
+
     const x = vertex.x;
     const y = vertex.y;
-    
+    let inside = false;
+
     for (let i = 0, j = vertices.length - 1; i < vertices.length; j = i++) {
         const xi = vertices[i].x;
         const yi = vertices[i].y;
         const xj = vertices[j].x;
         const yj = vertices[j].y;
-        
-        if (((yi > y) !== (yj > y)) && 
-            (x < (xj - xi) * (y - yi) / (yj - yi) + xi)) {
+
+        // Check if the point is on a vertex of the polygon
+        if ((xi === x && yi === y)) {
+            return true;
+        }
+
+        // Check if the point is on a horizontal or vertical edge
+        if (yi === yj && yi === y && x >= Math.min(xi, xj) && x <= Math.max(xi, xj)) {
+            return true; // On a horizontal edge
+        }
+        if (xi === xj && xi === x && y >= Math.min(yi, yj) && y <= Math.max(yi, yj)) {
+            return true; // On a vertical edge
+        }
+
+        // Standard ray-casting intersection test, which now correctly handles non-horizontal edges
+        const intersect = ((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi);
+        if (intersect) {
             inside = !inside;
         }
     }
-    
+
     return inside;
 }
 

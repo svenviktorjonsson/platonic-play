@@ -1493,18 +1493,57 @@ function findClickedEdge(clickPos) {
 
 function findClickedFace(clickPos) {
     const dataPos = screenToData(clickPos);
+    const potentialFaces = [];
 
-    for (let i = allFaces.length - 1; i >= 0; i--) {
-        const face = allFaces[i];
+    // Find all visible faces whose outer boundary contains the point
+    for (const face of allFaces) {
+        if (face.color === 'transparent') continue;
+
         const vertices = face.vertexIds.map(id => findVertexById(id)).filter(p => p && p.type === 'regular');
         if (vertices.length < 3) continue;
 
         if (U.isVertexInPolygon(dataPos, vertices)) {
-            return face;
+            potentialFaces.push(face);
         }
     }
 
-    return null;
+    if (potentialFaces.length === 0) {
+        return null;
+    }
+
+    // Find the smallest valid face that contains the point
+    let smallestValidFace = null;
+    let smallestArea = Infinity;
+
+    for (const potentialFace of potentialFaces) {
+        let isInsideHole = false;
+        if (potentialFace.childFaceIds && potentialFace.childFaceIds.length > 0) {
+            for (const childId of potentialFace.childFaceIds) {
+                const childFace = allFaces.find(f => f.id === childId);
+                // A hole is a child face that is marked transparent
+                if (childFace && childFace.color === 'transparent') {
+                    const childVertices = childFace.vertexIds.map(id => findVertexById(id)).filter(Boolean);
+                    if (childVertices.length >= 3 && U.isVertexInPolygon(dataPos, childVertices)) {
+                        isInsideHole = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (!isInsideHole) {
+            const vertices = potentialFace.vertexIds.map(id => findVertexById(id));
+            if (vertices.every(Boolean)) {
+                 const faceArea = Math.abs(U.shoelaceArea(vertices));
+                if (faceArea < smallestArea) {
+                    smallestArea = faceArea;
+                    smallestValidFace = potentialFace;
+                }
+            }
+        }
+    }
+
+    return smallestValidFace;
 }
 
 function findNeighborEdges(vertexId) {
@@ -1661,15 +1700,34 @@ function deleteSelectedItems() {
     }
     saveStateForUndo();
 
-    // Around line 1089, replace the face deletion logic:
     if (faceIdsToExplicitlyDelete.size > 0) {
-        faceIdsToExplicitlyDelete.forEach(faceId => {
-            deletedFaceIds.add(faceId);
-        });
-        allFaces = allFaces.filter(face => {
+        const facesToRemoveCompletely = new Set();
+        
+        allFaces.forEach(face => {
             const faceId = face.id || U.getFaceId(face);
-            return !faceIdsToExplicitlyDelete.has(faceId);
+            if (faceIdsToExplicitlyDelete.has(faceId)) {
+                // Liberate any children of this face
+                if (face.childFaceIds && face.childFaceIds.length > 0) {
+                    face.childFaceIds.forEach(childId => {
+                        const childFace = allFaces.find(f => f.id === childId);
+                        if (childFace) {
+                            childFace.parentFaceId = null;
+                        }
+                    });
+                }
+
+                // If the face is itself a child, it becomes a hole. Otherwise, it gets deleted.
+                if (face.parentFaceId) {
+                    face.color = 'transparent';
+                } else {
+                    facesToRemoveCompletely.add(faceId);
+                }
+            }
         });
+
+        if (facesToRemoveCompletely.size > 0) {
+            allFaces = allFaces.filter(face => !facesToRemoveCompletely.has(face.id || U.getFaceId(face)));
+        }
     }
 
     const edgesBefore = [...allEdges];
@@ -1678,8 +1736,67 @@ function deleteSelectedItems() {
         allEdges = allEdges.filter(edge => !edgeIdsToDelete.has(U.getEdgeId(edge)));
     }
     if (vertexIdsToDelete.size > 0) {
+        const edgesBefore = JSON.parse(JSON.stringify(allEdges));
+        const newEdgesToAdd = [];
+        const gridInterval = (lastGridState.alpha2 > lastGridState.alpha1 && lastGridState.interval2) ? lastGridState.interval2 : lastGridState.interval1;
+        
+        const remainingToDelete = new Set(vertexIdsToDelete);
+
+        // Process all selected vertices, handling each connected component (chain) separately.
+        while (remainingToDelete.size > 0) {
+            const startId = remainingToDelete.values().next().value;
+            const component = new Set();
+            const queue = [startId];
+            
+            // 1. Find the full connected component (chain) within the selection
+            while (queue.length > 0) {
+                const currentId = queue.shift();
+                if (remainingToDelete.has(currentId)) {
+                    component.add(currentId);
+                    remainingToDelete.delete(currentId);
+                    const neighbors = U.findNeighbors(currentId, allEdges);
+                    neighbors.forEach(neighborId => {
+                        if (remainingToDelete.has(neighborId)) {
+                            queue.push(neighborId);
+                        }
+                    });
+                }
+            }
+
+            // 2. Find the "outermost" neighbors for this specific component
+            const boundaryEdges = allEdges.filter(e => 
+                (component.has(e.id1) && !component.has(e.id2)) ||
+                (component.has(e.id2) && !component.has(e.id1))
+            );
+            const outermostNeighbors = new Set();
+            boundaryEdges.forEach(e => {
+                if (!component.has(e.id1)) outermostNeighbors.add(e.id1);
+                if (!component.has(e.id2)) outermostNeighbors.add(e.id2);
+            });
+
+            // 3. If there are exactly two, prepare a new edge to connect them
+            const neighborsToConnect = Array.from(outermostNeighbors);
+            if (neighborsToConnect.length === 2) {
+                const [id1, id2] = neighborsToConnect;
+                const v1 = findVertexById(id1);
+                const v2 = findVertexById(id2);
+                const edgeExists = allEdges.some(e => (e.id1 === id1 && e.id2 === id2) || (e.id1 === id2 && e.id2 === id1));
+                if (v1 && v2 && !edgeExists) {
+                    newEdgesToAdd.push(U.createEdge(v1, v2, gridInterval, getColorForTarget));
+                }
+            }
+        }
+
+        // 4. Now, perform the original deletion of ALL selected vertices and their connected edges
         allVertices = allVertices.filter(p => !vertexIdsToDelete.has(p.id));
         allEdges = allEdges.filter(e => !vertexIdsToDelete.has(e.id1) && !vertexIdsToDelete.has(e.id2));
+
+        // 5. Finally, add all the new connecting edges
+        if (newEdgesToAdd.length > 0) {
+            allEdges.push(...newEdgesToAdd);
+            updateFaces(edgesBefore, allEdges);
+            ensureFaceCoordinateSystems();
+        }
     }
 
     updateFaces(edgesBefore, allEdges);
@@ -1825,6 +1942,33 @@ function getCompletedSegmentProperties(startVertex, endVertex, existingEdges) {
     };
 }
 
+
+
+function getDescendantVertices(faceId, allFaces) {
+    const descendantVertices = new Set();
+    const queue = [faceId];
+    const visitedFaceIds = new Set([faceId]);
+
+    while (queue.length > 0) {
+        const currentFaceId = queue.shift();
+        const currentFace = allFaces.find(f => f.id === currentFaceId);
+
+        if (currentFace) {
+            currentFace.vertexIds.forEach(vId => descendantVertices.add(vId));
+            
+            if (currentFace.childFaceIds) {
+                currentFace.childFaceIds.forEach(childId => {
+                    if (!visitedFaceIds.has(childId)) {
+                        visitedFaceIds.add(childId);
+                        queue.push(childId);
+                    }
+                });
+            }
+        }
+    }
+    return Array.from(descendantVertices);
+}
+
 function completeGraphOnSelectedVertices() {
     const regularVertexIds = selectedVertexIds.filter(id => {
         const vertex = findVertexById(id);
@@ -1965,7 +2109,6 @@ function initializeApp() {
     coordsDisplayMode = 'regular';
 
     contextMenu = document.getElementById('context-menu');
-    canvas.addEventListener('contextmenu', handleContextMenu);
     window.addEventListener('click', () => {
         if (contextMenu) {
             contextMenu.style.display = 'none';
@@ -3633,7 +3776,7 @@ function handleKeyDown(event) {
         }
     }
 
-    if (isActionInProgress && currentMouseButton === 0 && (actionContext?.targetVertex || actionContext?.targetEdge) && event.key >= '0' && event.key <= '9') {
+    if (isActionInProgress && currentMouseButton === 0 && (actionContext?.targetVertex || actionContext?.targetEdge || actionContext?.targetFace) && event.key >= '0' && event.key <= '9') {
         if (event.repeat) {
             return;
         }
@@ -3979,7 +4122,9 @@ function handleMouseMove(event) {
                 selectedFaceIds.forEach(faceId => {
                     const face = allFaces.find(f => U.getFaceId(f) === faceId);
                     if (face) {
-                        face.vertexIds.forEach(id => verticesToDragIds.add(id));
+                        // Also include all vertices from child faces for the drag
+                        const allFamilyVertices = getDescendantVertices(face.id, allFaces);
+                        allFamilyVertices.forEach(id => verticesToDragIds.add(id));
                     }
                 });
 
@@ -4244,41 +4389,64 @@ function handleLeftMouseButtonDown(event) {
         return;
     }
 
-    if (event.altKey && !isDrawingMode && (findClickedVertex(mousePos) || findClickedEdge(mousePos))) {
+    if (event.altKey && !isDrawingMode) {
         const clickedVertex = findClickedVertex(mousePos);
-        const clickedEdge = findClickedEdge(mousePos);
-        
-        saveStateForUndo();
-        performEscapeAction();
-        
-        if (clickedVertex && clickedVertex.type === 'regular') {
-            isDrawingMode = true;
-            previewLineStartVertexId = clickedVertex.id;
-            drawingSequence = [];
-            currentSequenceIndex = 0;
-            currentDrawingPath = [clickedVertex.id];
-            window.currentDrawingPath = currentDrawingPath;
-        } else if (clickedEdge) {
-            const p1 = findVertexById(clickedEdge.id1);
-            const p2 = findVertexById(clickedEdge.id2);
-            if (p1 && p2) {
-                const closest = U.getClosestPointOnLineSegment(screenToData(mousePos), p1, p2);
-                const gridInterval = (lastGridState.alpha2 > lastGridState.alpha1 && lastGridState.interval2) ? lastGridState.interval2 : lastGridState.interval1;
-                const newVertex = insertVertexOnEdgeWithFaces(clickedEdge, closest, gridInterval, getColorForTarget);
-                if (newVertex) {
-                    isDrawingMode = true;
-                    previewLineStartVertexId = newVertex.id;
-                    drawingSequence = [];
-                    currentSequenceIndex = 0;
-                    currentDrawingPath = [newVertex.id];
-                    window.currentDrawingPath = currentDrawingPath;
+        const clickedEdge = !clickedVertex ? findClickedEdge(mousePos) : null;
+        const clickedFace = !clickedVertex && !clickedEdge ? findClickedFace(mousePos) : null;
+
+        if (clickedVertex || clickedEdge || clickedFace) {
+            saveStateForUndo();
+            performEscapeAction();
+            
+            if (clickedVertex && clickedVertex.type === 'regular') {
+                isDrawingMode = true;
+                previewLineStartVertexId = clickedVertex.id;
+                drawingSequence = [];
+                currentSequenceIndex = 0;
+                currentDrawingPath = [clickedVertex.id];
+                window.currentDrawingPath = currentDrawingPath;
+            } else if (clickedEdge) {
+                const p1 = findVertexById(clickedEdge.id1);
+                const p2 = findVertexById(clickedEdge.id2);
+                if (p1 && p2) {
+                    const closest = U.getClosestPointOnLineSegment(screenToData(mousePos), p1, p2);
+                    const gridInterval = (lastGridState.alpha2 > lastGridState.alpha1 && lastGridState.interval2) ? lastGridState.interval2 : lastGridState.interval1;
+                    const newVertex = insertVertexOnEdgeWithFaces(clickedEdge, closest, gridInterval, getColorForTarget);
+                    if (newVertex) {
+                        isDrawingMode = true;
+                        previewLineStartVertexId = newVertex.id;
+                        drawingSequence = [];
+                        currentSequenceIndex = 0;
+                        currentDrawingPath = [newVertex.id];
+                        window.currentDrawingPath = currentDrawingPath;
+                    }
                 }
+            } else if (clickedFace) {
+                const startCoords = ghostVertexPosition ? ghostVertexPosition : screenToData(mousePos);
+
+                let newVertexColor = getColorForTarget(C.COLOR_TARGET_VERTEX);
+                const colorIndex = colorAssignments[C.COLOR_TARGET_VERTEX];
+                if (colorIndex !== -1) {
+                    const colorItem = allColors[colorIndex];
+                    if (colorItem && colorItem.type === 'colormap') {
+                        newVertexColor = U.sampleColormap(colorItem, 0);
+                    }
+                }
+
+                const newVertex = { id: U.generateUniqueId(), ...startCoords, type: 'regular', color: newVertexColor };
+                allVertices.push(newVertex);
+                isDrawingMode = true;
+                previewLineStartVertexId = newVertex.id;
+                drawingSequence = [];
+                currentSequenceIndex = 0;
+                currentDrawingPath = [newVertex.id];
+                window.currentDrawingPath = currentDrawingPath;
             }
+
+            isActionInProgress = false;
+            event.preventDefault();
+            return;
         }
-        
-        isActionInProgress = false;
-        event.preventDefault();
-        return;
     }
 
     let clickedVertex = findClickedVertex(mousePos);
@@ -4835,6 +5003,7 @@ if (isDragConfirmed) {
                     const newEdge = U.createEdge(startVertex, newVertex, gridInterval, getColorForTarget);
                     allEdges.push(newEdge);
                     updateFaces(edgesBefore, allEdges);
+                    updateFaceHierarchy();
 
                     // Assign colors to any newly created faces
                     allFaces.forEach(face => {
@@ -5083,6 +5252,7 @@ function handleRightMouseButtonDown(event) {
 
 function handleRightMouseButtonUp(event) {
     if (isDragConfirmed && isRectangleSelecting) {
+        // This is a confirmed drag-to-select action
         const dataP1 = screenToData({ x: Math.min(actionStartPos.x, mousePos.x), y: Math.min(actionStartPos.y, mousePos.y) });
         const dataP2 = screenToData({ x: Math.max(actionStartPos.x, mousePos.x), y: Math.max(actionStartPos.y, mousePos.y) });
         const minX = Math.min(dataP1.x, dataP2.x);
@@ -5107,9 +5277,8 @@ function handleRightMouseButtonUp(event) {
             }
         }
     } else {
-        // This handles a simple right-click without a drag
-        performEscapeAction();
-        canvas.style.cursor = 'crosshair';
+        // This is a simple right-click (not a drag), so show the context menu.
+        showContextMenu(event);
     }
 }
 
@@ -5124,7 +5293,6 @@ function handleMouseDownDispatcher(event) {
         return;
     }
 
-    // This check now correctly cancels drawing or transform placement with a right-click
     if ((isDrawingMode || isPlacingTransform) && event.button === 2) {
         performEscapeAction();
         event.preventDefault();
@@ -5167,24 +5335,53 @@ function handleMouseUpDispatcher(event) {
 
 function handleAddFaceFromMenu() {
     if (contextMenuFaceId) {
-        const allPossibleFaces = U.detectClosedPolygons(allEdges, findVertexById);
-        const faceToAdd = allPossibleFaces.find(f => f.id === contextMenuFaceId);
+        saveStateForUndo();
+        let faceToModify = allFaces.find(f => f.id === contextMenuFaceId);
 
-        if (faceToAdd) {
-            saveStateForUndo();
-
-            if (!allFaces.some(f => f.id === faceToAdd.id)) {
+        if (faceToModify) {
+            // Face exists as a hole; restore its color and parentage.
+            faceToModify.color = getColorForTarget(C.COLOR_TARGET_FACE);
+            updateFaceHierarchy();
+        } else {
+            // Face does not exist; create and add it.
+            const allPossibleFaces = U.detectClosedPolygons(allEdges, findVertexById);
+            const faceToAdd = allPossibleFaces.find(f => f.id === contextMenuFaceId);
+            if (faceToAdd) {
                 faceToAdd.color = getColorForTarget(C.COLOR_TARGET_FACE);
                 allFaces.push(faceToAdd);
-
-                deletedFaceIds.delete(faceToAdd.id);
-
+                updateFaceHierarchy();
                 ensureFaceCoordinateSystems();
             }
         }
         contextMenuFaceId = null;
     }
     contextMenu.style.display = 'none';
+}
+
+function getDescendantFaces(faceId, allFaces) {
+    const descendants = [];
+    const startFace = allFaces.find(f => f.id === faceId);
+    if (!startFace) return [];
+
+    const queue = [...(startFace.childFaceIds || [])];
+    const visited = new Set(startFace.childFaceIds);
+
+    while (queue.length > 0) {
+        const currentId = queue.shift();
+        const currentFace = allFaces.find(f => f.id === currentId);
+        if (currentFace) {
+            descendants.push(currentFace);
+            if (currentFace.childFaceIds) {
+                currentFace.childFaceIds.forEach(childId => {
+                    if (!visited.has(childId)) {
+                        visited.add(childId);
+                        queue.push(childId);
+                    }
+                });
+            }
+        }
+    }
+    return descendants;
 }
 
 function applyCoordinateSystemConstraintsOnDragEnd(face, initialSystem, initialDragVertexStates, dragPreviewVertices, findVertexById) {
@@ -5319,69 +5516,118 @@ function handleKeyUp(event) {
     }
 }
 
-function handleContextMenu(event) {
-    event.preventDefault();
+function handleRemoveFaceAndChildrenFromMenu() {
+    if (contextMenuFaceId) {
+        saveStateForUndo();
+        const face = allFaces.find(f => f.id === contextMenuFaceId);
+        if (face) {
+            // 1. Get all descendants (children, grandchildren, etc.)
+            const descendantFaces = getDescendantFaces(face.id, allFaces);
+            const descendantFaceIds = new Set(descendantFaces.map(df => df.id));
+            const descendantVertexIds = new Set();
+            descendantFaces.forEach(df => {
+                df.vertexIds.forEach(vId => descendantVertexIds.add(vId));
+            });
+
+            // 2. Remove all descendant vertices
+            allVertices = allVertices.filter(v => !descendantVertexIds.has(v.id));
+
+            // 3. Remove all edges connected to the now-deleted descendant vertices
+            allEdges = allEdges.filter(e => !descendantVertexIds.has(e.id1) && !descendantVertexIds.has(e.id2));
+
+            // 4. Remove the parent face and all descendant faces from the faces list
+            const allFaceIdsToRemove = new Set([face.id, ...descendantFaceIds]);
+            allFaces = allFaces.filter(f => !allFaceIdsToRemove.has(f.id));
+
+            // 5. Clear selection to avoid dangling references
+            performEscapeAction();
+        }
+        contextMenuFaceId = null;
+    }
+    contextMenu.style.display = 'none';
+}
+
+function showContextMenu(event) {
     contextMenu.innerHTML = '';
     contextMenu.style.display = 'none';
-
     mousePos = U.getMousePosOnCanvas(event, canvas);
-    const dataPos = screenToData(mousePos);
 
+    // --- Selection Logic on Right-Click ---
+    const clickedVertex = findClickedVertex(mousePos);
+    const clickedEdge = !clickedVertex ? findClickedEdge(mousePos) : null;
+    const clickedFace = !clickedVertex && !clickedEdge ? findClickedFace(mousePos) : null;
+    const clickedItem = clickedVertex || clickedEdge || clickedFace;
+
+    if (clickedItem) {
+        let wasSelected = false;
+        if (clickedVertex) wasSelected = selectedVertexIds.includes(clickedVertex.id);
+        else if (clickedEdge) wasSelected = selectedEdgeIds.includes(U.getEdgeId(clickedEdge));
+        else if (clickedFace) wasSelected = selectedFaceIds.includes(U.getFaceId(clickedFace));
+
+        if (!wasSelected) {
+            selectedVertexIds = [];
+            selectedEdgeIds = [];
+            selectedFaceIds = [];
+            selectedCenterIds = [];
+            if (clickedVertex) selectedVertexIds = [clickedVertex.id];
+            else if (clickedEdge) selectedEdgeIds = [U.getEdgeId(clickedEdge)];
+            else if (clickedFace) selectedFaceIds = [U.getFaceId(clickedFace)];
+        }
+    } else {
+        performEscapeAction();
+    }
+    // --- End of Selection Logic ---
+
+    const dataPos = screenToData(mousePos);
     let menuItems = [];
     contextMenuFaceId = null;
     contextMenuEdgeId = null;
     contextMenuVertexId = null;
 
-    const clickedVertex = findClickedVertex(mousePos);
-    const clickedEdge = !clickedVertex ? findClickedEdge(mousePos) : null;
-    const clickedFace = !clickedVertex && !clickedEdge ? findClickedFace(mousePos) : null;
+    const selectionTypeCount =
+        (selectedVertexIds.length > 0 ? 1 : 0) +
+        (selectedEdgeIds.length > 0 ? 1 : 0) +
+        (selectedFaceIds.length > 0 ? 1 : 0);
 
-    if (clickedVertex && clickedVertex.type === 'regular') {
-        contextMenuVertexId = clickedVertex.id;
-        menuItems.push({
-            text: 'Remove Vertex',
-            handler: handleRemoveVertexFromMenu
-        });
-    } else if (clickedEdge) {
-        contextMenuEdgeId = U.getEdgeId(clickedEdge);
-        menuItems.push({
-            text: 'Remove Edge',
-            handler: handleRemoveEdgeFromMenu
-        });
-    } else if (clickedFace) {
-        contextMenuFaceId = U.getFaceId(clickedFace);
-        menuItems.push({
-            text: 'Remove Face',
-            handler: handleRemoveFaceFromMenu
-        });
+    // Re-check clicked item after selection has been finalized
+    const finalClickedVertex = findClickedVertex(mousePos);
+    const finalClickedEdge = !finalClickedVertex ? findClickedEdge(mousePos) : null;
+
+    if (finalClickedVertex && finalClickedVertex.type === 'regular') {
+        contextMenuVertexId = finalClickedVertex.id;
+        const removeText = selectionTypeCount > 1 ? "Remove Geometry" : "Remove Vertex";
+        menuItems.push({ text: removeText, handler: handleRemoveVertexFromMenu });
+    } else if (finalClickedEdge) {
+        contextMenuEdgeId = U.getEdgeId(finalClickedEdge);
+        const removeText = selectionTypeCount > 1 ? "Remove Geometry" : "Remove Edge";
+        menuItems.push({ text: removeText, handler: handleRemoveEdgeFromMenu });
     } else {
-        const allPossibleFaces = U.detectClosedPolygons(allEdges, findVertexById);
-        const existingFaceIds = new Set(allFaces.map(f => f.id));
-
-        const potentialNewFaces = allPossibleFaces.filter(potentialFace =>
-            !existingFaceIds.has(potentialFace.id)
-        );
-
-        let smallestEnclosingFace = null;
-        let smallestArea = Infinity;
-
-        potentialNewFaces.forEach(potentialFace => {
-            const vertices = potentialFace.vertexIds.map(id => findVertexById(id));
-            if (vertices.every(Boolean) && U.isVertexInPolygon(dataPos, vertices)) {
-                const area = Math.abs(U.shoelaceArea(vertices));
-                if (area < smallestArea) {
-                    smallestArea = area;
-                    smallestEnclosingFace = potentialFace;
-                }
+        const finalClickedFace = findClickedFace(mousePos);
+        if (finalClickedFace) {
+            contextMenuFaceId = U.getFaceId(finalClickedFace);
+            const removeText = selectionTypeCount > 1 ? "Remove Geometry" : "Remove Face";
+            menuItems.push({ text: removeText, handler: handleRemoveFaceFromMenu });
+            if (finalClickedFace.childFaceIds && finalClickedFace.childFaceIds.length > 0) {
+                menuItems.push({ text: 'Remove Face and Children', handler: handleRemoveFaceAndChildrenFromMenu });
             }
-        });
-
-        if (smallestEnclosingFace) {
-            contextMenuFaceId = smallestEnclosingFace.id;
-            menuItems.push({
-                text: 'Add Face',
-                handler: handleAddFaceFromMenu
+        } else {
+            const allPossibleFaces = U.detectClosedPolygons(allEdges, findVertexById);
+            let smallestPotentialFace = null;
+            let smallestArea = Infinity;
+            allPossibleFaces.forEach(loop => {
+                const vertices = loop.vertexIds.map(id => findVertexById(id));
+                if (vertices.every(Boolean) && U.isVertexInPolygon(dataPos, vertices)) {
+                    const area = Math.abs(U.shoelaceArea(vertices));
+                    if (area < smallestArea) {
+                        smallestArea = area;
+                        smallestPotentialFace = loop;
+                    }
+                }
             });
+            if (smallestPotentialFace) {
+                contextMenuFaceId = smallestPotentialFace.id || U.getFaceId(smallestPotentialFace);
+                menuItems.push({ text: 'Add Face', handler: handleAddFaceFromMenu });
+            }
         }
     }
 
@@ -5394,7 +5640,6 @@ function handleContextMenu(event) {
             ul.appendChild(li);
         });
         contextMenu.appendChild(ul);
-
         contextMenu.style.left = `${event.clientX - C.CONTEXT_MENU_INSET}px`;
         contextMenu.style.top = `${event.clientY - C.CONTEXT_MENU_INSET}px`;
         contextMenu.style.display = 'block';
@@ -5404,12 +5649,22 @@ function handleContextMenu(event) {
 function handleRemoveVertexFromMenu() {
     if (contextMenuVertexId) {
         saveStateForUndo();
-        selectedEdgeIds = [];
-        selectedFaceIds = [];
-        selectedCenterIds = [];
-        selectedVertexIds = [contextMenuVertexId];
 
-        deleteSelectedItems();
+        // Check if the right-clicked vertex was already part of a selection.
+        const wasVertexSelected = selectedVertexIds.includes(contextMenuVertexId);
+        
+        if (wasVertexSelected) {
+            // If it was selected, the "Remove" action applies to the entire existing selection.
+            // We don't need to change the selection arrays.
+        } else {
+            // If it was not selected, the action applies only to this newly right-clicked vertex.
+            selectedEdgeIds = [];
+            selectedFaceIds = [];
+            selectedCenterIds = [];
+            selectedVertexIds = [contextMenuVertexId];
+        }
+
+        deleteSelectedItems(); // This now operates on the correct selection set.
         contextMenuVertexId = null;
     }
     contextMenu.style.display = 'none';
@@ -5418,10 +5673,18 @@ function handleRemoveVertexFromMenu() {
 function handleRemoveEdgeFromMenu() {
     if (contextMenuEdgeId) {
         saveStateForUndo();
-        selectedVertexIds = [];
-        selectedFaceIds = [];
-        selectedCenterIds = [];
-        selectedEdgeIds = [contextMenuEdgeId];
+        
+        // Check if the right-clicked edge was already part of the selection.
+        const wasEdgeSelected = selectedEdgeIds.includes(contextMenuEdgeId);
+        
+        if (!wasEdgeSelected) {
+            // If it was not selected, clear the old selection.
+            selectedVertexIds = [];
+            selectedFaceIds = [];
+            selectedCenterIds = [];
+            selectedEdgeIds = [contextMenuEdgeId];
+        }
+        // If it was already selected, do nothing to preserve the multi-selection.
 
         deleteSelectedItems();
         contextMenuEdgeId = null;
@@ -5432,10 +5695,18 @@ function handleRemoveEdgeFromMenu() {
 function handleRemoveFaceFromMenu() {
     if (contextMenuFaceId) {
         saveStateForUndo();
-        selectedVertexIds = [];
-        selectedEdgeIds = [];
-        selectedCenterIds = [];
-        selectedFaceIds = [contextMenuFaceId];
+
+        // Check if the right-clicked face was already part of the selection.
+        const wasFaceSelected = selectedFaceIds.includes(contextMenuFaceId);
+
+        if (!wasFaceSelected) {
+            // If it was not selected, clear the old selection.
+            selectedVertexIds = [];
+            selectedEdgeIds = [];
+            selectedCenterIds = [];
+            selectedFaceIds = [contextMenuFaceId];
+        }
+        // If it was already selected, do nothing to preserve the multi-selection.
 
         deleteSelectedItems();
         contextMenuFaceId = null;
@@ -5459,7 +5730,7 @@ canvas.addEventListener('mouseleave', () => {
     redrawAll();
 });
 
-canvas.addEventListener('contextmenu', (event) => event.preventDefault());
+window.addEventListener('contextmenu', (event) => event.preventDefault());
 
 canvas.addEventListener('mousemove', handleMouseMove);
 
