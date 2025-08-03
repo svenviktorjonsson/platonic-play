@@ -307,6 +307,7 @@ export const SNAP_FACTORS = generateSnapFactors(MAX_SNAP_DENOMINATOR, MAX_SNAP_I
 export const VERTEX_TYPE_REGULAR = 'regular';
 export const TRANSFORMATION_TYPE_ROTATION = ' transformation_rotation';
 export const TRANSFORMATION_TYPE_SCALE = ' transformation_scale';
+export const TRANSFORMATION_TYPE_ROTATE_SCALE = 'transformation_rotate_scale';
 export const TRANSFORMATION_TYPE_DIRECTIONAL_SCALE = 'transformation_directional_scale';
 export const COORDS_DISPLAY_MODE_NONE = 'none';
 export const COORDS_DISPLAY_MODE_REGULAR = 'regular';

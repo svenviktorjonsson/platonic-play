@@ -2304,6 +2304,7 @@ export function drawVertex(ctx, vertex, { selectedVertexIds, selectedCenterIds, 
             break;
         case C.TRANSFORMATION_TYPE_ROTATION:
         case C.TRANSFORMATION_TYPE_SCALE:
+        case C.TRANSFORMATION_TYPE_ROTATE_SCALE:
         case C.TRANSFORMATION_TYPE_DIRECTIONAL_SCALE:
             const onCanvasIconSize = C.CENTER_POINT_VISUAL_RADIUS * 2;
             const icon = {
@@ -2419,44 +2420,50 @@ export function drawTransformIndicators(ctx, htmlOverlay, { transformIndicatorDa
         ctx.strokeStyle = color;
         ctx.lineWidth = C.FEEDBACK_LINE_VISUAL_WIDTH;
 
-        if (transformType === C.TRANSFORMATION_TYPE_ROTATION) {
-            const currentScreen = dataToScreen(currentPos);
-            const startVecScreen = { x: startScreen.x - centerScreen.x, y: startScreen.y - centerScreen.y };
-            const arcRadius = Math.hypot(startVecScreen.x, startVecScreen.y);
-            const startAngleScreen = Math.atan2(startVecScreen.y, startVecScreen.x);
+        if (transformType === C.TRANSFORMATION_TYPE_ROTATION || transformType === C.TRANSFORMATION_TYPE_ROTATE_SCALE) {
+        const currentScreen = dataToScreen(currentPos);
+        const startVecScreen = { x: startScreen.x - centerScreen.x, y: startScreen.y - centerScreen.y };
+        const arcRadius = Math.hypot(startVecScreen.x, startVecScreen.y);
+        const startAngleScreen = Math.atan2(startVecScreen.y, startVecScreen.x);
 
+        ctx.beginPath();
+        ctx.moveTo(centerScreen.x, centerScreen.y);
+        ctx.lineTo(startScreen.x, startScreen.y);
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.moveTo(centerScreen.x, centerScreen.y);
+        ctx.lineTo(currentScreen.x, currentScreen.y);
+        ctx.stroke();
+
+        if (Math.abs(rotation) > C.MIN_TRANSFORM_ACTION_THRESHOLD) {
+            const screenRotation = -rotation;
+            const anticlockwise = rotation > 0;
+            ctx.setLineDash([]);
             ctx.beginPath();
-            ctx.moveTo(centerScreen.x, centerScreen.y);
-            ctx.lineTo(startScreen.x, startScreen.y);
+            ctx.arc(centerScreen.x, centerScreen.y, arcRadius, startAngleScreen, startAngleScreen + screenRotation, anticlockwise);
             ctx.stroke();
+        }
+        }
 
-            ctx.beginPath();
-            ctx.moveTo(centerScreen.x, centerScreen.y);
-            ctx.lineTo(currentScreen.x, currentScreen.y);
-            ctx.stroke();
-
-            if (Math.abs(rotation) > C.MIN_TRANSFORM_ACTION_THRESHOLD) {
-                const screenRotation = -rotation;
-                const anticlockwise = rotation > 0;
-                ctx.setLineDash([]);
-                ctx.beginPath();
-                ctx.arc(centerScreen.x, centerScreen.y, arcRadius, startAngleScreen, startAngleScreen + screenRotation, anticlockwise);
-                ctx.stroke();
-            }
-        } else if (transformType === C.TRANSFORMATION_TYPE_SCALE || transformType === C.TRANSFORMATION_TYPE_DIRECTIONAL_SCALE) {
+        if (transformType === C.TRANSFORMATION_TYPE_SCALE || transformType === C.TRANSFORMATION_TYPE_DIRECTIONAL_SCALE || transformType === C.TRANSFORMATION_TYPE_ROTATE_SCALE) {
             const scaledPos = {
                 x: center.x + (startPos.x - center.x) * scale,
                 y: center.y + (startPos.y - center.y) * scale
             };
+            // For combined transform, draw from start to scaled position instead of center
+            const lineStartScreen = (transformType === C.TRANSFORMATION_TYPE_ROTATE_SCALE) ? startScreen : centerScreen;
             const scaledScreen = dataToScreen(scaledPos);
 
-            ctx.beginPath();
-            ctx.moveTo(centerScreen.x, centerScreen.y);
-            ctx.lineTo(startScreen.x, startScreen.y);
-            ctx.stroke();
+            if (transformType !== C.TRANSFORMATION_TYPE_ROTATE_SCALE) {
+                ctx.beginPath();
+                ctx.moveTo(centerScreen.x, centerScreen.y);
+                ctx.lineTo(startScreen.x, startScreen.y);
+                ctx.stroke();
+            }
 
             if (Math.abs(scale - 1) > C.MIN_TRANSFORM_ACTION_THRESHOLD) {
-                ctx.setLineDash([]);
+                ctx.setLineDash(transformType === C.TRANSFORMATION_TYPE_ROTATE_SCALE ? [] : [6, 6]);
                 ctx.beginPath();
                 ctx.moveTo(centerScreen.x, centerScreen.y);
                 ctx.lineTo(scaledScreen.x, scaledScreen.y);
@@ -2467,7 +2474,7 @@ export function drawTransformIndicators(ctx, htmlOverlay, { transformIndicatorDa
         ctx.setLineDash([]);
         ctx.restore();
 
-        if (transformType === C.TRANSFORMATION_TYPE_ROTATION && Math.abs(rotation) > C.MIN_TRANSFORM_ACTION_THRESHOLD) {
+        if ((transformType === C.TRANSFORMATION_TYPE_ROTATION || transformType === C.TRANSFORMATION_TYPE_ROTATE_SCALE) && Math.abs(rotation) > C.MIN_TRANSFORM_ACTION_THRESHOLD) {
             const angleDeg = rotation * (180 / Math.PI);
             const angleText = `${parseFloat(angleDeg.toFixed(C.TRANSFORM_INDICATOR_PRECISION)).toString()}^{\\circ}`;
             const startVecScreen = { x: startScreen.x - centerScreen.x, y: startScreen.y - centerScreen.y };
@@ -2488,7 +2495,7 @@ export function drawTransformIndicators(ctx, htmlOverlay, { transformIndicatorDa
             updateHtmlLabel({ id: 'transform-angle-indicator', content: '', x: 0, y: 0, color: color, fontSize: C.FEEDBACK_LABEL_FONT_SIZE, options: { textAlign: 'center', textBaseline: 'middle' } }, htmlOverlay);
         }
 
-        if ((transformType === C.TRANSFORMATION_TYPE_SCALE || transformType === C.TRANSFORMATION_TYPE_DIRECTIONAL_SCALE) && Math.abs(scale - 1) > C.MIN_TRANSFORM_ACTION_THRESHOLD) {
+        if ((transformType === C.TRANSFORMATION_TYPE_SCALE || transformType === C.TRANSFORMATION_TYPE_DIRECTIONAL_SCALE || transformType === C.TRANSFORMATION_TYPE_ROTATE_SCALE) && Math.abs(scale - 1) > C.MIN_TRANSFORM_ACTION_THRESHOLD) {
             let scaleText;
             const effectiveScale = isSnapping && snappedScaleValue !== null ? snappedScaleValue : scale;
             
@@ -3508,6 +3515,79 @@ function drawUITransformationSymbols(ctx, icon, colors) {
         case C.TRANSFORMATION_TYPE_SCALE: {
             const lineLength = radius * 0.8;
             const arrowSize = radius * 0.25;
+            
+            ctx.beginPath();
+            ctx.moveTo(-lineLength, 0);
+            ctx.lineTo(lineLength, 0);
+            ctx.moveTo(0, -lineLength);
+            ctx.lineTo(0, lineLength);
+            ctx.stroke();
+            
+            const arrowPositions = [
+                { x: lineLength, y: 0, dirX: 1, dirY: 0 },
+                { x: -lineLength, y: 0, dirX: -1, dirY: 0 },
+                { x: 0, y: -lineLength, dirX: 0, dirY: -1 },
+                { x: 0, y: lineLength, dirX: 0, dirY: 1 }
+            ];
+            
+            arrowPositions.forEach(pos => {
+                ctx.beginPath();
+                ctx.moveTo(pos.x, pos.y);
+                ctx.lineTo(pos.x - pos.dirX * arrowSize + pos.dirY * arrowSize * 0.5, 
+                           pos.y - pos.dirY * arrowSize - pos.dirX * arrowSize * 0.5);
+                ctx.moveTo(pos.x, pos.y);
+                ctx.lineTo(pos.x - pos.dirX * arrowSize - pos.dirY * arrowSize * 0.5, 
+                           pos.y - pos.dirY * arrowSize + pos.dirX * arrowSize * 0.5);
+                ctx.stroke();
+            });
+            break;
+        }
+
+        case C.TRANSFORMATION_TYPE_ROTATE_SCALE: {
+            // Rotation part
+            const arcAngle = -Math.PI / 4;
+            
+            ctx.beginPath();
+            ctx.arc(0, 0, radius,  arcAngle,-arcAngle);
+            ctx.stroke();
+            
+            ctx.beginPath();
+            ctx.arc(0, 0, radius, Math.PI+arcAngle, Math.PI-arcAngle);
+            ctx.stroke();
+            
+            let arrowSize = radius * 0.25;
+            
+            const arrow1X = radius * Math.cos(arcAngle);
+            const arrow1Y = radius * Math.sin(arcAngle);
+            
+            ctx.save();
+            ctx.translate(arrow1X, arrow1Y);
+            ctx.rotate(arcAngle-Math.PI/2);
+            ctx.beginPath();
+            ctx.moveTo(0, 0);
+            ctx.lineTo(-arrowSize, -arrowSize * 0.5);
+            ctx.moveTo(0, 0);
+            ctx.lineTo(-arrowSize, arrowSize * 0.5);
+            ctx.stroke();
+            ctx.restore();
+            
+            const arrow2X = radius * Math.cos(Math.PI + arcAngle);
+            const arrow2Y = radius * Math.sin(Math.PI + arcAngle);
+            
+            ctx.save();
+            ctx.translate(arrow2X, arrow2Y);
+            ctx.rotate(arcAngle+Math.PI/2);
+            ctx.beginPath();
+            ctx.moveTo(0, 0);
+            ctx.lineTo(-arrowSize, -arrowSize * 0.5);
+            ctx.moveTo(0, 0);
+            ctx.lineTo(-arrowSize, arrowSize * 0.5);
+            ctx.stroke();
+            ctx.restore();
+
+            // Scale part
+            const lineLength = radius * 0.8;
+            arrowSize = radius * 0.25;
             
             ctx.beginPath();
             ctx.moveTo(-lineLength, 0);

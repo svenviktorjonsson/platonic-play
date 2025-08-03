@@ -899,6 +899,7 @@ function buildTransformPanelUI() {
     const transformTypes = [
         C.TRANSFORMATION_TYPE_ROTATION,
         C.TRANSFORMATION_TYPE_SCALE,
+        C.TRANSFORMATION_TYPE_ROTATE_SCALE,
         C.TRANSFORMATION_TYPE_DIRECTIONAL_SCALE
     ];
 
@@ -1324,7 +1325,7 @@ function updateFaceHierarchy() {
             if (childCandidate.face.id === parentCandidate.face.id) return;
             if (parentCandidate.area <= childCandidate.area) return; // Optimization
 
-            const childGraphVertexIds = findAllVerticesInSubgraph(childCandidate.face.vertexIds[0]);
+            const childGraphVertexIds = childCandidate.face.vertexIds;
             const childGraphVertices = childGraphVertexIds.map(id => findVertexById(id));
             if (childGraphVertices.some(v => !v)) return;
 
@@ -2128,6 +2129,11 @@ function calculateTransformFromMouse(center, mouseData, startReferenceVertex, ce
         if (startDist > C.GEOMETRY_CALCULATION_EPSILON) {
             scale = currentDist / startDist;
         }
+    } else if (centerType === C.TRANSFORMATION_TYPE_ROTATE_SCALE) {
+        rotation = U.calculateRotationAngle(startAngle, currentAngle, currentAccumulatedRotation);
+        if (startDist > C.GEOMETRY_CALCULATION_EPSILON) {
+            scale = currentDist / startDist;
+        }
     } else if (centerType === C.TRANSFORMATION_TYPE_DIRECTIONAL_SCALE) {
         directionalScale = true;
         rotation = 0;
@@ -2183,14 +2189,12 @@ function updateFaces(edgesBefore, edgesAfter) {
     const correctFacesForComponent = U.detectClosedPolygons(affectedEdges, findVertexById);
     const correctFaceIds = new Set(correctFacesForComponent.map(f => f.id));
 
-    const facesToRemove = oldFacesInComponent.filter(f => !correctFaceIds.has(f.id));
+    // Remove all old faces within the affected component
+    const oldFaceIdsToRemove = new Set(oldFacesInComponent.map(f => f.id));
+    allFaces = allFaces.filter(f => !oldFaceIdsToRemove.has(f.id));
 
-    if (facesToRemove.length > 0) {
-        const idsToRemove = new Set(facesToRemove.map(f => f.id));
-        allFaces = allFaces.filter(f => !idsToRemove.has(f.id));
-    }
-
-    const facesToAdd = correctFacesForComponent.filter(f => !oldFaceIds.has(f.id));
+    // Add all newly detected minimal faces for that component
+    const facesToAdd = correctFacesForComponent;
     const addedEdgeIds = new Set(addedEdges.map(e => U.getEdgeId(e)));
 
     facesToAdd.forEach(newFace => {
@@ -2269,6 +2273,138 @@ function insertVertexOnEdgeWithFaces(targetEdge, insertionVertex, gridInterval, 
     }
 
     return newVertex;
+}
+
+function getBestRotateScaleSnap(center, initialVertexStates, handleVertex, rawRotation, rawScale) {
+    const mouseDataPos = U.applyTransformToVertex(handleVertex, center, rawRotation, rawScale, false, null);
+
+    if (!currentShiftPressed) {
+        return { 
+            rotation: rawRotation, 
+            scale: rawScale,
+            pos: mouseDataPos, 
+            snapped: false, 
+        };
+    }
+
+    const snapStickinessData = C.SNAP_STICKINESS_RADIUS_SCREEN / viewTransform.scale;
+
+    // 1. Generate Snap Geometries
+    const angularSnapLines = [];
+    const uniqueAngles = new Set([0]);
+    C.NINETY_DEG_ANGLE_SNAP_FRACTIONS.forEach(f => {
+        const angle = f * Math.PI / 2;
+        uniqueAngles.add(U.normalizeAngle(angle));
+    });
+    
+    uniqueAngles.forEach(angle => {
+        angularSnapLines.push({ angle, type: 'angle' });
+    });
+
+    const radialSnapCircles = [];
+    const startVector = { x: handleVertex.x - center.x, y: handleVertex.y - center.y };
+    const startDist = Math.hypot(startVector.x, startVector.y);
+
+    if (startDist > C.GEOMETRY_CALCULATION_EPSILON) {
+        C.SNAP_FACTORS.forEach(factor => {
+            if (factor > 0) {
+                radialSnapCircles.push({ radius: startDist * factor, type: 'radius', factor: factor });
+            }
+        });
+    }
+
+    const gridInterval = (lastGridState.alpha2 > lastGridState.alpha1 && lastGridState.interval2) ? lastGridState.interval2 : lastGridState.interval1;
+    const gridSnapPoints = U.getGridSnapCandidates(mouseDataPos, gridDisplayMode, gridInterval, lastAngularGridState, true);
+
+    // 2. Find closest primary snaps
+    let bestAngleSnap = { dist: Infinity };
+    angularSnapLines.forEach(line => {
+        const lineDir = { x: Math.cos(line.angle), y: Math.sin(line.angle) };
+        const vecToMouse = { x: mouseDataPos.x - center.x, y: mouseDataPos.y - center.y };
+        const projectedDist = vecToMouse.x * lineDir.x + vecToMouse.y * lineDir.y;
+        const closestPointOnLine = { x: center.x + projectedDist * lineDir.x, y: center.y + projectedDist * lineDir.y };
+        const dist = U.distance(mouseDataPos, closestPointOnLine);
+        if (dist < bestAngleSnap.dist) {
+            bestAngleSnap = { dist, line, point: closestPointOnLine };
+        }
+    });
+
+    let bestRadiusSnap = { dist: Infinity };
+    radialSnapCircles.forEach(circle => {
+        const vecToMouse = { x: mouseDataPos.x - center.x, y: mouseDataPos.y - center.y };
+        const mouseRadius = Math.hypot(vecToMouse.x, vecToMouse.y);
+        if (mouseRadius > C.GEOMETRY_CALCULATION_EPSILON) {
+            const dist = Math.abs(mouseRadius - circle.radius);
+            if (dist < bestRadiusSnap.dist) {
+                const pointOnCircle = {
+                    x: center.x + circle.radius * (vecToMouse.x / mouseRadius),
+                    y: center.y + circle.radius * (vecToMouse.y / mouseRadius)
+                };
+                bestRadiusSnap = { dist, circle, point: pointOnCircle, factor: circle.factor };
+            }
+        }
+    });
+    
+    let bestGridSnap = { dist: Infinity };
+    gridSnapPoints.forEach(point => {
+        const dist = U.distance(mouseDataPos, point);
+        if (dist < bestGridSnap.dist) {
+            bestGridSnap = { dist, point };
+        }
+    });
+
+    // 3. Evaluate and combine snaps
+    const candidates = [];
+    if (bestAngleSnap.dist < snapStickinessData) candidates.push({ priority: 2, dist: bestAngleSnap.dist, pos: bestAngleSnap.point, type: 'angle' });
+    if (bestRadiusSnap.dist < snapStickinessData) candidates.push({ priority: 2, dist: bestRadiusSnap.dist, pos: bestRadiusSnap.point, type: 'radius', factor: bestRadiusSnap.factor });
+    if (bestGridSnap.dist < snapStickinessData) candidates.push({ priority: 1, dist: bestGridSnap.dist, pos: bestGridSnap.point, type: 'grid' });
+
+    // High-priority intersection snaps (stage 2)
+    if (bestAngleSnap.dist < snapStickinessData && bestRadiusSnap.dist < snapStickinessData) {
+        const intersectionPoint = {
+            x: center.x + bestRadiusSnap.circle.radius * Math.cos(bestAngleSnap.line.angle),
+            y: center.y + bestRadiusSnap.circle.radius * Math.sin(bestAngleSnap.line.angle)
+        };
+        const dist = U.distance(mouseDataPos, intersectionPoint);
+        if (dist < snapStickinessData) {
+            candidates.push({ priority: 0, dist, pos: intersectionPoint, type: 'intersection', factor: bestRadiusSnap.factor });
+        }
+    }
+
+    if (candidates.length === 0) {
+        return { 
+            rotation: rawRotation, 
+            scale: rawScale,
+            pos: mouseDataPos, 
+            snapped: false, 
+        };
+    }
+    
+    // 4. Select the best candidate
+    candidates.sort((a, b) => {
+        if (a.priority !== b.priority) return a.priority - b.priority;
+        return a.dist - b.dist;
+    });
+    const bestSnap = candidates[0];
+    const finalSnapPos = bestSnap.pos;
+
+    // 5. Recalculate transform from snapped position
+    const finalVector = { x: finalSnapPos.x - center.x, y: finalSnapPos.y - center.y };
+    const finalMouseAngle = Math.atan2(finalVector.y, finalVector.x);
+    
+    const initialStartAngle = Math.atan2(startVector.y, startVector.x);
+
+    const finalRotation = U.calculateRotationAngle(initialStartAngle, finalMouseAngle, rawRotation);
+    const finalScale = startDist > C.GEOMETRY_CALCULATION_EPSILON ? Math.hypot(finalVector.x, finalVector.y) / startDist : 1;
+    
+    return {
+        rotation: finalRotation,
+        scale: finalScale,
+        pos: finalSnapPos,
+        snapped: true,
+        snapType: bestSnap.type,
+        snappedScaleValue: bestSnap.factor || null
+    };
 }
 
 function getBestTranslationSnap(initialDragVertexStates, rawDelta, copyCount) {
@@ -4176,6 +4312,10 @@ function handleMouseMove(event) {
             } else if (centerType === C.TRANSFORMATION_TYPE_SCALE) {
                 snapResult = getBestScaleSnap(center, initialDragVertexStates, startReferenceVertex, rawTransform.scale);
                 finalTransform = { rotation: 0, scale: snapResult.scale || rawTransform.scale, directionalScale: false };
+            } else if (centerType === C.TRANSFORMATION_TYPE_ROTATE_SCALE) {
+                snapResult = getBestRotateScaleSnap(center, initialDragVertexStates, startReferenceVertex, rawTransform.rotation, rawTransform.scale);
+                finalTransform = { rotation: snapResult.rotation, scale: snapResult.scale, directionalScale: false };
+                currentAccumulatedRotation = snapResult.rotation;
             } else if (centerType === C.TRANSFORMATION_TYPE_DIRECTIONAL_SCALE) {
                 const startVector = { x: startReferenceVertex.x - center.x, y: startReferenceVertex.y - center.y };
                 snapResult = getBestDirectionalScaleSnap(center, initialDragVertexStates, startReferenceVertex, rawTransform.scale, startVector);

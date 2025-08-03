@@ -1250,44 +1250,18 @@ function walkMinimalFaceDirected(startVertex, secondVertex, adjacencyMap) {
 function filterCompositeFaces(allFaces, allEdges, findPointById) {
     if (allFaces.length <= 1) return allFaces;
 
-    const allVertexIdsInComponent = new Set();
-    const edgeSet = new Set();
-    
-    allEdges.forEach(edge => {
-        allVertexIdsInComponent.add(edge.id1);
-        allVertexIdsInComponent.add(edge.id2);
-        const edgeKey = [edge.id1, edge.id2].sort().join('_');
-        edgeSet.add(edgeKey);
-    });
+    const edgeSet = new Set(allEdges.map(edge => [edge.id1, edge.id2].sort().join('_')));
 
     return allFaces.filter(face => {
-        const faceVertexSet = new Set(face.vertexIds);
+        const faceVertexIds = face.vertexIds;
+        if (faceVertexIds.length < 3) return false;
 
-        for (const vertexId of allVertexIdsInComponent) {
-            if (!faceVertexSet.has(vertexId)) {
-                const vertex = findPointById(vertexId);
-                const faceVertices = face.vertexIds.map(id => findPointById(id));
-                
-                if (vertex && faceVertices.every(v => v) && isVertexInPolygon(vertex, faceVertices)) {
-                    return false;
-                }
-            }
-        }
+        for (let i = 0; i < faceVertexIds.length; i++) {
+            for (let j = i + 2; j < faceVertexIds.length; j++) {
+                if (i === 0 && j === faceVertexIds.length - 1) continue;
 
-        const faceBoundaryEdges = new Set();
-        for (let i = 0; i < face.vertexIds.length; i++) {
-            const v1 = face.vertexIds[i];
-            const v2 = face.vertexIds[(i + 1) % face.vertexIds.length];
-            const edgeKey = [v1, v2].sort().join('_');
-            faceBoundaryEdges.add(edgeKey);
-        }
-
-        for (let i = 0; i < face.vertexIds.length; i++) {
-            for (let j = i + 2; j < face.vertexIds.length; j++) {
-                if (j === face.vertexIds.length - 1 && i === 0) continue;
-                
-                const v1 = face.vertexIds[i];
-                const v2 = face.vertexIds[j];
+                const v1 = faceVertexIds[i];
+                const v2 = faceVertexIds[j];
                 const edgeKey = [v1, v2].sort().join('_');
                 
                 if (edgeSet.has(edgeKey)) {
@@ -1295,7 +1269,6 @@ function filterCompositeFaces(allFaces, allEdges, findPointById) {
                 }
             }
         }
-
         return true;
     });
 }
@@ -1659,30 +1632,29 @@ function getLineSegmentIntersection(p1, p2, p3, p4) {
     return null;
 }
 
-/**
- * Checks if a list of vertices is located inside or on the boundary of a given polygon.
- */
 export function areVerticesContainedInPolygon(verticesToCheck, boundaryVertices) {
     if (!verticesToCheck || !boundaryVertices || verticesToCheck.length === 0 || boundaryVertices.length < 3) {
         return false;
     }
 
     for (const vertex of verticesToCheck) {
-        let onBoundary = false;
+        // First, check if the vertex is on the boundary of the parent polygon.
+        // If it is, it's not strictly inside, so we return false.
         for (let i = 0; i < boundaryVertices.length; i++) {
             const p1 = boundaryVertices[i];
             const p2 = boundaryVertices[(i + 1) % boundaryVertices.length];
             if (distancePointToLineSegment(vertex, p1, p2) < C.GEOMETRY_CALCULATION_EPSILON) {
-                onBoundary = true;
-                break;
+                return false; // On the boundary, so not strictly contained.
             }
         }
 
-        if (!onBoundary && !isVertexInPolygon(vertex, boundaryVertices)) {
-            return false;
+        // If it's not on the boundary, check if it's inside using the standard algorithm.
+        if (!isVertexInPolygon(vertex, boundaryVertices)) {
+            return false; // Not on boundary and not inside.
         }
     }
     
+    // All vertices are strictly inside.
     return true;
 }
 
@@ -1714,3 +1686,16 @@ export function doGraphEdgesIntersectPolygon(childEdges, parentBoundaryVertices,
     return false;
 }
 
+export function getRaySegmentIntersection(rayOrigin, rayPoint, segP1, segP2) {
+    const p1 = rayOrigin, p2 = rayPoint, p3 = segP1, p4 = segP2;
+    const den = (p1.x - p2.x) * (p3.y - p4.y) - (p1.y - p2.y) * (p3.x - p4.x);
+    if (Math.abs(den) < C.GEOMETRY_CALCULATION_EPSILON) return null;
+
+    const t = ((p1.x - p3.x) * (p3.y - p4.y) - (p1.y - p3.y) * (p3.x - p4.x)) / den;
+    const u = -((p1.x - p2.x) * (p1.y - p3.y) - (p1.y - p2.y) * (p1.x - p3.x)) / den;
+    
+    if (t >= -C.GEOMETRY_CALCULATION_EPSILON && u >= -C.GEOMETRY_CALCULATION_EPSILON && u <= 1 + C.GEOMETRY_CALCULATION_EPSILON) {
+        return { x: p1.x + t * (p2.x - p1.x), y: p1.y + t * (p2.y - p1.y) };
+    }
+    return null;
+}
