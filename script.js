@@ -2408,31 +2408,25 @@ function getBestRotateScaleSnap(center, initialVertexStates, handleVertex, rawRo
 }
 
 function getBestTranslationSnap(initialDragVertexStates, rawDelta, copyCount) {
-    const snapStickinessData = (2 * C.VERTEX_RADIUS) / viewTransform.scale;
+    const snapStickinessData = C.MERGE_RADIUS_SCREEN / viewTransform.scale;
     if (initialDragVertexStates.length === 0) {
         return { delta: rawDelta, snapped: false };
     }
 
     const handleVertex = initialDragVertexStates[0];
-    const mouseDragPos = { x: handleVertex.x + rawDelta.x, y: handleVertex.y + rawDelta.y };
+    const mouseHandlePos = { x: handleVertex.x + rawDelta.x, y: handleVertex.y + rawDelta.y };
     const allPossibleSnaps = [];
 
     const verticesToDrag = initialDragVertexStates.filter(p => p.type === 'regular');
     const staticVertices = allVertices.filter(p => p.type === 'regular' && !initialDragVertexStates.some(ip => ip.id === p.id));
-
     const multipliers = copyCount === 1 ? [1] : Array.from({ length: copyCount }, (_, k) => k);
 
     if (verticesToDrag.length > 0) {
         multipliers.forEach(k => {
             if (k === 0) return;
-
             verticesToDrag.forEach(p_orig => {
                 staticVertices.forEach(p_target => {
-                    const requiredDelta = {
-                        x: (p_target.x - p_orig.x) / k,
-                        y: (p_target.y - p_orig.y) / k,
-                    };
-                    allPossibleSnaps.push({ delta: requiredDelta });
+                    allPossibleSnaps.push({ delta: { x: (p_target.x - p_orig.x) / k, y: (p_target.y - p_orig.y) / k }, type: 'vertex' });
                 });
             });
         });
@@ -2441,22 +2435,35 @@ function getBestTranslationSnap(initialDragVertexStates, rawDelta, copyCount) {
             multipliers.forEach(k1 => {
                 multipliers.forEach(k2 => {
                     if (k1 >= k2) return;
-
                     verticesToDrag.forEach(p1_orig => {
                         verticesToDrag.forEach(p2_orig => {
                             const denominator = k1 - k2;
                             if (Math.abs(denominator) > 0) {
-                                const requiredDelta = {
-                                    x: (p2_orig.x - p1_orig.x) / denominator,
-                                    y: (p2_orig.y - p1_orig.y) / denominator,
-                                };
-                                allPossibleSnaps.push({ delta: requiredDelta });
+                                allPossibleSnaps.push({ delta: { x: (p2_orig.x - p1_orig.x) / denominator, y: (p2_orig.y - p1_orig.y) / denominator }, type: 'vertex' });
                             }
                         });
                     });
                 });
             });
         }
+    }
+
+    const staticEdges = allEdges.filter(edge => !initialDragVertexStates.some(ip => ip.id === edge.id1) && !initialDragVertexStates.some(ip => ip.id === edge.id2));
+    if (copyCount === 1) { 
+        verticesToDrag.forEach(p_orig => {
+            const p_dragged_raw = { x: p_orig.x + rawDelta.x, y: p_orig.y + rawDelta.y };
+            staticEdges.forEach(edge => {
+                const e1 = findVertexById(edge.id1);
+                const e2 = findVertexById(edge.id2);
+                if (e1 && e2) {
+                    const closest = U.getClosestPointOnLineSegment(p_dragged_raw, e1, e2);
+                    if (closest.distance < snapStickinessData && closest.onSegmentStrict) {
+                        const requiredDelta = { x: closest.x - p_orig.x, y: closest.y - p_orig.y };
+                        allPossibleSnaps.push({ delta: requiredDelta, type: 'edge' });
+                    }
+                }
+            });
+        });
     }
 
     if (allPossibleSnaps.length === 0) {
@@ -2467,11 +2474,8 @@ function getBestTranslationSnap(initialDragVertexStates, rawDelta, copyCount) {
     let minSnapDist = Infinity;
 
     allPossibleSnaps.forEach(snap => {
-        const handleAtSnapPos = {
-            x: handleVertex.x + snap.delta.x,
-            y: handleVertex.y + snap.delta.y,
-        };
-        const dist = U.distance(mouseDragPos, handleAtSnapPos);
+        const handleAtSnapPos = { x: handleVertex.x + snap.delta.x, y: handleVertex.y + snap.delta.y };
+        const dist = U.distance(mouseHandlePos, handleAtSnapPos);
 
         if (dist < minSnapDist) {
             minSnapDist = dist;
@@ -2480,361 +2484,12 @@ function getBestTranslationSnap(initialDragVertexStates, rawDelta, copyCount) {
     });
 
     if (bestSnap && minSnapDist < snapStickinessData) {
-        return {
-            delta: bestSnap.delta,
-            snapped: true,
-            snapType: 'merge'
-        };
+        return { delta: bestSnap.delta, snapped: true, snapType: bestSnap.type };
     }
 
     return { delta: rawDelta, snapped: false };
 }
 
-function getBestRotationSnap(center, initialVertexStates, handleVertex, rawRotation) {
-    const copyCount = parseInt(copyCountInput || '1', 10);
-    let allPossibleSnaps = [];
-    const snapThresholdData = (C.VERTEX_RADIUS * 2) / viewTransform.scale;
-
-    if (copyCount > 1) {
-        const staticVertices = allVertices.filter(p => p.type === 'regular' && !initialVertexStates.some(ip => ip.id === p.id));
-        const verticesToTransform = initialVertexStates.filter(p => p.type === 'regular');
-
-        for (let i = 0; i < verticesToTransform.length; i++) {
-            for (let j = 0; j < verticesToTransform.length; j++) {
-                const p1_orig = verticesToTransform[i];
-                const p2_orig = verticesToTransform[j];
-                const v1 = { x: p1_orig.x - center.x, y: p1_orig.y - center.y };
-                const v2 = { x: p2_orig.x - center.x, y: p2_orig.y - center.y };
-                const r1 = Math.hypot(v1.x, v1.y);
-                const r2 = Math.hypot(v2.x, v2.y);
-
-                if (Math.abs(r1 - r2) < snapThresholdData) {
-                    const theta1_orig = Math.atan2(v1.y, v1.x);
-                    const theta2_orig = Math.atan2(v2.y, v2.x);
-
-                    for (let c1 = 0; c1 < copyCount; c1++) {
-                        for (let c2 = 0; c2 < copyCount; c2++) {
-                            if (p1_orig.id === p2_orig.id && c1 === c2) continue;
-                            if (c1 === c2) continue;
-
-                            const delta_c = c1 - c2;
-                            if (delta_c === 0) continue;
-
-                            let delta_theta = theta2_orig - theta1_orig;
-                            const target_delta_theta = rawRotation * delta_c;
-                            const k = Math.round((target_delta_theta - delta_theta) / (2 * Math.PI));
-                            delta_theta += k * (2 * Math.PI);
-
-                            const exact_rotation = delta_theta / delta_c;
-                            allPossibleSnaps.push({ rotation: exact_rotation, priority: Math.abs(exact_rotation - rawRotation) });
-                        }
-                    }
-                }
-            }
-        }
-
-        verticesToTransform.forEach(p_orig => {
-            staticVertices.forEach(p_static => {
-                const v_orig = { x: p_orig.x - center.x, y: p_orig.y - center.y };
-                const v_static = { x: p_static.x - center.x, y: p_static.y - center.y };
-                const r_orig = Math.hypot(v_orig.x, v_orig.y);
-                const r_static = Math.hypot(v_static.x, v_static.y);
-
-                if (Math.abs(r_orig - r_static) < snapThresholdData) {
-                    const theta_orig = Math.atan2(v_orig.y, v_orig.x);
-                    const theta_static = Math.atan2(v_static.y, v_static.y);
-
-                    for (let c = 0; c < copyCount; c++) {
-                        if (c === 0) {
-                            if (Math.abs(U.normalizeAngleToPi(theta_static - theta_orig)) < C.GEOMETRY_CALCULATION_EPSILON) {
-                                allPossibleSnaps.push({ rotation: 0, priority: Math.abs(rawRotation) });
-                            }
-                            continue;
-                        }
-                        let delta_theta = theta_static - theta_orig;
-                        const target_delta_theta = rawRotation * c;
-                        const k = Math.round((target_delta_theta - delta_theta) / (2 * Math.PI));
-                        delta_theta += k * (2 * Math.PI);
-                        const exact_rotation = delta_theta / c;
-                        allPossibleSnaps.push({ rotation: exact_rotation, priority: Math.abs(exact_rotation - rawRotation) });
-                    }
-                }
-            });
-        });
-    }
-
-    if (Math.abs(rawRotation) < C.ANGLE_SNAP_THRESHOLD_RAD) {
-        allPossibleSnaps.push({ rotation: 0, priority: Math.abs(rawRotation) });
-    }
-
-    if (currentShiftPressed) {
-        for (const factor of C.NINETY_DEG_ANGLE_SNAP_FRACTIONS) {
-            const snapAngle = factor * Math.PI / 2;
-            if (Math.abs(rawRotation - snapAngle) < C.ANGLE_SNAP_THRESHOLD_RAD) {
-                allPossibleSnaps.push({ rotation: snapAngle, priority: Math.abs(rawRotation - snapAngle) });
-            }
-            if (snapAngle !== 0 && Math.abs(rawRotation - (-snapAngle)) < C.ANGLE_SNAP_THRESHOLD_RAD) {
-                allPossibleSnaps.push({ rotation: -snapAngle, priority: Math.abs(rawRotation - (-snapAngle)) });
-            }
-        }
-    }
-
-    if (allPossibleSnaps.length > 0) {
-        allPossibleSnaps.sort((a, b) => a.priority - b.priority);
-        const bestSnap = allPossibleSnaps[0];
-
-        if (bestSnap.priority < C.ANGLE_SNAP_THRESHOLD_RAD) {
-            const finalPos = U.applyTransformToVertex(handleVertex, center, bestSnap.rotation, 1, false, null);
-            return {
-                rotation: bestSnap.rotation,
-                pos: finalPos,
-                snapped: true,
-                snapType: 'merge'
-            };
-        }
-    }
-
-    const finalPos = U.applyTransformToVertex(handleVertex, center, rawRotation, 1, false, null);
-    return { rotation: rawRotation, pos: finalPos, snapped: false, snapType: null };
-}
-
-function getBestScaleSnap(center, initialVertexStates, handleVertex, rawScale) {
-    const copyCount = parseInt(copyCountInput || '1', 10);
-    let allPossibleSnaps = [];
-    const snapThresholdData = (C.VERTEX_RADIUS * 2) / viewTransform.scale;
-    const angleThreshold = snapThresholdData / 100;
-
-    if (copyCount > 1) {
-        const staticVertices = allVertices.filter(p => p.type === 'regular' && !initialVertexStates.some(ip => ip.id === p.id));
-        const verticesToTransform = initialVertexStates.filter(p => p.type === 'regular');
-
-        for (let i = 0; i < verticesToTransform.length; i++) {
-            for (let j = 0; j < verticesToTransform.length; j++) {
-                const p1_orig = verticesToTransform[i];
-                const p2_orig = verticesToTransform[j];
-
-                const v1 = { x: p1_orig.x - center.x, y: p1_orig.y - center.y };
-                const v2 = { x: p2_orig.x - center.x, y: p2_orig.y - center.y };
-
-                const r1 = Math.hypot(v1.x, v1.y);
-                const r2 = Math.hypot(v2.x, v2.y);
-
-                if (r1 < C.GEOMETRY_CALCULATION_EPSILON || r2 < C.GEOMETRY_CALCULATION_EPSILON) continue;
-
-                const theta1 = Math.atan2(v1.y, v1.x);
-                const theta2 = Math.atan2(v2.y, v2.x);
-
-                if (Math.abs(U.normalizeAngleToPi(theta1 - theta2)) < angleThreshold) {
-                    for (let c1 = 0; c1 < copyCount; c1++) {
-                        for (let c2 = 0; c2 < copyCount; c2++) {
-                            if (p1_orig.id === p2_orig.id && c1 === c2) continue;
-                            if (c1 === c2) continue;
-
-                            const delta_c = c1 - c2;
-                            if (delta_c === 0) continue;
-
-                            const ratio = r2 / r1;
-                            if (ratio <= 0) continue;
-
-                            const exact_scale = Math.pow(ratio, 1 / delta_c);
-                            allPossibleSnaps.push({ scale: exact_scale, priority: Math.abs(exact_scale - rawScale) });
-                        }
-                    }
-                }
-            }
-        }
-
-        verticesToTransform.forEach(p_orig => {
-            staticVertices.forEach(p_static => {
-                const v_orig = { x: p_orig.x - center.x, y: p_orig.y - center.y };
-                const v_static = { x: p_static.x - center.x, y: p_static.y - center.y };
-                const r_orig = Math.hypot(v_orig.x, v_orig.y);
-                const r_static = Math.hypot(v_static.x, v_static.y);
-
-                if (r_orig < C.GEOMETRY_CALCULATION_EPSILON || r_static < C.GEOMETRY_CALCULATION_EPSILON) return;
-
-                const theta_orig = Math.atan2(v_orig.y, v_orig.x);
-                const theta_static = Math.atan2(v_static.y, v_static.y);
-
-                if (Math.abs(U.normalizeAngleToPi(theta_orig - theta_static)) < angleThreshold) {
-                    for (let c = 0; c < copyCount; c++) {
-                        if (c === 0) {
-                            if (Math.abs(r_static - r_orig) < snapThresholdData) {
-                                allPossibleSnaps.push({ scale: 1.0, priority: Math.abs(rawScale - 1.0) });
-                            }
-                            continue;
-                        }
-                        const ratio = r_static / r_orig;
-                        if (ratio <= 0) continue;
-                        const exact_scale = Math.pow(ratio, 1 / c);
-                        allPossibleSnaps.push({ scale: exact_scale, priority: Math.abs(exact_scale - rawScale) });
-                    }
-                }
-            });
-        });
-    }
-
-    if (Math.abs(rawScale - 1.0) < C.SCALE_SNAP_THRESHOLD) {
-        allPossibleSnaps.push({ scale: 1.0, priority: Math.abs(rawScale - 1.0) });
-    }
-
-    if (currentShiftPressed) {
-        for (const factor of C.SNAP_FACTORS) {
-            if (factor !== 0 && Math.abs(rawScale - factor) < 0.1) {
-                allPossibleSnaps.push({ scale: factor, priority: Math.abs(rawScale - factor) });
-            }
-        }
-    }
-
-    if (allPossibleSnaps.length > 0) {
-        allPossibleSnaps.sort((a, b) => a.priority - b.priority);
-        const bestSnap = allPossibleSnaps[0];
-
-        if (bestSnap.priority < C.TRANSFORM_SCALE_SNAP_PRIORITY_THRESHOLD) {
-            const finalPos = U.applyTransformToVertex(handleVertex, center, 0, bestSnap.scale, false, null);
-            return {
-                scale: bestSnap.scale,
-                pos: finalPos,
-                snapped: true,
-                snapType: 'merge',
-                snappedScaleValue: bestSnap.scale
-            };
-        }
-    }
-
-    const finalPos = U.applyTransformToVertex(handleVertex, center, 0, rawScale, false, null);
-    return { scale: rawScale, pos: finalPos, snapped: false, snapType: null };
-}
-
-function getBestDirectionalScaleSnap(center, initialVertexStates, handleVertex, rawScale, startVector) {
-    const copyCount = parseInt(copyCountInput || '1', 10);
-    let allPossibleSnaps = [];
-    const snapThresholdData = (C.VERTEX_RADIUS * 2) / viewTransform.scale;
-
-    const axis_dist = Math.hypot(startVector.x, startVector.y);
-    if (axis_dist < C.GEOMETRY_CALCULATION_EPSILON) {
-        const finalPos = U.applyTransformToVertex(handleVertex, center, 0, rawScale, true, startVector);
-        return { scale: rawScale, pos: finalPos, snapped: false, snapType: null };
-    }
-    const axis_norm = { x: startVector.x / axis_dist, y: startVector.y / axis_dist };
-    const getProjectedComponents = (p) => {
-        const vec = { x: p.x - center.x, y: p.y - center.y };
-        const parallel_dist = vec.x * axis_norm.x + vec.y * axis_norm.y;
-        const perp_vec = { x: vec.x - parallel_dist * axis_norm.x, y: vec.y - parallel_dist * axis_norm.y };
-        return { parallel_dist, perp_vec };
-    };
-
-    if (copyCount > 1) {
-        const staticVertices = allVertices.filter(p => p.type === 'regular' && !initialVertexStates.some(ip => ip.id === p.id));
-        const verticesToTransform = initialVertexStates.filter(p => p.type === 'regular');
-
-        for (let i = 0; i < verticesToTransform.length; i++) {
-            for (let j = 0; j < verticesToTransform.length; j++) {
-                const p1_orig = verticesToTransform[i];
-                const p2_orig = verticesToTransform[j];
-                const proj1 = getProjectedComponents(p1_orig);
-                const proj2 = getProjectedComponents(p2_orig);
-                if (U.distance(proj1.perp_vec, proj2.perp_vec) < snapThresholdData) {
-                    for (let c1 = 0; c1 < copyCount; c1++) {
-                        for (let c2 = 0; c2 < copyCount; c2++) {
-                            if (p1_orig.id === p2_orig.id && c1 === c2) continue;
-                            if (c1 === c2) continue;
-                            const delta_c = c1 - c2;
-                            if (delta_c === 0 || Math.abs(proj1.parallel_dist) < C.GEOMETRY_CALCULATION_EPSILON) continue;
-                            const ratio = proj2.parallel_dist / proj1.parallel_dist;
-                            if (ratio >= 0) {
-                                const pos_scale = Math.pow(ratio, 1 / delta_c);
-                                allPossibleSnaps.push({ scale: pos_scale, priority: Math.abs(pos_scale - rawScale) });
-                                if (delta_c % 2 === 0) {
-                                    const neg_scale = -pos_scale;
-                                    allPossibleSnaps.push({ scale: neg_scale, priority: Math.abs(neg_scale - rawScale) });
-                                }
-                            } else if (delta_c % 2 !== 0) {
-                                const neg_scale = -Math.pow(Math.abs(ratio), 1 / delta_c);
-                                allPossibleSnaps.push({ scale: neg_scale, priority: Math.abs(neg_scale - rawScale) });
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        verticesToTransform.forEach(p_orig => {
-            const proj_orig = getProjectedComponents(p_orig);
-            staticVertices.forEach(p_static => {
-                const proj_static = getProjectedComponents(p_static);
-                if (U.distance(proj_orig.perp_vec, proj_static.perp_vec) < snapThresholdData) {
-                    if (Math.abs(proj_orig.parallel_dist) < C.GEOMETRY_CALCULATION_EPSILON) return;
-                    for (let c = 0; c < copyCount; c++) {
-                        if (c === 0) {
-                            if (Math.abs(proj_static.parallel_dist - proj_orig.parallel_dist) < snapThresholdData) {
-                                allPossibleSnaps.push({ scale: 1.0, priority: Math.abs(rawScale - 1.0) });
-                            }
-                            continue;
-                        }
-                        const ratio = proj_static.parallel_dist / proj_orig.parallel_dist;
-                        let exact_scale;
-                        if (ratio >= 0) exact_scale = Math.pow(ratio, 1 / c);
-                        else if (c % 2 !== 0) exact_scale = -Math.pow(Math.abs(ratio), 1 / c);
-                        else continue;
-                        allPossibleSnaps.push({ scale: exact_scale, priority: Math.abs(exact_scale - rawScale) });
-                    }
-                }
-            });
-        });
-
-        const collapsedPositions = verticesToTransform.map(p => ({ p, collapsed: { x: center.x + getProjectedComponents(p).perp_vec.x, y: center.y + getProjectedComponents(p).perp_vec.y } }));
-        for (const item of collapsedPositions) {
-            if (staticVertices.some(sp => U.distance(item.collapsed, sp) < snapThresholdData)) {
-                allPossibleSnaps.push({ scale: 0, priority: Math.abs(rawScale) });
-            }
-        }
-        for (let i = 0; i < collapsedPositions.length; i++) {
-            for (let j = i + 1; j < collapsedPositions.length; j++) {
-                if (U.distance(collapsedPositions[i].collapsed, collapsedPositions[j].collapsed) < snapThresholdData) {
-                    allPossibleSnaps.push({ scale: 0, priority: Math.abs(rawScale) });
-                }
-            }
-        }
-    }
-
-    if (Math.abs(rawScale - 1.0) < 0.1) {
-        allPossibleSnaps.push({ scale: 1.0, priority: Math.abs(rawScale - 1.0) });
-    }
-    if (Math.abs(rawScale) < 0.1) {
-        allPossibleSnaps.push({ scale: 0, priority: Math.abs(rawScale) });
-    }
-
-    if (currentShiftPressed) {
-        const scaleSnapFactors = C.SNAP_FACTORS.filter(f => f !== 0);
-        for (const factor of scaleSnapFactors) {
-            if (Math.abs(rawScale - factor) < 0.1) {
-                allPossibleSnaps.push({ scale: factor, priority: Math.abs(rawScale - factor) });
-            }
-            if (Math.abs(rawScale - (-factor)) < 0.1) {
-                allPossibleSnaps.push({ scale: -factor, priority: Math.abs(rawScale - (-factor)) });
-            }
-        }
-    }
-
-    if (allPossibleSnaps.length > 0) {
-        allPossibleSnaps.sort((a, b) => a.priority - b.priority);
-        const bestSnap = allPossibleSnaps[0];
-        if (bestSnap.priority < C.TRANSFORM_SCALE_SNAP_PRIORITY_THRESHOLD) {
-            const finalPos = U.applyTransformToVertex(handleVertex, center, 0, bestSnap.scale, true, startVector);
-            return {
-                scale: bestSnap.scale,
-                pos: finalPos,
-                snapped: true,
-                snapType: 'merge',
-                snappedScaleValue: bestSnap.scale
-            };
-        }
-    }
-
-    const finalPos = U.applyTransformToVertex(handleVertex, center, 0, rawScale, true, startVector);
-    return { scale: rawScale, pos: finalPos, snapped: false, snapType: null };
-}
 
 function redrawAll() {
     labelsToKeepThisFrame.clear();
@@ -4788,172 +4443,246 @@ function handleLeftMouseButtonUp(event) {
 
     const { shiftKey, ctrlKey, targetVertex, targetEdge, targetFace } = actionContext;
 
-    // Find this line:
-if (isDragConfirmed) {
+        // Find this line:
+    if (isDragConfirmed) {
 
-// And replace everything inside it with this:
-    saveStateForUndo();
-    let lastCopySelectionIds = null;
-    if (copyCount > 1) {
-        const verticesToCopy = initialDragVertexStates.filter(p => p.type === 'regular');
-        const originalIds = new Set(verticesToCopy.map(p => p.id));
-        const edgesToCopy = allEdges.filter(e => originalIds.has(e.id1) && originalIds.has(e.id2));
-        const facesToCopy = allFaces.filter(f => f.vertexIds.every(id => originalIds.has(id)));
-        
-        const allNewVertices = [];
-        const allNewEdges = [];
-        const allNewFaces = [];
-        lastCopySelectionIds = { vertices: [], edges: [], faces: [] };
+    // And replace everything inside it with this:
+        saveStateForUndo();
+        let lastCopySelectionIds = null;
+        if (copyCount > 1) {
+            const verticesToCopy = initialDragVertexStates.filter(p => p.type === 'regular');
+            const originalIds = new Set(verticesToCopy.map(p => p.id));
+            const edgesToCopy = allEdges.filter(e => originalIds.has(e.id1) && originalIds.has(e.id2));
+            const facesToCopy = allFaces.filter(f => f.vertexIds.every(id => originalIds.has(id)));
+            
+            const allNewVertices = [];
+            const allNewEdges = [];
+            const allNewFaces = [];
+            lastCopySelectionIds = { vertices: [], edges: [], faces: [] };
 
-        for (let i = 1; i < copyCount; i++) {
-            const newIdMapForThisCopy = new Map();
-            const currentCopyVertices = [];
-            const currentCopyEdges = [];
-            const currentCopyFaces = [];
+            for (let i = 1; i < copyCount; i++) {
+                const newIdMapForThisCopy = new Map();
+                const currentCopyVertices = [];
+                const currentCopyEdges = [];
+                const currentCopyFaces = [];
 
-            verticesToCopy.forEach(p => {
-                let newPos;
-                if (transformIndicatorData) {
-                    const { center, rotation, scale, directionalScale, startPos } = transformIndicatorData;
-                    const startVector = { x: startPos.x - center.x, y: startPos.y - center.y };
-                    newPos = U.applyTransformToVertex(p, center, rotation * i, Math.pow(scale, i), directionalScale, startVector);
-                } else {
-                    const delta = { x: dragPreviewVertices[0].x - initialDragVertexStates[0].x, y: dragPreviewVertices[0].y - initialDragVertexStates[0].y };
-                    newPos = { x: p.x + delta.x * i, y: p.y + delta.y * i };
-                }
-                const newVertex = { ...p, ...newPos, id: U.generateUniqueId() };
-                allNewVertices.push(newVertex);
-                newIdMapForThisCopy.set(p.id, newVertex.id);
-                currentCopyVertices.push(newVertex.id);
-            });
-
-            edgesToCopy.forEach(edge => {
-                const newId1 = newIdMapForThisCopy.get(edge.id1);
-                const newId2 = newIdMapForThisCopy.get(edge.id2);
-                if (newId1 && newId2) {
-                    const newEdge = { ...edge, id1: newId1, id2: newId2 };
-                    allNewEdges.push(newEdge);
-                    currentCopyEdges.push(U.getEdgeId(newEdge));
-                }
-            });
-
-            facesToCopy.forEach(originalFace => {
-                const initialSystemForCopy = initialCoordSystemStates.get(originalFace.id);
-                const newVertexIds = originalFace.vertexIds.map(id => newIdMapForThisCopy.get(id));
-                if (newVertexIds.every(Boolean)) {
-                    const newFace = JSON.parse(JSON.stringify(originalFace));
-                    newFace.id = U.getFaceId({ vertexIds: newVertexIds });
-                    newFace.vertexIds = newVertexIds;
-
-                    if (newFace.localCoordSystem && initialSystemForCopy) {
-                        if (transformIndicatorData) {
-                            const { center, rotation, scale, directionalScale, startPos } = transformIndicatorData;
-                            const startVector = { x: startPos.x - center.x, y: startPos.y - center.y };
-                            newFace.localCoordSystem.origin = U.applyTransformToVertex(initialSystemForCopy.origin, center, rotation * i, Math.pow(scale, i), directionalScale, startVector);
-                            newFace.localCoordSystem.angle = U.normalizeAngle(initialSystemForCopy.angle + (rotation * i));
-                            if (!directionalScale) newFace.localCoordSystem.scale = initialSystemForCopy.scale * Math.pow(scale, i);
-                        } else {
-                            const delta = { x: dragPreviewVertices[0].x - initialDragVertexStates[0].x, y: dragPreviewVertices[0].y - initialDragVertexStates[0].y };
-                            newFace.localCoordSystem.origin.x = initialSystemForCopy.origin.x + delta.x * i;
-                            newFace.localCoordSystem.origin.y = initialSystemForCopy.origin.y + delta.y * i;
-                        }
-                        
-                        if (newFace.localCoordSystem.attachedToVertex) {
-                            newFace.localCoordSystem.attachedToVertex = newIdMapForThisCopy.get(newFace.localCoordSystem.attachedToVertex);
-                        }
-                        if (newFace.localCoordSystem.attachedToEdge) {
-                            newFace.localCoordSystem.attachedToEdge.v1 = newIdMapForThisCopy.get(newFace.localCoordSystem.attachedToEdge.v1);
-                            newFace.localCoordSystem.attachedToEdge.v2 = newIdMapForThisCopy.get(newFace.localCoordSystem.attachedToEdge.v2);
-                        }
-                        if (newFace.localCoordSystem.rotationAlignedToEdge) {
-                            newFace.localCoordSystem.rotationAlignedToEdge.v1 = newIdMapForThisCopy.get(newFace.localCoordSystem.rotationAlignedToEdge.v1);
-                            newFace.localCoordSystem.rotationAlignedToEdge.v2 = newIdMapForThisCopy.get(newFace.localCoordSystem.rotationAlignedToEdge.v2);
-                        }
-                        if (newFace.localCoordSystem.scaleAttachedToEdge) {
-                            newFace.localCoordSystem.scaleAttachedToEdge.v1 = newIdMapForThisCopy.get(newFace.localCoordSystem.scaleAttachedToEdge.v1);
-                            newFace.localCoordSystem.scaleAttachedToEdge.v2 = newIdMapForThisCopy.get(newFace.localCoordSystem.scaleAttachedToEdge.v2);
-                        }
-                        
-                        newFace.localCoordSystem.isCustom = true;
+                verticesToCopy.forEach(p => {
+                    let newPos;
+                    if (transformIndicatorData) {
+                        const { center, rotation, scale, directionalScale, startPos } = transformIndicatorData;
+                        const startVector = { x: startPos.x - center.x, y: startPos.y - center.y };
+                        newPos = U.applyTransformToVertex(p, center, rotation * i, Math.pow(scale, i), directionalScale, startVector);
+                    } else {
+                        const delta = { x: dragPreviewVertices[0].x - initialDragVertexStates[0].x, y: dragPreviewVertices[0].y - initialDragVertexStates[0].y };
+                        newPos = { x: p.x + delta.x * i, y: p.y + delta.y * i };
                     }
-                    allNewFaces.push(newFace);
-                    currentCopyFaces.push(newFace.id);
+                    const newVertex = { ...p, ...newPos, id: U.generateUniqueId() };
+                    allNewVertices.push(newVertex);
+                    newIdMapForThisCopy.set(p.id, newVertex.id);
+                    currentCopyVertices.push(newVertex.id);
+                });
+
+                edgesToCopy.forEach(edge => {
+                    const newId1 = newIdMapForThisCopy.get(edge.id1);
+                    const newId2 = newIdMapForThisCopy.get(edge.id2);
+                    if (newId1 && newId2) {
+                        const newEdge = { ...edge, id1: newId1, id2: newId2 };
+                        allNewEdges.push(newEdge);
+                        currentCopyEdges.push(U.getEdgeId(newEdge));
+                    }
+                });
+
+                facesToCopy.forEach(originalFace => {
+                    const initialSystemForCopy = initialCoordSystemStates.get(originalFace.id);
+                    const newVertexIds = originalFace.vertexIds.map(id => newIdMapForThisCopy.get(id));
+                    if (newVertexIds.every(Boolean)) {
+                        const newFace = JSON.parse(JSON.stringify(originalFace));
+                        newFace.id = U.getFaceId({ vertexIds: newVertexIds });
+                        newFace.vertexIds = newVertexIds;
+
+                        if (newFace.localCoordSystem && initialSystemForCopy) {
+                            if (transformIndicatorData) {
+                                const { center, rotation, scale, directionalScale, startPos } = transformIndicatorData;
+                                const startVector = { x: startPos.x - center.x, y: startPos.y - center.y };
+                                newFace.localCoordSystem.origin = U.applyTransformToVertex(initialSystemForCopy.origin, center, rotation * i, Math.pow(scale, i), directionalScale, startVector);
+                                newFace.localCoordSystem.angle = U.normalizeAngle(initialSystemForCopy.angle + (rotation * i));
+                                if (!directionalScale) newFace.localCoordSystem.scale = initialSystemForCopy.scale * Math.pow(scale, i);
+                            } else {
+                                const delta = { x: dragPreviewVertices[0].x - initialDragVertexStates[0].x, y: dragPreviewVertices[0].y - initialDragVertexStates[0].y };
+                                newFace.localCoordSystem.origin.x = initialSystemForCopy.origin.x + delta.x * i;
+                                newFace.localCoordSystem.origin.y = initialSystemForCopy.origin.y + delta.y * i;
+                            }
+                            
+                            if (newFace.localCoordSystem.attachedToVertex) {
+                                newFace.localCoordSystem.attachedToVertex = newIdMapForThisCopy.get(newFace.localCoordSystem.attachedToVertex);
+                            }
+                            if (newFace.localCoordSystem.attachedToEdge) {
+                                newFace.localCoordSystem.attachedToEdge.v1 = newIdMapForThisCopy.get(newFace.localCoordSystem.attachedToEdge.v1);
+                                newFace.localCoordSystem.attachedToEdge.v2 = newIdMapForThisCopy.get(newFace.localCoordSystem.attachedToEdge.v2);
+                            }
+                            if (newFace.localCoordSystem.rotationAlignedToEdge) {
+                                newFace.localCoordSystem.rotationAlignedToEdge.v1 = newIdMapForThisCopy.get(newFace.localCoordSystem.rotationAlignedToEdge.v1);
+                                newFace.localCoordSystem.rotationAlignedToEdge.v2 = newIdMapForThisCopy.get(newFace.localCoordSystem.rotationAlignedToEdge.v2);
+                            }
+                            if (newFace.localCoordSystem.scaleAttachedToEdge) {
+                                newFace.localCoordSystem.scaleAttachedToEdge.v1 = newIdMapForThisCopy.get(newFace.localCoordSystem.scaleAttachedToEdge.v1);
+                                newFace.localCoordSystem.scaleAttachedToEdge.v2 = newIdMapForThisCopy.get(newFace.localCoordSystem.scaleAttachedToEdge.v2);
+                            }
+                            
+                            newFace.localCoordSystem.isCustom = true;
+                        }
+                        allNewFaces.push(newFace);
+                        currentCopyFaces.push(newFace.id);
+                    }
+                });
+                
+                if (i === copyCount - 1) {
+                    lastCopySelectionIds = { vertices: currentCopyVertices, edges: currentCopyEdges, faces: currentCopyFaces };
+                }
+            }
+            
+            allVertices.push(...allNewVertices);
+            allEdges.push(...allNewEdges);
+            allFaces.push(...allNewFaces);
+            
+            selectedVertexIds = lastCopySelectionIds.vertices;
+            selectedEdgeIds = lastCopySelectionIds.edges;
+            selectedFaceIds = lastCopySelectionIds.faces;
+        } else if (dragPreviewVertices.length > 0) {
+            dragPreviewVertices.forEach(dp => {
+                const originalVertex = allVertices.find(p => p.id === dp.id);
+                if (originalVertex) {
+                    originalVertex.x = dp.x;
+                    originalVertex.y = dp.y;
                 }
             });
             
-            if (i === copyCount - 1) {
-                lastCopySelectionIds = { vertices: currentCopyVertices, edges: currentCopyEdges, faces: currentCopyFaces };
-            }
-        }
-        
-        allVertices.push(...allNewVertices);
-        allEdges.push(...allNewEdges);
-        allFaces.push(...allNewFaces);
-        
-        selectedVertexIds = lastCopySelectionIds.vertices;
-        selectedEdgeIds = lastCopySelectionIds.edges;
-        selectedFaceIds = lastCopySelectionIds.faces;
-    } else if (dragPreviewVertices.length > 0) {
-        dragPreviewVertices.forEach(dp => {
-            const originalVertex = allVertices.find(p => p.id === dp.id);
-            if (originalVertex) {
-                originalVertex.x = dp.x;
-                originalVertex.y = dp.y;
-            }
-        });
-        
-        const verticesThatMoved = new Set(initialDragVertexStates.map(v => v.id));
-        const affectedFaces = new Set();
-        allFaces.forEach(face => {
-            if (face.vertexIds.some(vId => verticesThatMoved.has(vId))) {
-                affectedFaces.add(face);
-            }
-        });
+            const verticesThatMoved = new Set(initialDragVertexStates.map(v => v.id));
+            const affectedFaces = new Set();
+            allFaces.forEach(face => {
+                if (face.vertexIds.some(vId => verticesThatMoved.has(vId))) {
+                    affectedFaces.add(face);
+                }
+            });
 
-        if (affectedFaces.size > 0) {
-    affectedFaces.forEach(face => {
-        const initialSystem = initialCoordSystemStates.get(face.id);
-        if (face.localCoordSystem && initialSystem) {
-            const faceVertexIds = new Set(face.vertexIds);
-            const draggedVertexIds = new Set(initialDragVertexStates.map(v => v.id));
-            const isRigidFaceDrag = [...faceVertexIds].every(vId => draggedVertexIds.has(vId));
+            if (affectedFaces.size > 0) {
+        affectedFaces.forEach(face => {
+            const initialSystem = initialCoordSystemStates.get(face.id);
+            if (face.localCoordSystem && initialSystem) {
+                const faceVertexIds = new Set(face.vertexIds);
+                const draggedVertexIds = new Set(initialDragVertexStates.map(v => v.id));
+                const isRigidFaceDrag = [...faceVertexIds].every(vId => draggedVertexIds.has(vId));
 
-            if (isRigidFaceDrag) {
-                if (transformIndicatorData) {
-                    // This is a rigid transform (rotation, scale, or directional scale)
-                    const { center, rotation, scale, directionalScale, startPos } = transformIndicatorData;
-                    const startVector = { x: startPos.x - center.x, y: startPos.y - center.y };
-                    const newOrigin = U.applyTransformToVertex(initialSystem.origin, center, rotation, scale, directionalScale, startVector);
-                    face.localCoordSystem.origin = newOrigin;
-                    
-                    if (directionalScale) {
-                        const p_unit_x_initial = U.localToGlobal({ x: 1, y: 0 }, initialSystem);
-                        const p_unit_x_final = U.applyTransformToVertex(p_unit_x_initial, center, rotation, scale, directionalScale, startVector);
-                        face.localCoordSystem.scale = U.distance(newOrigin, p_unit_x_final);
-                        // Angle remains unchanged in directional scale
+                if (isRigidFaceDrag) {
+                    if (transformIndicatorData) {
+                        // This is a rigid transform (rotation, scale, or directional scale)
+                        const { center, rotation, scale, directionalScale, startPos } = transformIndicatorData;
+                        const startVector = { x: startPos.x - center.x, y: startPos.y - center.y };
+                        const newOrigin = U.applyTransformToVertex(initialSystem.origin, center, rotation, scale, directionalScale, startVector);
+                        face.localCoordSystem.origin = newOrigin;
+                        
+                        if (directionalScale) {
+                            const p_unit_x_initial = U.localToGlobal({ x: 1, y: 0 }, initialSystem);
+                            const p_unit_x_final = U.applyTransformToVertex(p_unit_x_initial, center, rotation, scale, directionalScale, startVector);
+                            face.localCoordSystem.scale = U.distance(newOrigin, p_unit_x_final);
+                            // Angle remains unchanged in directional scale
+                        } else {
+                            face.localCoordSystem.angle = U.normalizeAngle(initialSystem.angle + rotation);
+                            face.localCoordSystem.scale = initialSystem.scale * scale;
+                        }
                     } else {
-                        face.localCoordSystem.angle = U.normalizeAngle(initialSystem.angle + rotation);
-                        face.localCoordSystem.scale = initialSystem.scale * scale;
+                        // This is a simple translation of the entire face
+                        const delta = {
+                            x: dragPreviewVertices[0].x - initialDragVertexStates[0].x,
+                            y: dragPreviewVertices[0].y - initialDragVertexStates[0].y
+                        };
+                        face.localCoordSystem.origin.x = initialSystem.origin.x + delta.x;
+                        face.localCoordSystem.origin.y = initialSystem.origin.y + delta.y;
                     }
                 } else {
-                    // This is a simple translation of the entire face
-                    const delta = {
-                        x: dragPreviewVertices[0].x - initialDragVertexStates[0].x,
-                        y: dragPreviewVertices[0].y - initialDragVertexStates[0].y
-                    };
-                    face.localCoordSystem.origin.x = initialSystem.origin.x + delta.x;
-                    face.localCoordSystem.origin.y = initialSystem.origin.y + delta.y;
+                    // This is a deformation (only some vertices moved)
+                    applyCoordinateSystemConstraintsOnDragEnd(face, initialSystem, initialDragVertexStates, dragPreviewVertices, findVertexById);
                 }
-            } else {
-                // This is a deformation (only some vertices moved)
-                applyCoordinateSystemConstraintsOnDragEnd(face, initialSystem, initialDragVertexStates, dragPreviewVertices, findVertexById);
             }
-        }
-    });
-}
+        });
     }
+        }
 
-    const mergeRadius = C.MERGE_RADIUS_SCREEN / viewTransform.scale;
+        const mergeRadius = C.MERGE_RADIUS_SCREEN / viewTransform.scale;
+
+        const draggedVerticesFinal = [];
+        if (copyCount > 1) {
+            // Find the final positions of all newly created copy vertices
+            const lastCopyIds = new Set(lastCopySelectionIds.vertices);
+            allVertices.forEach(v => {
+                if (lastCopyIds.has(v.id)) {
+                    draggedVerticesFinal.push(v);
+                }
+            });
+            // Also include the original dragged selection
+            draggedVerticesFinal.push(...dragPreviewVertices);
+        } else {
+            draggedVerticesFinal.push(...dragPreviewVertices);
+        }
+
+        const initialDraggedIds = new Set(initialDragVertexStates.map(p => p.id));
+        const staticEdges = allEdges.filter(edge => !initialDraggedIds.has(edge.id1) && !initialDraggedIds.has(edge.id2));
+        const edgesToSplit = new Map();
+
+        if (staticEdges.length > 0) {
+            draggedVerticesFinal.forEach(vertex => {
+                if (vertex.type !== 'regular') return;
+
+                for (const edge of staticEdges) {
+                    const p1 = findVertexById(edge.id1);
+                    const p2 = findVertexById(edge.id2);
+
+                    if (p1 && p2) {
+                        const closest = U.getClosestPointOnLineSegment(vertex, p1, p2);
+                        if (closest.distance < mergeRadius && closest.onSegmentStrict) {
+                            const edgeId = U.getEdgeId(edge);
+                            if (!edgesToSplit.has(edgeId)) {
+                                edgesToSplit.set(edgeId, { edge: edge, pointsToInsert: [] });
+                            }
+                            // Store the vertex and its precise final position on the edge
+                            edgesToSplit.get(edgeId).pointsToInsert.push({ ...vertex, finalPos: {x: closest.x, y: closest.y} });
+                            break; 
+                        }
+                    }
+                }
+            });
+        }
+        
+        if (edgesToSplit.size > 0) {
+            const edgesBefore = JSON.parse(JSON.stringify(allEdges));
+            const gridInterval = (lastGridState.alpha2 > lastGridState.alpha1 && lastGridState.interval2) ? lastGridState.interval2 : lastGridState.interval1;
+
+            edgesToSplit.forEach(({ edge, pointsToInsert }) => {
+                allEdges = allEdges.filter(e => U.getEdgeId(e) !== U.getEdgeId(edge));
+
+                const p1 = findVertexById(edge.id1);
+                pointsToInsert.sort((a, b) => U.distance(p1, a.finalPos) - U.distance(p1, b.finalPos));
+                
+                let lastVertexInChain = p1;
+                pointsToInsert.forEach(insertData => {
+                    const vertexToUpdate = allVertices.find(v => v.id === insertData.id);
+                    if(vertexToUpdate) {
+                        vertexToUpdate.x = insertData.finalPos.x;
+                        vertexToUpdate.y = insertData.finalPos.y;
+                    }
+
+                    allEdges.push(U.createEdge(lastVertexInChain, vertexToUpdate, gridInterval, getColorForTarget));
+                    lastVertexInChain = vertexToUpdate;
+                });
+
+                const p2 = findVertexById(edge.id2);
+                allEdges.push(U.createEdge(lastVertexInChain, p2, gridInterval, getColorForTarget));
+            });
+
+            updateFaces(edgesBefore, allEdges);
+            ensureFaceCoordinateSystems();
+        }
+
         const parent = new Map();
         allVertices.forEach(p => parent.set(p.id, p.id));
         const isOriginalDragged = new Set(initialDragVertexStates.map(p => p.id));
