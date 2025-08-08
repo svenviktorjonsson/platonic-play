@@ -326,11 +326,31 @@ function updateHtmlLabel({ id, content, x, y, color, fontSize, options = {} }) {
         activeHtmlLabels.set(id, el);
     }
 
-    // Position the label's center at (x, y) and apply rotation.
+    let translateX = '-50%';
+    let translateY = '-50%';
+    let transformOrigin = 'center';
+
+    switch (options.textAlign) {
+        case 'left': translateX = '0%'; break;
+        case 'right': translateX = '-100%'; break;
+    }
+
+    switch (options.textBaseline) {
+        case 'top': translateY = '0%'; break;
+        case 'bottom': translateY = '-100%'; break;
+    }
+
+    // Adjust origin for rotations to feel more natural with alignment
+    if (options.textAlign === 'left' && options.textBaseline === 'top') transformOrigin = 'top left';
+    else if (options.textAlign === 'right' && options.textBaseline === 'top') transformOrigin = 'top right';
+    else if (options.textAlign === 'left' && options.textBaseline === 'bottom') transformOrigin = 'bottom left';
+    else if (options.textAlign === 'right' && options.textBaseline === 'bottom') transformOrigin = 'bottom right';
+
+
     el.style.left = `${x}px`;
     el.style.top = `${y}px`;
-    el.style.transform = `translate(-50%, -50%) rotate(${options.rotation || 0}deg)`;
-    el.style.transformOrigin = 'center';
+    el.style.transformOrigin = transformOrigin;
+    el.style.transform = `translate(${translateX}, ${translateY}) rotate(${options.rotation || 0}deg)`;
     
     el.style.color = color;
     el.style.fontSize = `${fontSize}px`;
@@ -5412,28 +5432,64 @@ function handleRightMouseButtonDown(event) {
     isActionInProgress = true;
     isRectangleSelecting = false; 
     rectangleSelectStartPos = actionStartPos;
-    actionContext = { target: 'canvas' };
+    actionContext = {
+        target: 'canvas',
+        shiftKey: event.shiftKey,
+        ctrlKey: event.ctrlKey || event.metaKey
+    };
 }
 
 function handleRightMouseButtonUp(event) {
     if (isDragConfirmed && isRectangleSelecting) {
-        // This is a confirmed drag-to-select action
         const dataP1 = screenToData({ x: Math.min(actionStartPos.x, mousePos.x), y: Math.min(actionStartPos.y, mousePos.y) });
         const dataP2 = screenToData({ x: Math.max(actionStartPos.x, mousePos.x), y: Math.max(actionStartPos.y, mousePos.y) });
         const minX = Math.min(dataP1.x, dataP2.x);
         const maxX = Math.max(dataP1.x, dataP2.x);
         const minY = Math.min(dataP1.y, dataP2.y);
         const maxY = Math.max(dataP1.y, dataP2.y);
+        
         const verticesInRect = allVertices.filter(p => p.type === 'regular' && p.x >= minX && p.x <= maxX && p.y >= minY && p.y <= maxY).map(p => p.id);
-        const edgesInRect = allEdges.filter(e => verticesInRect.includes(e.id1) && verticesInRect.includes(e.id2)).map(e => U.getEdgeId(e));
-        const allVerticesInRect = new Set(verticesInRect);
-        const facesInRect = allFaces.filter(f => f.vertexIds.every(vId => allVerticesInRect.has(vId))).map(f => U.getFaceId(f));
-        applySelectionLogic(verticesInRect, edgesInRect, facesInRect, actionContext.shiftKey, actionContext.ctrlKey);
+        const centersInRect = allVertices.filter(p => p.type !== 'regular' && p.x >= minX && p.x <= maxX && p.y >= minY && p.y <= maxY).map(p => p.id);
+        const allVerticesInRectIds = new Set(verticesInRect);
+        const edgesInRect = allEdges.filter(e => allVerticesInRectIds.has(e.id1) && allVerticesInRectIds.has(e.id2)).map(e => U.getEdgeId(e));
+        const facesInRect = allFaces.filter(f => f.vertexIds.every(vId => allVerticesInRectIds.has(vId))).map(f => U.getFaceId(f));
+
+        if (actionContext.shiftKey) {
+            // Add to selection
+            selectedVertexIds = [...new Set([...selectedVertexIds, ...verticesInRect])];
+            selectedEdgeIds = [...new Set([...selectedEdgeIds, ...edgesInRect])];
+            selectedFaceIds = [...new Set([...selectedFaceIds, ...facesInRect])];
+            selectedCenterIds = [...new Set([...selectedCenterIds, ...centersInRect])];
+        } else if (actionContext.ctrlKey) {
+            // Toggle selection
+            verticesInRect.forEach(id => {
+                const index = selectedVertexIds.indexOf(id);
+                if (index > -1) selectedVertexIds.splice(index, 1); else selectedVertexIds.push(id);
+            });
+            edgesInRect.forEach(id => {
+                const index = selectedEdgeIds.indexOf(id);
+                if (index > -1) selectedEdgeIds.splice(index, 1); else selectedEdgeIds.push(id);
+            });
+            facesInRect.forEach(id => {
+                const index = selectedFaceIds.indexOf(id);
+                if (index > -1) selectedFaceIds.splice(index, 1); else selectedFaceIds.push(id);
+            });
+            centersInRect.forEach(id => {
+                const index = selectedCenterIds.indexOf(id);
+                if (index > -1) selectedCenterIds.splice(index, 1); else selectedCenterIds.push(id);
+            });
+        } else {
+            // Replace entire selection
+            selectedVertexIds = verticesInRect;
+            selectedEdgeIds = edgesInRect;
+            selectedFaceIds = facesInRect;
+            selectedCenterIds = centersInRect;
+        }
 
         const newActiveTargets = [];
-        if (facesInRect.length > 0) newActiveTargets.push(C.COLOR_TARGET_FACE);
-        if (edgesInRect.length > 0) newActiveTargets.push(C.COLOR_TARGET_EDGE);
-        if (verticesInRect.length > 0) newActiveTargets.push(C.COLOR_TARGET_VERTEX);
+        if (selectedFaceIds.length > 0) newActiveTargets.push(C.COLOR_TARGET_FACE);
+        if (selectedEdgeIds.length > 0) newActiveTargets.push(C.COLOR_TARGET_EDGE);
+        if (selectedVertexIds.length > 0) newActiveTargets.push(C.COLOR_TARGET_VERTEX);
 
         if (newActiveTargets.length > 0) {
             activeColorTargets = newActiveTargets;
