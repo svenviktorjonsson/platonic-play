@@ -498,31 +498,34 @@ function calculatePreviewCoordSystem(face, { initialSystem, dragPreviewVertices,
     return previewSystem;
 }
 
-
 export function drawCopyPreviews(ctx, { copyCount, isDragConfirmed, initialDragVertexStates, dragPreviewVertices, transformIndicatorData, allEdges, allFaces, findVertexById, findNeighbors, colors }, dataToScreen) {
+    if (copyCount < 1 || !isDragConfirmed || !initialDragVertexStates.length) {
+        return;
+    }
+
     const verticesToCopy = initialDragVertexStates.filter(p => p.type === 'regular');
+    if (verticesToCopy.length === 0) return;
+
     const vertexIdsToCopy = new Set(verticesToCopy.map(p => p.id));
     const incidentEdges = allEdges.filter(edge =>
         vertexIdsToCopy.has(edge.id1) && vertexIdsToCopy.has(edge.id2)
     );
-    
-    const affectedFaces = allFaces.filter(face => 
+    const affectedFaces = allFaces.filter(face =>
         face.vertexIds && face.vertexIds.some(vId => vertexIdsToCopy.has(vId))
-    );
-
-    const isRigidBodyMotion = affectedFaces.every(face => 
-        face.vertexIds.every(vId => vertexIdsToCopy.has(vId))
     );
 
     ctx.save();
     ctx.globalAlpha = 1.0;
 
+    // Loop from 0 to copyCount-1. This will draw all copies: T^0, T^1, T^2...
     for (let i = 0; i < copyCount; i++) {
         let previewVerticesForThisCopy;
 
         if (i === 0) {
-            previewVerticesForThisCopy = initialDragVertexStates.filter(p => p.type === 'regular');
+            // T^0 is the copy at the initial, untransformed position.
+            previewVerticesForThisCopy = verticesToCopy;
         } else if (transformIndicatorData) {
+            // T^i for i >= 1 (including the dragged copy at i=1)
             const { center, rotation, scale, directionalScale, startPos } = transformIndicatorData;
             const effectiveRotation = rotation * i;
             const effectiveScale = Math.pow(scale, i);
@@ -532,6 +535,7 @@ export function drawCopyPreviews(ctx, { copyCount, isDragConfirmed, initialDragV
                 return { ...p, id: `preview_${p.id}_${i}`, x: newPos.x, y: newPos.y };
             });
         } else {
+            // Handle simple translation for copies.
             const deltaX = dragPreviewVertices[0].x - initialDragVertexStates[0].x;
             const deltaY = dragPreviewVertices[0].y - initialDragVertexStates[0].y;
             const effectiveDeltaX = deltaX * i;
@@ -547,29 +551,28 @@ export function drawCopyPreviews(ctx, { copyCount, isDragConfirmed, initialDragV
             newIdMapForThisCopy.set(originalVertex.id, previewVertex);
         });
 
+        // --- Draw Faces for this copy ---
         affectedFaces.forEach(originalFace => {
             const faceVerticesForThisCopy = originalFace.vertexIds.map(originalVertexId => {
-                if (vertexIdsToCopy.has(originalVertexId)) {
-                    return newIdMapForThisCopy.get(originalVertexId);
-                }
-                const staticVertex = findVertexById(originalVertexId);
-                return (staticVertex && staticVertex.type === 'regular') ? staticVertex : null;
-            }).filter(Boolean);
+                return vertexIdsToCopy.has(originalVertexId)
+                    ? newIdMapForThisCopy.get(originalVertexId)
+                    : findVertexById(originalVertexId);
+            }).filter(v => v && v.type === 'regular');
 
             if (faceVerticesForThisCopy.length >= 3) {
                 const screenVertices = faceVerticesForThisCopy.map(v => dataToScreen(v));
                 if (screenVertices.every(v => v && typeof v.x === 'number' && typeof v.y === 'number')) {
                     let faceToDraw = originalFace;
-                    if (originalFace.localCoordSystem) {
+                     if (originalFace.localCoordSystem) {
                         const previewSystem = JSON.parse(JSON.stringify(originalFace.localCoordSystem));
                         if (previewSystem.isCustom) {
-                            if (transformIndicatorData && i > 0) {
+                            if (transformIndicatorData) {
                                 const { center, rotation, scale, directionalScale, startPos } = transformIndicatorData;
                                 const startVector = { x: startPos.x - center.x, y: startPos.y - center.y };
                                 previewSystem.origin = U.applyTransformToVertex(previewSystem.origin, center, rotation * i, Math.pow(scale, i), directionalScale, startVector);
                                 previewSystem.angle = U.normalizeAngle(previewSystem.angle + (rotation * i));
                                 if(!directionalScale) previewSystem.scale *= Math.pow(scale, i);
-                            } else if (i > 0) {
+                            } else {
                                 const deltaX = dragPreviewVertices[0].x - initialDragVertexStates[0].x;
                                 const deltaY = dragPreviewVertices[0].y - initialDragVertexStates[0].y;
                                 previewSystem.origin.x += deltaX * i;
@@ -588,26 +591,25 @@ export function drawCopyPreviews(ctx, { copyCount, isDragConfirmed, initialDragV
                 }
             }
         });
+        
+        // --- Draw Edges for this copy ---
+        ctx.setLineDash([]); // Ensure all preview edges are solid for clarity
+        ctx.lineWidth = C.LINE_WIDTH;
 
-        if (isRigidBodyMotion) {
-            ctx.setLineDash([]);
-            incidentEdges.forEach(originalEdge => {
-                const p1 = newIdMapForThisCopy.get(originalEdge.id1);
-                const p2 = newIdMapForThisCopy.get(originalEdge.id2);
-                if (p1 && p2) {
-                    const p1Screen = dataToScreen(p1);
-                    const p2Screen = dataToScreen(p2);
-                    ctx.beginPath();
-                    ctx.moveTo(p1Screen.x, p1Screen.y);
-                    ctx.lineTo(p2Screen.x, p2Screen.y);
-                    ctx.strokeStyle = originalEdge.color || colors.defaultStroke;
-                    ctx.lineWidth = C.LINE_WIDTH;
-                    ctx.stroke();
-                }
-            });
-        }
+        incidentEdges.forEach(originalEdge => {
+            const p1 = newIdMapForThisCopy.get(originalEdge.id1);
+            const p2 = newIdMapForThisCopy.get(originalEdge.id2);
+            if (p1 && p2) {
+                const p1Screen = dataToScreen(p1);
+                const p2Screen = dataToScreen(p2);
+                ctx.beginPath();
+                ctx.moveTo(p1Screen.x, p1Screen.y);
+                ctx.lineTo(p2Screen.x, p2Screen.y);
+                ctx.strokeStyle = originalEdge.color || colors.edge;
+                ctx.stroke();
+            }
+        });
 
-        ctx.setLineDash(isRigidBodyMotion ? [] : C.DASH_PATTERN);
         verticesToCopy.forEach(originalVertex => {
             const correspondingPreviewVertex = newIdMapForThisCopy.get(originalVertex.id);
             if (!correspondingPreviewVertex) return;
@@ -622,14 +624,14 @@ export function drawCopyPreviews(ctx, { copyCount, isDragConfirmed, initialDragV
                         ctx.beginPath();
                         ctx.moveTo(previewScreen.x, previewScreen.y);
                         ctx.lineTo(neighborScreen.x, neighborScreen.y);
-                        ctx.strokeStyle = colors.defaultStroke;
-                        ctx.lineWidth = C.LINE_WIDTH;
+                        ctx.strokeStyle = colors.edge;
                         ctx.stroke();
                     }
                 }
             });
         });
 
+        // --- Draw Vertices for this copy ---
         previewVerticesForThisCopy.forEach(vertex => {
             drawVertex(ctx, vertex, { 
                 selectedVertexIds: [], 
@@ -688,52 +690,46 @@ export function drawDrawingPreview(ctx, { startVertex, snappedData, isShiftPress
     ctx.restore();
 }
 
-export function drawMergePreviews(ctx, { allVertices, dragPreviewVertices, viewTransform, colors, transformIndicatorData, copyCount, initialDragVertexStates }, dataToScreen) {
-    if (!dragPreviewVertices || dragPreviewVertices.length === 0 || !initialDragVertexStates || initialDragVertexStates.length === 0) {
+export function drawMergePreviews(ctx, { isSnapping, allVertices, dragPreviewVertices, transformIndicatorData, copyCount, initialDragVertexStates, colors }, dataToScreen) {
+    // 1. Only run this function if a snap is currently active.
+    if (!isSnapping || !dragPreviewVertices || dragPreviewVertices.length === 0 || !initialDragVertexStates || initialDragVertexStates.length === 0) {
         return;
     }
 
-    const indicatorMergeThreshold = C.GEOMETRY_CALCULATION_EPSILON;
+    // 2. Use a reliable tolerance to check for merged vertices.
+    const indicatorMergeThreshold = C.ZERO_TOLERANCE;
     const drawnMergeIndicators = new Set();
     const draggedIds = new Set(initialDragVertexStates.map(p => p.id));
     const verticesToTransform = initialDragVertexStates.filter(p => p.type === 'regular');
-
     const staticVertices = allVertices.filter(p => p.type === 'regular' && !draggedIds.has(p.id));
-
-    const multipliers = copyCount === 1 ? [1] : Array.from({ length: copyCount }, (_, k) => k);
-
     const copies = [];
+
     if (verticesToTransform.length > 0) {
-        if (transformIndicatorData) {
-            const { center, rotation, scale, directionalScale, startPos } = transformIndicatorData;
-            const startVector = { x: startPos.x - center.x, y: startPos.y - center.y };
-            multipliers.forEach(k => {
-                const effectiveRotation = rotation * k;
-                const effectiveScale = Math.pow(scale, k);
-                const transformedVertices = verticesToTransform.map(p_orig => {
-                    const newPos = U.applyTransformToVertex(p_orig, center, effectiveRotation, effectiveScale, directionalScale, startVector);
-                    return { ...p_orig, ...newPos };
+        // 3. Correctly calculate all copy positions from T^1 to T^copyCount.
+        for (let i = 1; i <= copyCount; i++) {
+            let transformedVertices;
+            if (transformIndicatorData) {
+                const { center, rotation, scale, directionalScale, startPos } = transformIndicatorData;
+                const startVector = { x: startPos.x - center.x, y: startPos.y - center.y };
+                transformedVertices = verticesToTransform.map(p_orig => {
+                    const newPos = U.applyTransformToVertex(p_orig, center, rotation * i, Math.pow(scale, i), directionalScale, startVector);
+                    return { ...p_orig, ...newPos, id: `preview_${p_orig.id}_${i}` };
                 });
-                copies.push(transformedVertices);
-            });
-        } else {
-            const deltaX = dragPreviewVertices[0].x - initialDragVertexStates[0].x;
-            const deltaY = dragPreviewVertices[0].y - initialDragVertexStates[0].y;
-            multipliers.forEach(k => {
-                const effectiveDeltaX = deltaX * k;
-                const effectiveDeltaY = deltaY * k;
-                const transformedVertices = verticesToTransform.map(p_orig => ({
+            } else {
+                const deltaX = dragPreviewVertices[0].x - initialDragVertexStates[0].x;
+                const deltaY = dragPreviewVertices[0].y - initialDragVertexStates[0].y;
+                transformedVertices = verticesToTransform.map(p_orig => ({
                     ...p_orig,
-                    x: p_orig.x + effectiveDeltaX,
-                    y: p_orig.y + effectiveDeltaY,
+                    id: `preview_${p_orig.id}_${i}`,
+                    x: p_orig.x + deltaX * i,
+                    y: p_orig.y + deltaY * i,
                 }));
-                copies.push(transformedVertices);
-            });
+            }
+            copies.push(transformedVertices);
         }
     }
 
     const drawIndicator = (p1, p2) => {
-        if (p1.id === p2.id) return;
         if (U.distance(p1, p2) < indicatorMergeThreshold) {
             const mergePos = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
             const screenPos = dataToScreen(mergePos);
@@ -2409,7 +2405,7 @@ export function drawAllEdges(ctx, { allEdges, selectedEdgeIds, isDragConfirmed, 
 
 export function drawTransformIndicators(ctx, htmlOverlay, { transformIndicatorData, angleSigFigs, distanceSigFigs, colors, coordSystemTransformIndicatorData }, dataToScreen, updateHtmlLabel) {
     if (transformIndicatorData) {
-        const { center, startPos, currentPos, rotation, scale, isSnapping, snappedScaleValue, gridToGridInfo, transformType, directionalScale } = transformIndicatorData;
+        const { center, startPos, currentPos, rotation, scale, isSnapping, snappedScaleValue, gridToGridInfo, transformType, directionalScale, gridPoint, nearbyVertex, projectionPoint } = transformIndicatorData;
 
         const centerScreen = dataToScreen(center);
         const startScreen = dataToScreen(startPos);
@@ -2471,6 +2467,32 @@ export function drawTransformIndicators(ctx, htmlOverlay, { transformIndicatorDa
             }
         }
 
+        // === NEW: Grid point OR nearby vertex snapping visual feedback ===
+        if (transformType === C.TRANSFORMATION_TYPE_DIRECTIONAL_SCALE && isSnapping && projectionPoint) {
+            // Check if we have either a grid point or nearby vertex to show
+            const snapTarget = gridPoint || nearbyVertex;
+            if (snapTarget) {
+                const snapTargetScreen = dataToScreen(snapTarget);
+                const projectionScreen = dataToScreen(projectionPoint);
+                
+                // Draw yellow circle on the snap target (grid point or vertex)
+                ctx.setLineDash([]);
+                ctx.fillStyle = colors.feedbackSnapped;
+                ctx.beginPath();
+                ctx.arc(snapTargetScreen.x, snapTargetScreen.y, C.VERTEX_RADIUS, 0, 2 * Math.PI);
+                ctx.fill();
+                
+                // Draw yellow dashed line from snap target to projection on axis
+                ctx.setLineDash([4, 4]);
+                ctx.strokeStyle = colors.feedbackSnapped;
+                ctx.lineWidth = C.FEEDBACK_LINE_VISUAL_WIDTH;
+                ctx.beginPath();
+                ctx.moveTo(snapTargetScreen.x, snapTargetScreen.y);
+                ctx.lineTo(projectionScreen.x, projectionScreen.y);
+                ctx.stroke();
+            }
+        }
+
         ctx.setLineDash([]);
         ctx.restore();
 
@@ -2516,7 +2538,14 @@ export function drawTransformIndicators(ctx, htmlOverlay, { transformIndicatorDa
                     scaleText = `\\times \\frac{${numerator}}{${denominator}}`;
                 }
             } else if (isSnapping && snappedScaleValue !== null) {
-                scaleText = `\\times ${U.formatFraction(snappedScaleValue, C.FRACTION_FORMAT_TOLERANCE, C.FRACTION_FORMAT_MAX_DENOMINATOR_TRANSFORM)}`;
+                // === UPDATED: For grid point OR nearby vertex snapping, show exact scale with same precision as non-shift ===
+                if (transformType === C.TRANSFORMATION_TYPE_DIRECTIONAL_SCALE && (gridPoint || nearbyVertex)) {
+                    // Use same precision as non-shift dragging but in yellow (snapping color)
+                    const formattedScale = parseFloat(effectiveScale.toFixed(C.TRANSFORM_INDICATOR_PRECISION)).toString();
+                    scaleText = `\\times ${formattedScale}`;
+                } else {
+                    scaleText = `\\times ${U.formatFraction(snappedScaleValue, C.FRACTION_FORMAT_TOLERANCE, C.FRACTION_FORMAT_MAX_DENOMINATOR_TRANSFORM)}`;
+                }
             } else {
                 const formattedScale = parseFloat(effectiveScale.toFixed(C.TRANSFORM_INDICATOR_PRECISION)).toString();
                 scaleText = `\\times ${formattedScale}`;
