@@ -691,12 +691,10 @@ export function drawDrawingPreview(ctx, { startVertex, snappedData, isShiftPress
 }
 
 export function drawMergePreviews(ctx, { isSnapping, allVertices, dragPreviewVertices, transformIndicatorData, copyCount, initialDragVertexStates, colors }, dataToScreen) {
-    // 1. Only run this function if a snap is currently active.
     if (!isSnapping || !dragPreviewVertices || dragPreviewVertices.length === 0 || !initialDragVertexStates || initialDragVertexStates.length === 0) {
         return;
     }
 
-    // 2. Use a reliable tolerance to check for merged vertices.
     const indicatorMergeThreshold = C.ZERO_TOLERANCE;
     const drawnMergeIndicators = new Set();
     const draggedIds = new Set(initialDragVertexStates.map(p => p.id));
@@ -704,8 +702,25 @@ export function drawMergePreviews(ctx, { isSnapping, allVertices, dragPreviewVer
     const staticVertices = allVertices.filter(p => p.type === 'regular' && !draggedIds.has(p.id));
     const copies = [];
 
+    if (transformIndicatorData) {
+        const { rotation, scale } = transformIndicatorData;
+        const isIdentity = Math.abs(rotation) < C.MIN_TRANSFORM_ACTION_THRESHOLD && Math.abs(scale - 1) < C.MIN_TRANSFORM_ACTION_THRESHOLD;
+        if (isIdentity && copyCount > 1) {
+            ctx.fillStyle = colors.feedbackSnapped;
+            verticesToTransform.forEach(p_orig => {
+                const screenPos = dataToScreen(p_orig);
+                const key = `${Math.round(screenPos.x)},${Math.round(screenPos.y)}`;
+                if (!drawnMergeIndicators.has(key)) {
+                    ctx.beginPath();
+                    ctx.arc(screenPos.x, screenPos.y, C.VERTEX_RADIUS, 0, 2 * Math.PI);
+                    ctx.fill();
+                    drawnMergeIndicators.add(key);
+                }
+            });
+        }
+    }
+
     if (verticesToTransform.length > 0) {
-        // 3. Correctly calculate all copy positions from T^1 to T^copyCount.
         for (let i = 1; i <= copyCount; i++) {
             let transformedVertices;
             if (transformIndicatorData) {
@@ -713,7 +728,7 @@ export function drawMergePreviews(ctx, { isSnapping, allVertices, dragPreviewVer
                 const startVector = { x: startPos.x - center.x, y: startPos.y - center.y };
                 transformedVertices = verticesToTransform.map(p_orig => {
                     const newPos = U.applyTransformToVertex(p_orig, center, rotation * i, Math.pow(scale, i), directionalScale, startVector);
-                    return { ...p_orig, ...newPos, id: `preview_${p_orig.id}_${i}` };
+                    return { ...p_orig, ...newPos, id: `preview_${p_orig.id}_${i}`, originalId: p_orig.id };
                 });
             } else {
                 const deltaX = dragPreviewVertices[0].x - initialDragVertexStates[0].x;
@@ -721,6 +736,7 @@ export function drawMergePreviews(ctx, { isSnapping, allVertices, dragPreviewVer
                 transformedVertices = verticesToTransform.map(p_orig => ({
                     ...p_orig,
                     id: `preview_${p_orig.id}_${i}`,
+                    originalId: p_orig.id,
                     x: p_orig.x + deltaX * i,
                     y: p_orig.y + deltaY * i,
                 }));
@@ -745,19 +761,35 @@ export function drawMergePreviews(ctx, { isSnapping, allVertices, dragPreviewVer
 
     ctx.fillStyle = colors.feedbackSnapped;
 
+    // Check copies (T^1..T^n) against static and original (T^0) vertices
     for (const copy of copies) {
         for (const p_copy of copy) {
             for (const p_static of staticVertices) {
                 drawIndicator(p_copy, p_static);
             }
+            for (const p_orig of verticesToTransform) {
+                if (p_copy.originalId !== p_orig.id) {
+                    drawIndicator(p_copy, p_orig);
+                }
+            }
         }
     }
 
+    // Check original selection (T^0) against static vertices
+    for (const p_orig of verticesToTransform) {
+        for (const p_static of staticVertices) {
+            drawIndicator(p_orig, p_static);
+        }
+    }
+
+    // Check all copies against each other (T^i vs T^j)
     for (let i = 0; i < copies.length; i++) {
         for (let j = i + 1; j < copies.length; j++) {
             for (const pA of copies[i]) {
                 for (const pB of copies[j]) {
-                    drawIndicator(pA, pB);
+                    if (pA.originalId !== pB.originalId) {
+                        drawIndicator(pA, pB);
+                    }
                 }
             }
         }
@@ -2403,86 +2435,62 @@ export function drawAllEdges(ctx, { allEdges, selectedEdgeIds, isDragConfirmed, 
     ctx.strokeStyle = colors.defaultStroke;
 }
 
+
 export function drawTransformIndicators(ctx, htmlOverlay, { transformIndicatorData, angleSigFigs, distanceSigFigs, colors, coordSystemTransformIndicatorData }, dataToScreen, updateHtmlLabel) {
     if (transformIndicatorData) {
         const { center, startPos, currentPos, rotation, scale, isSnapping, snappedScaleValue, gridToGridInfo, transformType, directionalScale, gridPoint, nearbyVertex, projectionPoint } = transformIndicatorData;
 
         const centerScreen = dataToScreen(center);
         const startScreen = dataToScreen(startPos);
+        const currentScreen = dataToScreen(currentPos);
         const color = isSnapping ? colors.feedbackSnapped : `rgba(${colors.feedbackDefault.join(',')}, 1.0)`;
 
         ctx.save();
-        ctx.setLineDash(C.DASH_PATTERN);
         ctx.strokeStyle = color;
         ctx.lineWidth = C.FEEDBACK_LINE_VISUAL_WIDTH;
 
-        if (transformType === C.TRANSFORMATION_TYPE_ROTATION || transformType === C.TRANSFORMATION_TYPE_ROTATE_SCALE) {
-        const currentScreen = dataToScreen(currentPos);
-        const startVecScreen = { x: startScreen.x - centerScreen.x, y: startScreen.y - centerScreen.y };
-        const arcRadius = Math.hypot(startVecScreen.x, startVecScreen.y);
-        const startAngleScreen = Math.atan2(startVecScreen.y, startVecScreen.x);
-
-        ctx.beginPath();
-        ctx.moveTo(centerScreen.x, centerScreen.y);
-        ctx.lineTo(startScreen.x, startScreen.y);
-        ctx.stroke();
-
+        // Draw a single, consistent dashed line from the center to the final position
+        ctx.setLineDash(C.DASH_PATTERN);
         ctx.beginPath();
         ctx.moveTo(centerScreen.x, centerScreen.y);
         ctx.lineTo(currentScreen.x, currentScreen.y);
         ctx.stroke();
 
-        if (Math.abs(rotation) > C.MIN_TRANSFORM_ACTION_THRESHOLD) {
-            const screenRotation = -rotation;
-            const anticlockwise = rotation > 0;
+        // If it's a rotation, draw the feedback arc and a solid line for the starting position
+        if ((transformType === C.TRANSFORMATION_TYPE_ROTATION || transformType === C.TRANSFORMATION_TYPE_ROTATE_SCALE)) {
+            const startVecScreen = { x: startScreen.x - centerScreen.x, y: startScreen.y - centerScreen.y };
+            const arcRadius = Math.hypot(startVecScreen.x, startVecScreen.y);
+            const startAngleScreen = Math.atan2(startVecScreen.y, startVecScreen.x);
+
+            // Draw solid starting line for arc reference
             ctx.setLineDash([]);
             ctx.beginPath();
-            ctx.arc(centerScreen.x, centerScreen.y, arcRadius, startAngleScreen, startAngleScreen + screenRotation, anticlockwise);
+            ctx.moveTo(centerScreen.x, centerScreen.y);
+            ctx.lineTo(startScreen.x, startScreen.y);
             ctx.stroke();
-        }
-        }
 
-        if (transformType === C.TRANSFORMATION_TYPE_SCALE || transformType === C.TRANSFORMATION_TYPE_DIRECTIONAL_SCALE || transformType === C.TRANSFORMATION_TYPE_ROTATE_SCALE) {
-            const scaledPos = {
-                x: center.x + (startPos.x - center.x) * scale,
-                y: center.y + (startPos.y - center.y) * scale
-            };
-            // For combined transform, draw from start to scaled position instead of center
-            const lineStartScreen = (transformType === C.TRANSFORMATION_TYPE_ROTATE_SCALE) ? startScreen : centerScreen;
-            const scaledScreen = dataToScreen(scaledPos);
-
-            if (transformType !== C.TRANSFORMATION_TYPE_ROTATE_SCALE) {
+            if (Math.abs(rotation) > C.MIN_TRANSFORM_ACTION_THRESHOLD) {
+                const screenRotation = -rotation;
+                const anticlockwise = rotation > 0;
                 ctx.beginPath();
-                ctx.moveTo(centerScreen.x, centerScreen.y);
-                ctx.lineTo(startScreen.x, startScreen.y);
-                ctx.stroke();
-            }
-
-            if (Math.abs(scale - 1) > C.MIN_TRANSFORM_ACTION_THRESHOLD) {
-                ctx.setLineDash(transformType === C.TRANSFORMATION_TYPE_ROTATE_SCALE ? [] : [6, 6]);
-                ctx.beginPath();
-                ctx.moveTo(centerScreen.x, centerScreen.y);
-                ctx.lineTo(scaledScreen.x, scaledScreen.y);
+                ctx.arc(centerScreen.x, centerScreen.y, arcRadius, startAngleScreen, startAngleScreen + screenRotation, anticlockwise);
                 ctx.stroke();
             }
         }
 
-        // === NEW: Grid point OR nearby vertex snapping visual feedback ===
+        // Handle visual feedback for directional scale projection snapping
         if (transformType === C.TRANSFORMATION_TYPE_DIRECTIONAL_SCALE && isSnapping && projectionPoint) {
-            // Check if we have either a grid point or nearby vertex to show
             const snapTarget = gridPoint || nearbyVertex;
             if (snapTarget) {
                 const snapTargetScreen = dataToScreen(snapTarget);
                 const projectionScreen = dataToScreen(projectionPoint);
                 
-                // Draw yellow circle on the snap target (grid point or vertex)
                 ctx.setLineDash([]);
                 ctx.fillStyle = colors.feedbackSnapped;
                 ctx.beginPath();
                 ctx.arc(snapTargetScreen.x, snapTargetScreen.y, C.VERTEX_RADIUS, 0, 2 * Math.PI);
                 ctx.fill();
                 
-                // Draw yellow dashed line from snap target to projection on axis
                 ctx.setLineDash([4, 4]);
                 ctx.strokeStyle = colors.feedbackSnapped;
                 ctx.lineWidth = C.FEEDBACK_LINE_VISUAL_WIDTH;
@@ -2517,7 +2525,7 @@ export function drawTransformIndicators(ctx, htmlOverlay, { transformIndicatorDa
             updateHtmlLabel({ id: 'transform-angle-indicator', content: '', x: 0, y: 0, color: color, fontSize: C.FEEDBACK_LABEL_FONT_SIZE, options: { textAlign: 'center', textBaseline: 'middle' } }, htmlOverlay);
         }
 
-        if ((transformType === C.TRANSFORMATION_TYPE_SCALE || transformType === C.TRANSFORMATION_TYPE_DIRECTIONAL_SCALE || transformType === C.TRANSFORMATION_TYPE_ROTATE_SCALE) && Math.abs(scale - 1) > C.MIN_TRANSFORM_ACTION_THRESHOLD) {
+        if ((transformType === C.TRANSFORMATION_TYPE_SCALE || transformType === C.TRANSFORMATION_TYPE_DIRECTIONAL_SCALE || transformType === C.TRANSFORMATION_TYPE_ROTATE_SCALE) && (Math.abs(scale - 1) > C.MIN_TRANSFORM_ACTION_THRESHOLD || isSnapping)) {
             let scaleText;
             const effectiveScale = isSnapping && snappedScaleValue !== null ? snappedScaleValue : scale;
             
@@ -4298,8 +4306,6 @@ function drawMainToolbar(ctx, htmlOverlay, state, updateHtmlLabel) {
        drawThemeIcon(ctx, themeBtn, activeThemeName, colors);
    }
 }
-
-
 
 function drawTransformPanel(ctx, state) {
     const { canvasUI, colors } = state;

@@ -1031,14 +1031,20 @@ function handleCanvasUIClick(screenPos, shiftKey = false, ctrlKey = false) {
 
     if (isTransformPanelExpanded) {
         for (const icon of canvasUI.transformIcons) {
-            if (screenPos.x >= icon.x && screenPos.x <= icon.x + icon.width &&
-                screenPos.y >= icon.y && screenPos.y <= icon.y + icon.height) {
+        if (screenPos.x >= icon.x && screenPos.x <= icon.x + icon.width &&
+            screenPos.y >= icon.y && screenPos.y <= icon.y + icon.height) {
+            if (isPlacingTransform) {
+                // If already placing, just switch the type
+                placingTransformType = icon.type;
+            } else {
+                // Otherwise, start placement mode
                 isPlacingTransform = true;
                 placingTransformType = icon.type;
                 canvas.style.cursor = 'none';
-                return true;
             }
+            return true;
         }
+    }
     }
 
     if (isDisplayPanelExpanded) {
@@ -2630,273 +2636,148 @@ function getBestDirectionalScaleSnap(center, initialVertexStates, handleVertex, 
     const verticesToTransform = initialVertexStates.filter(p => p.type === 'regular');
     const mouseDataPos = U.applyTransformToVertex(handleVertex, center, 0, rawScale, true, startVector);
 
-    if (currentShiftPressed) {
-        // === WITH SHIFT: Consider all possible snap targets ===
-        
-        // 1. Geometric scale factors
-        const scaleSnapFactors = [...C.SNAP_FACTORS.filter(f => f !== 0), 0]; // Include 0
-        for (const factor of scaleSnapFactors) {
-            const handleAtFactor = U.applyTransformToVertex(handleVertex, center, 0, factor, true, startVector);
-            const factorDist = U.distance(mouseDataPos, handleAtFactor);
-            allPossibleSnaps.push({ scale: factor, dist: factorDist, snapType: 'geometric' });
-            
-            // Also try negative factors
-            if (factor !== 0) {
-                const handleAtNegFactor = U.applyTransformToVertex(handleVertex, center, 0, -factor, true, startVector);
-                const negFactorDist = U.distance(mouseDataPos, handleAtNegFactor);
-                allPossibleSnaps.push({ scale: -factor, dist: negFactorDist, snapType: 'geometric' });
+    const addSnapCandidate = (scale) => {
+        const handleAtSnapPos = U.applyTransformToVertex(handleVertex, center, 0, scale, true, startVector);
+        const snapDist = U.distance(mouseDataPos, handleAtSnapPos);
+        allPossibleSnaps.push({ scale: scale, dist: snapDist, snapType: 'vertex', priority: 1 });
+    };
+
+    if (copyCount > 1) {
+        let maxInitialDist = 0;
+        for (let i = 0; i < verticesToTransform.length; i++) {
+            for (let j = i + 1; j < verticesToTransform.length; j++) {
+                maxInitialDist = Math.max(maxInitialDist, U.distance(verticesToTransform[i], verticesToTransform[j]));
             }
         }
+        const relativeSnapThreshold = maxInitialDist > C.GEOMETRY_CALCULATION_EPSILON ? maxInitialDist * 2.0 : snapRadius * 10;
+        
+        const allIndices = [0, ...Array.from({ length: copyCount }, (_, k) => k + 1)];
 
-        // 2. (REMOVED - now handled in section 3 with nearby vertices)
+        for (const i of allIndices) {
+            for (const j of allIndices) {
+                if (i <= j) continue;
+                verticesToTransform.forEach(p1_orig => {
+                    verticesToTransform.forEach(p2_orig => {
+                        if (p1_orig.id === p2_orig.id && i === j) return;
+                        if (U.distance(p1_orig, p2_orig) > relativeSnapThreshold) return;
 
-        // 3. Grid points AND nearby vertices (treat vertices same as grid points)
+                        const proj1 = getProjectedComponents(p1_orig);
+                        const proj2 = getProjectedComponents(p2_orig);
+
+                        if (U.distance(proj1.perp_vec, proj2.perp_vec) < snapRadius) {
+                            const p1_para = (i === 0) ? proj1.parallel_dist : proj1.parallel_dist;
+                            const p2_para = (j === 0) ? proj2.parallel_dist : proj2.parallel_dist;
+                            const delta_c = i - j;
+                            
+                            if (Math.abs(delta_c) > 0 && Math.abs(p1_para) > C.GEOMETRY_CALCULATION_EPSILON) {
+                                const ratio = p2_para / p1_para;
+                                if (ratio >= 0) {
+                                    const scale = Math.pow(ratio, 1 / delta_c);
+                                    addSnapCandidate(scale);
+                                    if (delta_c % 2 === 0) { // Even root has a negative solution
+                                        addSnapCandidate(-scale);
+                                    }
+                                } else { // ratio < 0
+                                    if (delta_c % 2 !== 0) { // Odd root of a negative number
+                                        const scale = -Math.pow(Math.abs(ratio), 1 / delta_c);
+                                        addSnapCandidate(scale);
+                                    }
+                                }
+                            }
+                        }
+                    });
+                });
+            }
+        }
+    }
+
+    if (currentShiftPressed) {
+        const geometricSnaps = [];
+        const scaleSnapFactors = [...C.SNAP_FACTORS.filter(f => f !== 0), 0];
+        for (const factor of scaleSnapFactors) {
+            geometricSnaps.push({ scale: factor, dist: Math.abs(rawScale - factor) });
+            if (factor !== 0) {
+                geometricSnaps.push({ scale: -factor, dist: Math.abs(rawScale - (-factor)) });
+            }
+        }
+        if (geometricSnaps.length > 0) {
+            const bestGeometricSnap = geometricSnaps.reduce((a, b) => a.dist < b.dist ? a : b);
+            allPossibleSnaps.push({ ...bestGeometricSnap, snapType: 'geometric', priority: 2 });
+        }
+
+        const projectionSnaps = [];
         if (lastGridState && mouseCursorDataPos) {
             const gridInterval = (lastGridState.alpha2 > lastGridState.alpha1 && lastGridState.interval2) ? lastGridState.interval2 : lastGridState.interval1;
             if (gridInterval) {
-                console.log('Checking for nearby vertices. Cursor at:', mouseCursorDataPos);
-                console.log('Static vertices available:', staticVertices.length, staticVertices);
-                
-                // Get the 4 closest grid points to the cursor
                 const gridCandidates = U.getGridSnapCandidates(mouseCursorDataPos, gridDisplayMode, gridInterval, lastAngularGridState, true);
-                
-                // Add nearby vertices within 1 grid unit of cursor
-                const nearbyVertices = staticVertices.filter(vertex => {
-                    const distToCursor = U.distance(vertex, mouseCursorDataPos);
-                    console.log('Vertex', vertex, 'distance to cursor:', distToCursor, 'threshold:', gridInterval);
-                    return distToCursor <= gridInterval;
-                });
-                
-                console.log('Found', nearbyVertices.length, 'nearby vertices:', nearbyVertices);
-                console.log('Found', gridCandidates.length, 'grid candidates');
-                
-                // Combine grid points and vertices - treat them the same
+                const nearbyVertices = staticVertices.filter(vertex => U.distance(vertex, mouseCursorDataPos) <= gridInterval);
                 const allCandidates = [...gridCandidates, ...nearbyVertices];
-                
-                allCandidates.forEach(candidate => {
-                    // Calculate scale to project handle onto this candidate
-                    const candidateVec = { x: candidate.x - center.x, y: candidate.y - center.y };
-                    const handleVec = { x: handleVertex.x - center.x, y: handleVertex.y - center.y };
-                    
-                    const candidateParallel = candidateVec.x * axis_norm.x + candidateVec.y * axis_norm.y;
-                    const handleParallel = handleVec.x * axis_norm.x + handleVec.y * axis_norm.y;
-                    
+                if (allCandidates.length > 0) {
+                    const bestCandidate = allCandidates.reduce((best, current) => {
+                        return U.distance(mouseCursorDataPos, current) < U.distance(mouseCursorDataPos, best) ? current : best;
+                    });
+                    const { parallel_dist: candidateParallel } = getProjectedComponents(bestCandidate);
+                    const { parallel_dist: handleParallel } = getProjectedComponents(handleVertex);
                     if (Math.abs(handleParallel) > C.GEOMETRY_CALCULATION_EPSILON) {
                         const requiredScale = candidateParallel / handleParallel;
-                        const handleAtScale = U.applyTransformToVertex(handleVertex, center, 0, requiredScale, true, startVector);
-                        const distFromMouse = U.distance(mouseDataPos, handleAtScale);
-                        
-                        const projectionPoint = {
-                            x: center.x + candidateParallel * axis_norm.x,
-                            y: center.y + candidateParallel * axis_norm.y
-                        };
-                        
-                        // Determine if it's a grid point or vertex
-                        const isGridPoint = gridCandidates.includes(candidate);
-                        
-                        console.log('Candidate check:', {
-                            candidate,
-                            isGridPoint,
-                            'gridCandidates.length': gridCandidates.length,
-                            'includes result': gridCandidates.includes(candidate)
-                        });
-                        
-                        console.log('Adding snap candidate:', {
-                            isGridPoint,
-                            candidate,
-                            requiredScale,
-                            distFromMouse,
-                            snapType: isGridPoint ? 'grid' : 'vertex',
-                            willSetNearbyVertex: !isGridPoint,
-                            nearbyVertexValue: isGridPoint ? null : candidate
-                        });
-                        
-                        allPossibleSnaps.push({ 
-                            scale: requiredScale, 
-                            dist: distFromMouse, 
-                            snapType: isGridPoint ? 'grid' : 'vertex',
-                            gridPoint: isGridPoint ? candidate : null,
-                            nearbyVertex: isGridPoint ? null : candidate,
-                            projectionPoint: projectionPoint
-                        });
-                    }
-                });
-            }
-        }
-
-        // 4. Multi-copy vertex snapping (if applicable)
-        if (copyCount > 1) {
-            // ... existing multi-copy logic but only for vertex snapping
-            for (let i = 0; i < verticesToTransform.length; i++) {
-                for (let j = 0; j < verticesToTransform.length; j++) {
-                    const p1_orig = verticesToTransform[i];
-                    const p2_orig = verticesToTransform[j];
-                    const proj1 = getProjectedComponents(p1_orig);
-                    const proj2 = getProjectedComponents(p2_orig);
-                    if (U.distance(proj1.perp_vec, proj2.perp_vec) < snapRadius) {
-                        for (let c1 = 0; c1 < copyCount; c1++) {
-                            for (let c2 = 0; c2 < copyCount; c2++) {
-                                if (p1_orig.id === p2_orig.id && c1 === c2) continue;
-                                if (c1 === c2) continue;
-                                const delta_c = c1 - c2;
-                                if (delta_c === 0 || Math.abs(proj1.parallel_dist) < C.GEOMETRY_CALCULATION_EPSILON) continue;
-                                const ratio = proj2.parallel_dist / proj1.parallel_dist;
-                                if (ratio >= 0) {
-                                    const pos_scale = Math.pow(ratio, 1 / delta_c);
-                                    const handleAtSnapPos = U.applyTransformToVertex(handleVertex, center, 0, pos_scale, true, startVector);
-                                    const snapDist = U.distance(mouseDataPos, handleAtSnapPos);
-                                    allPossibleSnaps.push({ scale: pos_scale, dist: snapDist, snapType: 'vertex' });
-                                    if (delta_c % 2 === 0) {
-                                        const neg_scale = -pos_scale;
-                                        const handleAtNegSnapPos = U.applyTransformToVertex(handleVertex, center, 0, neg_scale, true, startVector);
-                                        const negSnapDist = U.distance(mouseDataPos, handleAtNegSnapPos);
-                                        allPossibleSnaps.push({ scale: neg_scale, dist: negSnapDist, snapType: 'vertex' });
-                                    }
-                                } else if (delta_c % 2 !== 0) {
-                                    const neg_scale = -Math.pow(Math.abs(ratio), 1 / delta_c);
-                                    const handleAtSnapPos = U.applyTransformToVertex(handleVertex, center, 0, neg_scale, true, startVector);
-                                    const snapDist = U.distance(mouseDataPos, handleAtSnapPos);
-                                    allPossibleSnaps.push({ scale: neg_scale, dist: snapDist, snapType: 'vertex' });
-                                }
-                            }
+                        const distToCursor = U.distance(mouseCursorDataPos, bestCandidate);
+                        if (distToCursor < snapRadius) {
+                            projectionSnaps.push({
+                                scale: requiredScale, dist: distToCursor, snapType: 'projection', priority: 1,
+                                gridPoint: gridCandidates.includes(bestCandidate) ? bestCandidate : null,
+                                nearbyVertex: nearbyVertices.includes(bestCandidate) ? bestCandidate : null,
+                                projectionPoint: { x: center.x + candidateParallel * axis_norm.x, y: center.y + candidateParallel * axis_norm.y }
+                            });
                         }
                     }
                 }
             }
         }
-
-        // Always find the closest snap when shift is pressed
-        if (allPossibleSnaps.length > 0) {
-            allPossibleSnaps.sort((a, b) => a.dist - b.dist);
-            const bestSnap = allPossibleSnaps[0];
-            
-            console.log('Best snap winner object keys:', Object.keys(bestSnap));
-            console.log('Best snap winner nearbyVertex property:', bestSnap.nearbyVertex);
-            console.log('Best snap winner full object:', JSON.stringify(bestSnap, null, 2));
-            
-            console.log('Best snap winner:', {
-                snapType: bestSnap.snapType,
-                scale: bestSnap.scale,
-                dist: bestSnap.dist,
-                hasGridPoint: !!bestSnap.gridPoint,
-                hasNearbyVertex: !!bestSnap.nearbyVertex,
-                hasProjectionPoint: !!bestSnap.projectionPoint,
-                'Raw bestSnap object': bestSnap
-            });
-            
-            // Debug logging for vertex snaps specifically
-            if (bestSnap.snapType === 'vertex' && bestSnap.nearbyVertex) {
-                console.log('VERTEX SNAP WINNING! Returning:', {
-                    vertex: bestSnap.nearbyVertex,
-                    projectionPoint: bestSnap.projectionPoint,
-                    scale: bestSnap.scale
-                });
-            }
-            
-            const finalPos = U.applyTransformToVertex(handleVertex, center, 0, bestSnap.scale, true, startVector);
-            return {
-                scale: bestSnap.scale,
-                pos: finalPos,
-                snapped: true,
-                snapType: bestSnap.snapType,
-                snappedScaleValue: bestSnap.scale,
-                gridPoint: bestSnap.gridPoint || null,
-                nearbyVertex: bestSnap.nearbyVertex || null,
-                projectionPoint: bestSnap.projectionPoint || null
-            };
-        } else {
-            // Fallback to identity if no snaps
-            const finalPos = U.applyTransformToVertex(handleVertex, center, 0, 1.0, true, startVector);
-            return {
-                scale: 1.0,
-                pos: finalPos,
-                snapped: true,
-                snapType: 'geometric',
-                snappedScaleValue: 1.0,
-                gridPoint: null,
-                nearbyVertex: null,
-                projectionPoint: null
-            };
+        if (projectionSnaps.length > 0) {
+            allPossibleSnaps.push(projectionSnaps.reduce((a, b) => a.dist < b.dist ? a : b));
         }
     } else {
-        // === WITHOUT SHIFT: Only axis-aligned vertex snapping + identity ===
-        
-        // 1. Identity snap (original position)
-        const handleAtIdentity = U.applyTransformToVertex(handleVertex, center, 0, 1.0, true, startVector);
-        const identityDist = U.distance(mouseDataPos, handleAtIdentity);
-        if (identityDist < snapRadius) {
-            allPossibleSnaps.push({ scale: 1.0, dist: identityDist, snapType: 'geometric' });
-        }
-
-        // 2. Vertex snapping (only axis-aligned, single copy)
-        if (copyCount === 1) {
-            verticesToTransform.forEach(p_source => {
-                staticVertices.forEach(p_target => {
-                    const v_source = { x: p_source.x - center.x, y: p_source.y - center.y };
-                    const v_target = { x: p_target.x - center.x, y: p_target.y - center.y };
-                    
-                    const source_parallel = v_source.x * axis_norm.x + v_source.y * axis_norm.y;
-                    const target_parallel = v_target.x * axis_norm.x + v_target.y * axis_norm.y;
-                    
-                    const source_perp = { 
-                        x: v_source.x - source_parallel * axis_norm.x, 
-                        y: v_source.y - source_parallel * axis_norm.y 
-                    };
-                    const target_perp = { 
-                        x: v_target.x - target_parallel * axis_norm.x, 
-                        y: v_target.y - target_parallel * axis_norm.y 
-                    };
-                    
-                    // Check if perpendicular components are close (vertices are aligned along scaling axis)
-                    if (U.distance(source_perp, target_perp) < snapRadius) {
-                        if (Math.abs(source_parallel) > C.GEOMETRY_CALCULATION_EPSILON) {
-                            const snap_scale = target_parallel / source_parallel;
-                            
-                            const handleAtSnapPos = U.applyTransformToVertex(handleVertex, center, 0, snap_scale, true, startVector);
-                            const snapDist = U.distance(mouseDataPos, handleAtSnapPos);
-                            
-                            if (snapDist < snapRadius) {
-                                allPossibleSnaps.push({ scale: snap_scale, dist: snapDist, snapType: 'vertex' });
-                            }
-                        }
-                        
-                        // Handle collapse to zero
-                        if (Math.abs(target_parallel) < C.GEOMETRY_CALCULATION_EPSILON) {
-                            const handleAtSnapPos = U.applyTransformToVertex(handleVertex, center, 0, 0, true, startVector);
-                            const snapDist = U.distance(mouseDataPos, handleAtSnapPos);
-                            
-                            if (snapDist < snapRadius) {
-                                allPossibleSnaps.push({ scale: 0, dist: snapDist, snapType: 'vertex' });
-                            }
+        verticesToTransform.forEach(p_source => {
+            staticVertices.forEach(p_target => {
+                const proj_source = getProjectedComponents(p_source);
+                const proj_target = getProjectedComponents(p_target);
+                if (U.distance(proj_source.perp_vec, proj_target.perp_vec) < snapRadius) {
+                    if (Math.abs(proj_source.parallel_dist) > C.GEOMETRY_CALCULATION_EPSILON) {
+                        const snap_scale = proj_target.parallel_dist / proj_source.parallel_dist;
+                        const handleAtSnapPos = U.applyTransformToVertex(handleVertex, center, 0, snap_scale, true, startVector);
+                        if (U.distance(mouseDataPos, handleAtSnapPos) < snapRadius) {
+                            allPossibleSnaps.push({ scale: snap_scale, dist: U.distance(mouseDataPos, handleAtSnapPos), snapType: 'vertex' });
                         }
                     }
-                });
+                }
             });
-        }
-
-        // Find best snap within radius
-        if (allPossibleSnaps.length > 0) {
-            allPossibleSnaps.sort((a, b) => a.dist - b.dist);
-            const bestSnap = allPossibleSnaps[0];
-            
-            const finalPos = U.applyTransformToVertex(handleVertex, center, 0, bestSnap.scale, true, startVector);
-            return {
-                scale: bestSnap.scale,
-                pos: finalPos,
-                snapped: true,
-                snapType: bestSnap.snapType,
-                snappedScaleValue: bestSnap.scale,
-                gridPoint: bestSnap.gridPoint || null,
-                projectionPoint: bestSnap.projectionPoint || null
-            };
-        }
+        });
     }
 
-    // No snapping - return raw transform
-    const finalPos = U.applyTransformToVertex(handleVertex, center, 0, rawScale, true, startVector);
-    return { scale: rawScale, pos: finalPos, snapped: false, snapType: null };
+    if (allPossibleSnaps.length === 0) {
+        return { scale: rawScale, pos: mouseDataPos, snapped: false, snapType: null };
+    }
+    
+    allPossibleSnaps.sort((a, b) => {
+        const aPrio = a.priority || 10;
+        const bPrio = b.priority || 10;
+        if (aPrio !== bPrio) return aPrio - bPrio;
+        return a.dist - b.dist;
+    });
+    
+    const bestSnap = allPossibleSnaps[0];
+    
+    if (bestSnap && (currentShiftPressed || bestSnap.dist < snapRadius)) {
+        const finalPos = U.applyTransformToVertex(handleVertex, center, 0, bestSnap.scale, true, startVector);
+        return {
+            scale: bestSnap.scale, pos: finalPos, snapped: true, snapType: bestSnap.snapType,
+            snappedScaleValue: bestSnap.scale, gridPoint: bestSnap.gridPoint || null,
+            nearbyVertex: bestSnap.nearbyVertex || null, projectionPoint: bestSnap.projectionPoint || null
+        };
+    }
+    
+    return { scale: rawScale, pos: mouseDataPos, snapped: false, snapType: null };
 }
-
 
 function redrawAll() {
     labelsToKeepThisFrame.clear();
@@ -4317,7 +4198,6 @@ function handleMouseMove(event) {
                 selectedFaceIds.forEach(faceId => {
                     const face = allFaces.find(f => U.getFaceId(f) === faceId);
                     if (face) {
-                        // Also include all vertices from child faces for the drag
                         const allFamilyVertices = getDescendantVertices(face.id, allFaces);
                         allFamilyVertices.forEach(id => verticesToDragIds.add(id));
                     }
@@ -4512,7 +4392,8 @@ function handleMouseMove(event) {
 }
 
 function handleLeftMouseButtonDown(event) {
-    if (isPlacingTransform) {
+    const clickedUIElement = U.getClickedUIElement(mousePos, canvasUI, { isToolbarExpanded, isColorPaletteExpanded, isTransformPanelExpanded, isDisplayPanelExpanded, isVisibilityPanelExpanded });
+    if (isPlacingTransform && (!clickedUIElement || clickedUIElement.type !== 'transformIcon')) {
         saveStateForUndo();
         const mouseDataPos = screenToData(mousePos);
         const snappedPos = currentShiftPressed ? getBestSnapPosition(mouseDataPos) : mouseDataPos;
@@ -4780,8 +4661,9 @@ function handleLeftMouseButtonUp(event) {
         isActionInProgress = false;
         actionContext = null;
         return;
+    } else if (!isDragConfirmed && actionContext && actionContext.target === 'ui') {
+        clickData.count = 0;
     }
-
 
     if (!isDragConfirmed && actionContext && actionContext.target === 'ui_swatch') {
         const { element } = actionContext;
@@ -5469,7 +5351,12 @@ function handleLeftMouseButtonUp(event) {
     isRectangleSelecting = false;
     actionContext = null;
     transformIndicatorData = null;
-    canvas.style.cursor = 'crosshair';
+
+    // Only reset the cursor if we are NOT in the middle of placing a transform
+    if (!isPlacingTransform) {
+        canvas.style.cursor = 'crosshair';
+    }
+
     if (!currentShiftPressed) ghostVertexPosition = null;
 }
 
@@ -5595,7 +5482,6 @@ function handleMouseUpDispatcher(event) {
         handleRightMouseButtonUp(event);
     }
 
-    // Common cleanup for ANY mouse up action
     isActionInProgress = false;
     isDragConfirmed = false;
     isPanningBackground = false;
