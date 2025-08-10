@@ -277,7 +277,7 @@ export const MAX_INITIAL_METER_SNAP_MULTIPLIER = 10;
 export const MAX_SNAP_DENOMINATOR = 6;
 export const MAX_SNAP_INTEGER = 10;
 
-export const MERGE_RADIUS_SCREEN = 5;
+export const MERGE_RADIUS_SCREEN = VERTEX_RADIUS*2;
 
 export const NINETY_DEG_ANGLE_SNAP_FRACTIONS = (() => {
     const uniqueFractions = new Set();

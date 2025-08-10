@@ -517,25 +517,43 @@ export function drawCopyPreviews(ctx, { copyCount, isDragConfirmed, initialDragV
     ctx.save();
     ctx.globalAlpha = 1.0;
 
-    // Loop from 0 to copyCount-1. This will draw all copies: T^0, T^1, T^2...
     for (let i = 0; i < copyCount; i++) {
         let previewVerticesForThisCopy;
 
         if (i === 0) {
-            // T^0 is the copy at the initial, untransformed position.
             previewVerticesForThisCopy = verticesToCopy;
         } else if (transformIndicatorData) {
-            // T^i for i >= 1 (including the dragged copy at i=1)
             const { center, rotation, scale, directionalScale, startPos } = transformIndicatorData;
-            const effectiveRotation = rotation * i;
-            const effectiveScale = Math.pow(scale, i);
             const startVector = { x: startPos.x - center.x, y: startPos.y - center.y };
-            previewVerticesForThisCopy = verticesToCopy.map(p => {
-                const newPos = U.applyTransformToVertex(p, center, effectiveRotation, effectiveScale, directionalScale, startVector);
-                return { ...p, id: `preview_${p.id}_${i}`, x: newPos.x, y: newPos.y };
-            });
+            
+            if (scale === 0 && directionalScale && copyCount > 1) {
+                previewVerticesForThisCopy = verticesToCopy.map(p => {
+                    const getProjectedComponents = (vertex) => {
+                        const vec = { x: vertex.x - center.x, y: vertex.y - center.y };
+                        const axis_dist = Math.hypot(startVector.x, startVector.y);
+                        const axis_norm = { x: startVector.x / axis_dist, y: startVector.y / axis_dist };
+                        const parallel_dist = vec.x * axis_norm.x + vec.y * axis_norm.y;
+                        const perp_vec = { x: vec.x - parallel_dist * axis_norm.x, y: vec.y - parallel_dist * axis_norm.y };
+                        return { parallel_dist, perp_vec };
+                    };
+                    
+                    const proj = getProjectedComponents(p);
+                    const projectedPos = {
+                        x: center.x + proj.perp_vec.x,
+                        y: center.y + proj.perp_vec.y
+                    };
+                    
+                    return { ...p, id: `preview_${p.id}_${i}`, ...projectedPos };
+                });
+            } else {
+                const effectiveRotation = rotation * i;
+                const effectiveScale = Math.pow(scale, i);
+                previewVerticesForThisCopy = verticesToCopy.map(p => {
+                    const newPos = U.applyTransformToVertex(p, center, effectiveRotation, effectiveScale, directionalScale, startVector);
+                    return { ...p, id: `preview_${p.id}_${i}`, x: newPos.x, y: newPos.y };
+                });
+            }
         } else {
-            // Handle simple translation for copies.
             const deltaX = dragPreviewVertices[0].x - initialDragVertexStates[0].x;
             const deltaY = dragPreviewVertices[0].y - initialDragVertexStates[0].y;
             const effectiveDeltaX = deltaX * i;
@@ -551,7 +569,6 @@ export function drawCopyPreviews(ctx, { copyCount, isDragConfirmed, initialDragV
             newIdMapForThisCopy.set(originalVertex.id, previewVertex);
         });
 
-        // --- Draw Faces for this copy ---
         affectedFaces.forEach(originalFace => {
             const faceVerticesForThisCopy = originalFace.vertexIds.map(originalVertexId => {
                 return vertexIdsToCopy.has(originalVertexId)
@@ -569,9 +586,27 @@ export function drawCopyPreviews(ctx, { copyCount, isDragConfirmed, initialDragV
                             if (transformIndicatorData) {
                                 const { center, rotation, scale, directionalScale, startPos } = transformIndicatorData;
                                 const startVector = { x: startPos.x - center.x, y: startPos.y - center.y };
-                                previewSystem.origin = U.applyTransformToVertex(previewSystem.origin, center, rotation * i, Math.pow(scale, i), directionalScale, startVector);
-                                previewSystem.angle = U.normalizeAngle(previewSystem.angle + (rotation * i));
-                                if(!directionalScale) previewSystem.scale *= Math.pow(scale, i);
+                                
+                                if (scale === 0 && directionalScale) {
+                                    const getProjectedComponents = (p) => {
+                                        const vec = { x: p.x - center.x, y: p.y - center.y };
+                                        const axis_dist = Math.hypot(startVector.x, startVector.y);
+                                        const axis_norm = { x: startVector.x / axis_dist, y: startVector.y / axis_dist };
+                                        const parallel_dist = vec.x * axis_norm.x + vec.y * axis_norm.y;
+                                        const perp_vec = { x: vec.x - parallel_dist * axis_norm.x, y: vec.y - parallel_dist * axis_norm.y };
+                                        return { parallel_dist, perp_vec };
+                                    };
+                                    
+                                    const proj = getProjectedComponents(previewSystem.origin);
+                                    previewSystem.origin = {
+                                        x: center.x + proj.perp_vec.x,
+                                        y: center.y + proj.perp_vec.y
+                                    };
+                                } else {
+                                    previewSystem.origin = U.applyTransformToVertex(previewSystem.origin, center, rotation * i, Math.pow(scale, i), directionalScale, startVector);
+                                    previewSystem.angle = U.normalizeAngle(previewSystem.angle + (rotation * i));
+                                    if(!directionalScale) previewSystem.scale *= Math.pow(scale, i);
+                                }
                             } else {
                                 const deltaX = dragPreviewVertices[0].x - initialDragVertexStates[0].x;
                                 const deltaY = dragPreviewVertices[0].y - initialDragVertexStates[0].y;
@@ -592,8 +627,7 @@ export function drawCopyPreviews(ctx, { copyCount, isDragConfirmed, initialDragV
             }
         });
         
-        // --- Draw Edges for this copy ---
-        ctx.setLineDash([]); // Ensure all preview edges are solid for clarity
+        ctx.setLineDash([]);
         ctx.lineWidth = C.LINE_WIDTH;
 
         incidentEdges.forEach(originalEdge => {
@@ -631,7 +665,6 @@ export function drawCopyPreviews(ctx, { copyCount, isDragConfirmed, initialDragV
             });
         });
 
-        // --- Draw Vertices for this copy ---
         previewVerticesForThisCopy.forEach(vertex => {
             drawVertex(ctx, vertex, { 
                 selectedVertexIds: [], 
@@ -700,48 +733,79 @@ export function drawMergePreviews(ctx, { isSnapping, allVertices, dragPreviewVer
     const draggedIds = new Set(initialDragVertexStates.map(p => p.id));
     const verticesToTransform = initialDragVertexStates.filter(p => p.type === 'regular');
     const staticVertices = allVertices.filter(p => p.type === 'regular' && !draggedIds.has(p.id));
-    const copies = [];
-
-    if (transformIndicatorData) {
-        const { rotation, scale } = transformIndicatorData;
-        const isIdentity = Math.abs(rotation) < C.MIN_TRANSFORM_ACTION_THRESHOLD && Math.abs(scale - 1) < C.MIN_TRANSFORM_ACTION_THRESHOLD;
-        if (isIdentity && copyCount > 1) {
-            ctx.fillStyle = colors.feedbackSnapped;
-            verticesToTransform.forEach(p_orig => {
-                const screenPos = dataToScreen(p_orig);
-                const key = `${Math.round(screenPos.x)},${Math.round(screenPos.y)}`;
-                if (!drawnMergeIndicators.has(key)) {
-                    ctx.beginPath();
-                    ctx.arc(screenPos.x, screenPos.y, C.VERTEX_RADIUS, 0, 2 * Math.PI);
-                    ctx.fill();
-                    drawnMergeIndicators.add(key);
-                }
-            });
-        }
-    }
+    const allTransforms = [];
 
     if (verticesToTransform.length > 0) {
-        for (let i = 1; i <= copyCount; i++) {
+        const allIndices = [0, ...Array.from({ length: copyCount }, (_, k) => k + 1)];
+        
+        for (const i of allIndices) {
             let transformedVertices;
             if (transformIndicatorData) {
                 const { center, rotation, scale, directionalScale, startPos } = transformIndicatorData;
                 const startVector = { x: startPos.x - center.x, y: startPos.y - center.y };
-                transformedVertices = verticesToTransform.map(p_orig => {
-                    const newPos = U.applyTransformToVertex(p_orig, center, rotation * i, Math.pow(scale, i), directionalScale, startVector);
-                    return { ...p_orig, ...newPos, id: `preview_${p_orig.id}_${i}`, originalId: p_orig.id };
-                });
+                
+                if (scale === 0 && directionalScale && copyCount > 1) {
+                    if (i === 0) {
+                        transformedVertices = verticesToTransform.map(p_orig => ({
+                            ...p_orig,
+                            id: `preview_${p_orig.id}_0`,
+                            originalId: p_orig.id,
+                            transformIndex: 0
+                        }));
+                    } else {
+                        transformedVertices = verticesToTransform.map(p_orig => {
+                            const getProjectedComponents = (p) => {
+                                const vec = { x: p.x - center.x, y: p.y - center.y };
+                                const axis_dist = Math.hypot(startVector.x, startVector.y);
+                                const axis_norm = { x: startVector.x / axis_dist, y: startVector.y / axis_dist };
+                                const parallel_dist = vec.x * axis_norm.x + vec.y * axis_norm.y;
+                                const perp_vec = { x: vec.x - parallel_dist * axis_norm.x, y: vec.y - parallel_dist * axis_norm.y };
+                                return { parallel_dist, perp_vec };
+                            };
+                            
+                            const proj = getProjectedComponents(p_orig);
+                            const projectedPos = {
+                                x: center.x + proj.perp_vec.x,
+                                y: center.y + proj.perp_vec.y
+                            };
+                            
+                            return {
+                                ...p_orig,
+                                ...projectedPos,
+                                id: `preview_${p_orig.id}_${i}`,
+                                originalId: p_orig.id,
+                                transformIndex: i
+                            };
+                        });
+                    }
+                } else {
+                    transformedVertices = verticesToTransform.map(p_orig => {
+                        const newPos = U.applyTransformToVertex(p_orig, center, rotation * i, Math.pow(scale, i), directionalScale, startVector);
+                        return { ...p_orig, ...newPos, id: `preview_${p_orig.id}_${i}`, originalId: p_orig.id, transformIndex: i };
+                    });
+                }
             } else {
-                const deltaX = dragPreviewVertices[0].x - initialDragVertexStates[0].x;
-                const deltaY = dragPreviewVertices[0].y - initialDragVertexStates[0].y;
-                transformedVertices = verticesToTransform.map(p_orig => ({
-                    ...p_orig,
-                    id: `preview_${p_orig.id}_${i}`,
-                    originalId: p_orig.id,
-                    x: p_orig.x + deltaX * i,
-                    y: p_orig.y + deltaY * i,
-                }));
+                if (i === 0) {
+                    transformedVertices = verticesToTransform.map(p_orig => ({
+                        ...p_orig,
+                        id: `preview_${p_orig.id}_0`,
+                        originalId: p_orig.id,
+                        transformIndex: 0
+                    }));
+                } else {
+                    const deltaX = dragPreviewVertices[0].x - initialDragVertexStates[0].x;
+                    const deltaY = dragPreviewVertices[0].y - initialDragVertexStates[0].y;
+                    transformedVertices = verticesToTransform.map(p_orig => ({
+                        ...p_orig,
+                        id: `preview_${p_orig.id}_${i}`,
+                        originalId: p_orig.id,
+                        x: p_orig.x + deltaX * i,
+                        y: p_orig.y + deltaY * i,
+                        transformIndex: i
+                    }));
+                }
             }
-            copies.push(transformedVertices);
+            allTransforms.push(transformedVertices);
         }
     }
 
@@ -761,33 +825,20 @@ export function drawMergePreviews(ctx, { isSnapping, allVertices, dragPreviewVer
 
     ctx.fillStyle = colors.feedbackSnapped;
 
-    // Check copies (T^1..T^n) against static and original (T^0) vertices
-    for (const copy of copies) {
-        for (const p_copy of copy) {
+    for (const transform of allTransforms) {
+        for (const p_transform of transform) {
             for (const p_static of staticVertices) {
-                drawIndicator(p_copy, p_static);
-            }
-            for (const p_orig of verticesToTransform) {
-                if (p_copy.originalId !== p_orig.id) {
-                    drawIndicator(p_copy, p_orig);
-                }
+                drawIndicator(p_transform, p_static);
             }
         }
     }
 
-    // Check original selection (T^0) against static vertices
-    for (const p_orig of verticesToTransform) {
-        for (const p_static of staticVertices) {
-            drawIndicator(p_orig, p_static);
-        }
-    }
-
-    // Check all copies against each other (T^i vs T^j)
-    for (let i = 0; i < copies.length; i++) {
-        for (let j = i + 1; j < copies.length; j++) {
-            for (const pA of copies[i]) {
-                for (const pB of copies[j]) {
-                    if (pA.originalId !== pB.originalId) {
+    for (let i = 0; i < allTransforms.length; i++) {
+        for (let j = i + 1; j < allTransforms.length; j++) {
+            for (const pA of allTransforms[i]) {
+                for (const pB of allTransforms[j]) {
+                    const isT0Comparison = (pA.transformIndex === 0 || pB.transformIndex === 0);
+                    if (pA.originalId !== pB.originalId || isT0Comparison) {
                         drawIndicator(pA, pB);
                     }
                 }
@@ -2435,62 +2486,102 @@ export function drawAllEdges(ctx, { allEdges, selectedEdgeIds, isDragConfirmed, 
     ctx.strokeStyle = colors.defaultStroke;
 }
 
-
 export function drawTransformIndicators(ctx, htmlOverlay, { transformIndicatorData, angleSigFigs, distanceSigFigs, colors, coordSystemTransformIndicatorData }, dataToScreen, updateHtmlLabel) {
     if (transformIndicatorData) {
         const { center, startPos, currentPos, rotation, scale, isSnapping, snappedScaleValue, gridToGridInfo, transformType, directionalScale, gridPoint, nearbyVertex, projectionPoint } = transformIndicatorData;
 
         const centerScreen = dataToScreen(center);
         const startScreen = dataToScreen(startPos);
-        const currentScreen = dataToScreen(currentPos);
         const color = isSnapping ? colors.feedbackSnapped : `rgba(${colors.feedbackDefault.join(',')}, 1.0)`;
 
         ctx.save();
+        ctx.setLineDash(C.DASH_PATTERN);
         ctx.strokeStyle = color;
         ctx.lineWidth = C.FEEDBACK_LINE_VISUAL_WIDTH;
 
-        // Draw a single, consistent dashed line from the center to the final position
-        ctx.setLineDash(C.DASH_PATTERN);
+        if (transformType === C.TRANSFORMATION_TYPE_ROTATION || transformType === C.TRANSFORMATION_TYPE_ROTATE_SCALE) {
+        const currentScreen = dataToScreen(currentPos);
+        const startVecScreen = { x: startScreen.x - centerScreen.x, y: startScreen.y - centerScreen.y };
+        const arcRadius = Math.hypot(startVecScreen.x, startVecScreen.y);
+        const startAngleScreen = Math.atan2(startVecScreen.y, startVecScreen.x);
+
+        ctx.beginPath();
+        ctx.moveTo(centerScreen.x, centerScreen.y);
+        ctx.lineTo(startScreen.x, startScreen.y);
+        ctx.stroke();
+
         ctx.beginPath();
         ctx.moveTo(centerScreen.x, centerScreen.y);
         ctx.lineTo(currentScreen.x, currentScreen.y);
         ctx.stroke();
 
-        // If it's a rotation, draw the feedback arc and a solid line for the starting position
-        if ((transformType === C.TRANSFORMATION_TYPE_ROTATION || transformType === C.TRANSFORMATION_TYPE_ROTATE_SCALE)) {
-            const startVecScreen = { x: startScreen.x - centerScreen.x, y: startScreen.y - centerScreen.y };
-            const arcRadius = Math.hypot(startVecScreen.x, startVecScreen.y);
-            const startAngleScreen = Math.atan2(startVecScreen.y, startVecScreen.x);
-
-            // Draw solid starting line for arc reference
+        if (Math.abs(rotation) > C.MIN_TRANSFORM_ACTION_THRESHOLD) {
+            const screenRotation = -rotation;
+            const anticlockwise = rotation > 0;
             ctx.setLineDash([]);
             ctx.beginPath();
-            ctx.moveTo(centerScreen.x, centerScreen.y);
-            ctx.lineTo(startScreen.x, startScreen.y);
+            ctx.arc(centerScreen.x, centerScreen.y, arcRadius, startAngleScreen, startAngleScreen + screenRotation, anticlockwise);
             ctx.stroke();
-
-            if (Math.abs(rotation) > C.MIN_TRANSFORM_ACTION_THRESHOLD) {
-                const screenRotation = -rotation;
-                const anticlockwise = rotation > 0;
-                ctx.beginPath();
-                ctx.arc(centerScreen.x, centerScreen.y, arcRadius, startAngleScreen, startAngleScreen + screenRotation, anticlockwise);
-                ctx.stroke();
-            }
+        }
         }
 
-        // Handle visual feedback for directional scale projection snapping
+        if (transformType === C.TRANSFORMATION_TYPE_SCALE || transformType === C.TRANSFORMATION_TYPE_DIRECTIONAL_SCALE || transformType === C.TRANSFORMATION_TYPE_ROTATE_SCALE) {
+            const scaledPos = {
+                x: center.x + (startPos.x - center.x) * scale,
+                y: center.y + (startPos.y - center.y) * scale
+            };
+            const scaledScreen = dataToScreen(scaledPos);
+
+            // ALWAYS draw the dashed line from center to scaled position for consistency
+            ctx.setLineDash(transformType === C.TRANSFORMATION_TYPE_ROTATE_SCALE ? [] : [6, 6]);
+            ctx.beginPath();
+            ctx.moveTo(centerScreen.x, centerScreen.y);
+            ctx.lineTo(scaledScreen.x, scaledScreen.y);
+            ctx.stroke();
+        }
+
+        // === Grid point OR nearby vertex snapping visual feedback for DIRECTIONAL SCALE ===
         if (transformType === C.TRANSFORMATION_TYPE_DIRECTIONAL_SCALE && isSnapping && projectionPoint) {
+            // Check if we have either a grid point or nearby vertex to show
             const snapTarget = gridPoint || nearbyVertex;
             if (snapTarget) {
                 const snapTargetScreen = dataToScreen(snapTarget);
                 const projectionScreen = dataToScreen(projectionPoint);
                 
+                // Draw yellow circle on the snap target (grid point or vertex)
                 ctx.setLineDash([]);
                 ctx.fillStyle = colors.feedbackSnapped;
                 ctx.beginPath();
                 ctx.arc(snapTargetScreen.x, snapTargetScreen.y, C.VERTEX_RADIUS, 0, 2 * Math.PI);
                 ctx.fill();
                 
+                // Draw yellow dashed line from snap target to projection on axis
+                ctx.setLineDash([4, 4]);
+                ctx.strokeStyle = colors.feedbackSnapped;
+                ctx.lineWidth = C.FEEDBACK_LINE_VISUAL_WIDTH;
+                ctx.beginPath();
+                ctx.moveTo(snapTargetScreen.x, snapTargetScreen.y);
+                ctx.lineTo(projectionScreen.x, projectionScreen.y);
+                ctx.stroke();
+            }
+        }
+
+        // === Grid point OR nearby vertex snapping visual feedback for ROTATION ===
+        if ((transformType === C.TRANSFORMATION_TYPE_ROTATION || transformType === C.TRANSFORMATION_TYPE_ROTATE_SCALE) && isSnapping && projectionPoint) {
+            // Check if we have either a grid point or nearby vertex to show
+            const snapTarget = gridPoint || nearbyVertex;
+            if (snapTarget) {
+                const snapTargetScreen = dataToScreen(snapTarget);
+                const projectionScreen = dataToScreen(projectionPoint);
+                
+                // Draw yellow circle on the snap target (grid point or vertex)
+                ctx.setLineDash([]);
+                ctx.fillStyle = colors.feedbackSnapped;
+                ctx.beginPath();
+                ctx.arc(snapTargetScreen.x, snapTargetScreen.y, C.VERTEX_RADIUS, 0, 2 * Math.PI);
+                ctx.fill();
+                
+                // Draw yellow dashed line from snap target to projection on rotation circle
                 ctx.setLineDash([4, 4]);
                 ctx.strokeStyle = colors.feedbackSnapped;
                 ctx.lineWidth = C.FEEDBACK_LINE_VISUAL_WIDTH;
@@ -2525,7 +2616,7 @@ export function drawTransformIndicators(ctx, htmlOverlay, { transformIndicatorDa
             updateHtmlLabel({ id: 'transform-angle-indicator', content: '', x: 0, y: 0, color: color, fontSize: C.FEEDBACK_LABEL_FONT_SIZE, options: { textAlign: 'center', textBaseline: 'middle' } }, htmlOverlay);
         }
 
-        if ((transformType === C.TRANSFORMATION_TYPE_SCALE || transformType === C.TRANSFORMATION_TYPE_DIRECTIONAL_SCALE || transformType === C.TRANSFORMATION_TYPE_ROTATE_SCALE) && (Math.abs(scale - 1) > C.MIN_TRANSFORM_ACTION_THRESHOLD || isSnapping)) {
+        if ((transformType === C.TRANSFORMATION_TYPE_SCALE || transformType === C.TRANSFORMATION_TYPE_DIRECTIONAL_SCALE || transformType === C.TRANSFORMATION_TYPE_ROTATE_SCALE)) {
             let scaleText;
             const effectiveScale = isSnapping && snappedScaleValue !== null ? snappedScaleValue : scale;
             
@@ -2546,7 +2637,7 @@ export function drawTransformIndicators(ctx, htmlOverlay, { transformIndicatorDa
                     scaleText = `\\times \\frac{${numerator}}{${denominator}}`;
                 }
             } else if (isSnapping && snappedScaleValue !== null) {
-                // === UPDATED: For grid point OR nearby vertex snapping, show exact scale with same precision as non-shift ===
+                // === For grid point OR nearby vertex snapping, show exact scale with same precision as non-shift ===
                 if (transformType === C.TRANSFORMATION_TYPE_DIRECTIONAL_SCALE && (gridPoint || nearbyVertex)) {
                     // Use same precision as non-shift dragging but in yellow (snapping color)
                     const formattedScale = parseFloat(effectiveScale.toFixed(C.TRANSFORM_INDICATOR_PRECISION)).toString();
