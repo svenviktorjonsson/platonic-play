@@ -54,13 +54,15 @@ Now please just read the project and the rules for writing code and just wait fo
 Here are the rules:
 1. DONT write comments, placeholders or docstrings if not explicitely told.
 2. Write functions with the correct initial indentation so that if the function is indented so is your code that you write.
-3. DO NOT USE NON-TERMINATED SPACES: " ". MAKE SURE TO FOLLOW THIS!
+3. DO NOT USE NON-TERMINATED SPACES. MAKE SURE TO FOLLOW THIS! ITS SUPER IMPORTANT AND YOU SEEM TO BREAK IT, PLEASE!!!
 4. For changes that require multiple replacements please tell me what to replace with what instead of rewriting large portions of text. You can use vscode valid regexp for instance.
 5. For small functions less than 100 lines of code please rewrite the full function. For larger functions please only write complete control statements if/while/case.
 6. Never omit/change working logic if not explicitely statet that it should be removed/change
 7. DONT use the CANVAS TOOL where code is written in artifacts.
 8. Write only functions that are new seperately from functions that needs updates.
 9. Make sure to write what has been change where to place/what to replace for each code snippet.
+
+So only confirm that you have read and then wait for instructions!
 """
 
 

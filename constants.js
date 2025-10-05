@@ -64,13 +64,13 @@ export const LIGHT_THEME = {
     coordSysY: '#008000', // Darker green for light bg
     coordSysOrigin: '#0000ff',
     checkerboardColor1: '#ffffff',
-    checkerboardColor2: '#e0e0e0',
+    checkerboardColor2: '#cccccc',
     uiIconDisabled: '#cc0000'
 };
 
 export const CONTEXT_MENU_INSET = 5;
 export const COORD_SYSTEM_EDGE_FRACTION_LABEL_OFFSET = 25;
-export const COORD_SYSTEM_EDGE_FRACTION_FONT_SIZE = 20;
+export const FRACTION_LABEL_FONT_SIZE = 20;
 export const INSCRIBED_CIRCLE_ITERATIONS = 20;
 export const INSCRIBED_CIRCLE_STEP_FACTOR = 0.1;
 
@@ -170,7 +170,7 @@ export const FACE_COORD_SYSTEM_ORIGIN_RADIUS = 4;
 export const FACE_GLOW_ALPHA = 0.25;
 export const UI_BUTTON_PADDING = 10;
 export const UI_TOOLBAR_WIDTH = 56;
-export const UI_SWATCH_SIZE = 30;
+export const UI_SWATCH_SIZE = 35;
 export const UI_PADDING = 10;
 export const MENU_BUTTON_WIDTH = 36;
 export const MENU_BUTTON_HEIGHT = 30;
@@ -189,7 +189,7 @@ export const UI_TRANSFORM_TOOL_LABEL_FONT_SIZE = 24;
 export const UI_TRANSFORM_TOOL_LABEL_TEXT = 'T';
 export const UI_SYMMETRY_TOOL_LABEL_FONT_SIZE = 24;
 export const UI_SYMMETRY_TOOL_LABEL_TEXT = 'S';
-export const DISPLAY_ICON_SIZE = 40;
+export const DISPLAY_ICON_SIZE = 35;
 export const DISPLAY_ICON_PADDING = 15;
 export const UI_DISPLAY_ICON_BAR_WIDTH_PADDING = 12;
 export const UI_DISPLAY_ICON_Y_OFFSET = 10;
@@ -201,7 +201,7 @@ export const UI_BUTTON_ICON_PADDING = 7;
 export const UI_GHOST_ICON_SIZE = 30;
 export const COLOR_PALETTE_Y_OFFSET = 5;
 export const COLOR_WHEEL_FADE_START_RADIUS_FACTOR = 0.75;
-export const DEFAULT_RECENT_COLORS = ['#ffffff', '#BFC5D0', '#808080', '#ff4444', '#44ff44', '#4444ff', '#ffff44', '#ff44ff']
+export const DEFAULT_RECENT_COLORS = ['#ffffff', '#BFC5D0', '#808080', '#ff4444', '#44ff44', '#4444ff', '#ffff44', '#ff44ff','rgba(0, 0, 0, 0)']
 
 // --- FEEDBACK LABELS & TEXT ---
 export const TRANSFORM_INDICATOR_PRECISION = 4;

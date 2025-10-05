@@ -147,6 +147,62 @@ export function getGridSnapCandidates(mouseDataPos, gridDisplayMode, gridInterva
     return candidates;
 }
 
+export function findAllVertexMerges(sourceVertices, targetVertices, snapRadius) {
+    const mergeCandidates = [];
+
+    for (const source of sourceVertices) {
+        for (const target of targetVertices) {
+            // A vertex cannot snap to itself.
+            // This checks if they represent the same original vertex at the same transformation step.
+            if (source.originalId === target.originalId && source.transformIndex === target.transformIndex) {
+                continue;
+            }
+
+            const dist = distance(source, target);
+            if (dist < snapRadius) {
+                mergeCandidates.push({
+                    dist,
+                    sourceVertex: source,
+                    targetVertex: target,
+                    // A target is "static" if it's not a moving copy (i.e., it has no transformIndex or its index is 0).
+                    targetIsStatic: target.transformIndex === undefined || target.transformIndex === 0
+                });
+            }
+        }
+    }
+    return mergeCandidates;
+}
+
+export function findVertexToEdgeSnaps(sourceVertices, targetEdges, snapRadius) {
+    const candidates = [];
+    for (const sourceVertex of sourceVertices) {
+        for (const targetEdge of targetEdges) {
+            if (!targetEdge || !targetEdge.originalEdge || !targetEdge.p1 || !targetEdge.p2) {
+                continue;
+            }
+            
+            const isSameInstance = sourceVertex.transformIndex === targetEdge.transformIndex;
+            const isOwnEndpoint = sourceVertex.originalId === targetEdge.originalEdge.id1 || sourceVertex.originalId === targetEdge.originalEdge.id2;
+
+            if (isSameInstance && isOwnEndpoint) {
+                continue;
+            }
+
+            const closest = getClosestPointOnLineSegment(sourceVertex, targetEdge.p1, targetEdge.p2);
+            if (closest.distance < snapRadius && closest.onSegmentStrict) {
+                candidates.push({
+                    dist: closest.distance,
+                    sourceVertex: sourceVertex,
+                    targetEdge: targetEdge,
+                    snapPoint: { x: closest.x, y: closest.y },
+                    snapType: 'vertex-to-edge'
+                });
+            }
+        }
+    }
+    return candidates;
+}
+
 export function generateUniqueId() {
     return crypto.randomUUID();
 }
@@ -327,6 +383,19 @@ export function isVertexInPolygon(vertex, vertices) {
     return inside;
 }
 
+export function applyDirectionalProjection(vertex, center, startVector) {
+    const vec = { x: vertex.x - center.x, y: vertex.y - center.y };
+    const axis_dist = Math.hypot(startVector.x, startVector.y);
+    const axis_norm = { x: startVector.x / axis_dist, y: startVector.y / axis_dist };
+    const parallel_dist = vec.x * axis_norm.x + vec.y * axis_norm.y;
+    const perp_vec = { x: vec.x - parallel_dist * axis_norm.x, y: vec.y - parallel_dist * axis_norm.y };
+    
+    return {
+        x: center.x + perp_vec.x,
+        y: center.y + perp_vec.y
+    };
+}
+
 export function parseColor(colorString) {
     if (!colorString || typeof colorString !== 'string') {
         return { r: 255, g: 255, b: 255, a: 1.0 };
@@ -483,7 +552,6 @@ export function getClickedUIElement(screenPos, canvasUI, { isToolbarExpanded, is
     return null;
 }
 
-
 export function normalize(v) {
     const mag = Math.hypot(v.x, v.y);
     if (mag === 0) return { x: 0, y: 0 };
@@ -556,7 +624,6 @@ export function getMousePosOnCanvas(event, canvasElement) {
     const rect = canvasElement.getBoundingClientRect();
     return { x: event.clientX - rect.left, y: event.clientY - rect.top };
 }
-
 
 export function findFacesToSplit(vertexId1, vertexId2, allFaces, findVertexById) {
     const facesToSplit = [];
@@ -1610,10 +1677,6 @@ export function getCircleCircleIntersection(c1, c2) {
     return [pA, pB];
 }
 
-/**
- * A helper function to find the intersection point of two line segments.
- * It only returns a point if the segments properly cross each other, ignoring shared endpoints.
- */
 function getLineSegmentIntersection(p1, p2, p3, p4) {
     const den = (p1.x - p2.x) * (p3.y - p4.y) - (p1.y - p2.y) * (p3.x - p4.x);
     if (Math.abs(den) < C.GEOMETRY_CALCULATION_EPSILON) {
@@ -1658,9 +1721,6 @@ export function areVerticesContainedInPolygon(verticesToCheck, boundaryVertices)
     return true;
 }
 
-/**
- * Checks if any edges of a child graph improperly intersect with the boundary edges of a parent polygon.
- */
 export function doGraphEdgesIntersectPolygon(childEdges, parentBoundaryVertices, findVertexById) {
     const parentEdges = [];
     for (let i = 0; i < parentBoundaryVertices.length; i++) {
