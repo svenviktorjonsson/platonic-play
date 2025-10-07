@@ -392,142 +392,6 @@ function handleCenterSelection(centerId, shiftKey, ctrlKey) {
     }
 }
 
-function getDeformingSnapPosition(dragOrigin, mouseDataPos, selectedVertexIds) {
-    const secondarySnapRadius = C.VERTEX_SELECT_RADIUS / viewTransform.scale;
-    const snapStickinessData = C.SNAP_STICKINESS_RADIUS_SCREEN / viewTransform.scale;
-    
-    const unselectedNeighbors = U.findNeighbors(dragOrigin.id, allEdges)
-        .map(id => findVertexById(id))
-        .filter(p => p && !selectedVertexIds.includes(p.id));
-
-    if (unselectedNeighbors.length !== 2) {
-        return { pos: mouseDataPos, snapped: false };
-    }
-
-    const n1 = unselectedNeighbors[0];
-    const n2 = unselectedNeighbors[1];
-
-    // --- Step 1: Gather ONLY SPECIAL Path Candidates ---
-    const pathGeometries = [];
-    
-    const sideLength = U.distance(n1, n2);
-    C.SNAP_FACTORS.forEach(f => {
-        if (f > 0) {
-            pathGeometries.push({ type: 'circle', data: { center: n1, radius: sideLength * f }, snapType: 'special_distance' });
-            pathGeometries.push({ type: 'circle', data: { center: n2, radius: sideLength * f }, snapType: 'special_distance' });
-        }
-    });
-
-    pathGeometries.push({ type: 'line', data: U.getPerpendicularBisector(n1, n2), snapType: 'isosceles' });
-    
-    // Create guides only for multiples of 15 degrees
-    const allSnapAngles = new Set();
-    for (let n = 1; n <= 11; n++) { // 1*15 to 11*15=165 degrees
-        allSnapAngles.add(n * (Math.PI / 12));
-    }
-    allSnapAngles.forEach(angle => {
-        const circle = U.findCircleFromPointsAndAngle(n1, n2, angle, dragOrigin);
-        if (circle) pathGeometries.push({ type: 'circle', data: circle, snapType: 'special_angle' });
-    });
-
-    // --- Step 2: Determine Active Path ---
-    const pathCandidates = pathGeometries.map(geom => {
-        let closestPointOnPath, distToMouse;
-        if (geom.type === 'line') {
-            const closest = U.getClosestPointOnLine(mouseDataPos, geom.data.p1, geom.data.p2);
-            closestPointOnPath = { x: closest.x, y: closest.y };
-            distToMouse = closest.distance;
-        } else {
-            const vectorToMouse = { x: mouseDataPos.x - geom.data.center.x, y: mouseDataPos.y - geom.data.center.y };
-            const mag = Math.hypot(vectorToMouse.x, vectorToMouse.y);
-            closestPointOnPath = (mag < C.GEOMETRY_CALCULATION_EPSILON)
-                ? { x: geom.data.center.x + geom.data.radius, y: geom.data.center.y }
-                : { x: geom.data.center.x + vectorToMouse.x / mag * geom.data.radius, y: geom.data.center.y + vectorToMouse.y / mag * geom.data.radius };
-            distToMouse = U.distance(mouseDataPos, closestPointOnPath);
-        }
-        return { type: geom.type, pos: closestPointOnPath, dist: distToMouse, source: geom.data, snapType: geom.snapType };
-    });
-    
-    if (pathCandidates.length === 0) return { pos: mouseDataPos, snapped: false };
-
-    pathCandidates.sort((a, b) => a.dist - b.dist);
-    const activePathSnap = pathCandidates[0];
-
-    // If the cursor is not close to ANY guide, do not snap.
-    if (activePathSnap.dist > snapStickinessData) {
-        return { pos: mouseDataPos, snapped: false };
-    }
-    
-    const glidingPos = activePathSnap.pos;
-    let finalSnapPos = glidingPos;
-    let finalSnapType = activePathSnap.snapType;
-
-    // --- Step 3: Gather Attractor Points for Secondary Snap ---
-    const attractorPoints = [];
-    allVertices.forEach(p => {
-        if (p.type === 'regular' && !selectedVertexIds.includes(p.id) && p.id !== dragOrigin.id) {
-            attractorPoints.push({ pos: p, snapType: 'vertex' });
-        }
-    });
-    const gridInterval = (lastGridState.alpha2 > lastGridState.alpha1 && lastGridState.interval2) ? lastGridState.interval2 : lastGridState.interval1;
-    if (gridInterval) {
-        U.getGridSnapCandidates(mouseDataPos, gridDisplayMode, gridInterval, lastAngularGridState, true).forEach(p => {
-            attractorPoints.push({ pos: p, snapType: 'grid' });
-        });
-    }
-    for (let i = 0; i < pathGeometries.length; i++) {
-        for (let j = i + 1; j < pathGeometries.length; j++) {
-            const intersections = (geom1, geom2) => {
-                if (geom1.type === 'line' && geom2.type === 'line') {
-                    const int = U.getLineLineIntersection(geom1.data, geom2.data);
-                    return int ? [int] : [];
-                } else if (geom1.type === 'line' && geom2.type === 'circle') {
-                    return U.getLineCircleIntersection(geom1.data, geom2.data);
-                } else if (geom1.type === 'circle' && geom2.type === 'line') {
-                    return U.getLineCircleIntersection(geom2.data, geom1.data);
-                }
-                return U.getCircleCircleIntersection(geom1.data, geom2.data);
-            };
-            intersections(pathGeometries[i], pathGeometries[j]).forEach(p => attractorPoints.push({ pos: p, snapType: 'intersection' }));
-        }
-    }
-
-    // --- Step 4 & 5: Find Best Attractor and Apply Override ---
-    let bestAttractor = null;
-    let minAttractorDist = Infinity;
-    if (attractorPoints.length > 0) {
-        attractorPoints.forEach(attractor => {
-            const dist = U.distance(mouseDataPos, attractor.pos);
-            if (dist < minAttractorDist) {
-                minAttractorDist = dist;
-                bestAttractor = attractor;
-            }
-        });
-
-        if (bestAttractor && minAttractorDist < secondarySnapRadius) {
-            finalSnapType = bestAttractor.snapType;
-            if (bestAttractor.snapType === 'vertex') {
-                finalSnapPos = bestAttractor.pos;
-            } else {
-                const pointToProject = bestAttractor.pos;
-                if (activePathSnap.type === 'line') {
-                    const closest = U.getClosestPointOnLine(pointToProject, activePathSnap.source.p1, activePathSnap.source.p2);
-                    finalSnapPos = { x: closest.x, y: closest.y };
-                } else { // 'circle'
-                    const circle = activePathSnap.source;
-                    const vectorToPoint = { x: pointToProject.x - circle.center.x, y: pointToProject.y - circle.center.y };
-                    const mag = Math.hypot(vectorToPoint.x, vectorToPoint.y);
-                    finalSnapPos = (mag < C.GEOMETRY_CALCULATION_EPSILON)
-                        ? { x: circle.center.x + circle.radius, y: circle.center.y }
-                        : { x: circle.center.x + vectorToPoint.x / mag * circle.radius, y: circle.center.y + vectorToPoint.y / mag * circle.radius };
-                }
-            }
-        }
-    }
-    
-    return { pos: finalSnapPos, snapped: true, snapType: finalSnapType };
-}
-
 function getBestSnapPosition(mouseDataPos) {
     const candidates = U.getGridSnapCandidates(mouseDataPos, gridDisplayMode, lastGridState.interval1, lastAngularGridState, true);
 
@@ -2247,12 +2111,20 @@ function getTranslationSnap(initialDragVertexStates, rawDelta, copyCount, wasSna
         allTargetVertices = [...staticVertices, ...originalSelectionAsTargets];
         const originalEdgesAsTargets = originalMovingEdges.map(e=>({p1:findVertexById(e.id1), p2:findVertexById(e.id2), originalEdge: e, transformIndex: 0}));
         allTargetEdges = [...staticEdges, ...originalEdgesAsTargets];
+    } else {
+        // When not making copies, a moving vertex should not snap to its own connected edges.
+        allTargetEdges = allTargetEdges.filter(targetEdge => {
+            const edge = targetEdge.originalEdge;
+            const p1IsMoving = initialDraggedIds.has(edge.id1);
+            const p2IsMoving = initialDraggedIds.has(edge.id2);
+            // This is an adjacent edge if one end is moving and the other is not. Exclude it.
+            return !(p1IsMoving ^ p2IsMoving); 
+        });
     }
 
     const vvCandidates = U.findAllVertexMerges(allMovingVerticesRaw, allTargetVertices, effectiveRadius);
     const veCandidates = U.findVertexToEdgeSnaps(allMovingVerticesRaw, allTargetEdges, effectiveRadius);
 
-    // FIX: Use the 'v-e' function for the 'e-v' check by swapping arguments
     const inverse_evCandidates = U.findVertexToEdgeSnaps(allTargetVertices, allMovingEdgesRaw, effectiveRadius);
     const evCandidates = inverse_evCandidates.map(candidate => ({
         dist: candidate.dist,
@@ -2268,7 +2140,6 @@ function getTranslationSnap(initialDragVertexStates, rawDelta, copyCount, wasSna
         },
         type: 'edge-to-vertex'
     }));
-
 
     const allCandidates = [
         ...vvCandidates.map(c => ({ dist: c.dist, snap: c, type: 'vertex' })),
@@ -2339,6 +2210,7 @@ function getTranslationSnap(initialDragVertexStates, rawDelta, copyCount, wasSna
         snapDetails: bestSnap.snap
     };
 }
+
 function getBestRotateScaleSnap(center, initialVertexStates, handleVertex, rawRotation, rawScale) {
     const mouseDataPos = U.applyTransformToVertex(handleVertex, center, rawRotation, rawScale, false, null);
     const startVector = { x: handleVertex.x - center.x, y: handleVertex.y - center.y };
@@ -2684,12 +2556,7 @@ function getBestDirectionalScaleSnap(center, initialVertexStates, handleVertex, 
     return { ...bestSnap, snapped: true };
 }
 
-function redrawAll() {
-    labelsToKeepThisFrame.clear();
-    let axisFormatInfo = { useScientific: false };
-    const colors = getColors();
-    R.clearCanvas(ctx, { canvas, dpr, colors });
-
+function drawEnvironment(colors) {
     const actualCanvasWidth = canvas.width / dpr;
     const actualCanvasHeight = canvas.height / dpr;
 
@@ -2697,32 +2564,59 @@ function redrawAll() {
     lastGridState = { interval1: grid1Interval, interval2: grid2Interval, alpha1, alpha2, scale: viewTransform.scale };
     lastAngularGridState = R.getDynamicAngularIntervals(viewTransform, actualCanvasWidth, actualCanvasHeight, dataToScreen);
 
+    R.drawGrid(ctx, { gridDisplayMode, canvas, dpr, viewTransform, gridAlpha, colors }, dataToScreen, screenToData, lastGridState, lastAngularGridState);
+
+    let axisFormatInfo = { useScientific: false };
+    if (coordsDisplayMode !== C.COORDS_DISPLAY_MODE_NONE) {
+        const stateForAxes = { canvas, dpr, coordsDisplayMode, viewTransform, angleDisplayMode, colors };
+        axisFormatInfo = R.drawAxes(ctx, htmlOverlay, stateForAxes, dataToScreen, screenToData, lastGridState, lastAngularGridState, updateHtmlLabel);
+    }
+    return axisFormatInfo;
+}
+
+function drawMainGeometry(colors) {
+    const copyCount = parseInt(copyCountInput || '1', 10);
+    const isDeformingDrag = isDragConfirmed && currentShiftPressed && initialDragVertexStates.length === 1 && initialDragVertexStates[0].type === 'regular';
+    const isRigidCopyDrag = copyCount > 1 && isDragConfirmed && !isDeformingDrag;
+    
+    const deformingCopyVertexId = (isDeformingDrag && copyCount > 1) ? initialDragVertexStates[0].id : null;
+    const rigidCopyVertexIds = isRigidCopyDrag ? new Set(initialDragVertexStates.map(v => v.id)) : new Set();
+    
     if (facesVisible && allVertices.length > 0) {
-        R.drawFaces(ctx, {
-            allFaces,
-            facesVisible,
-            isDragConfirmed,
-            dragPreviewVertices,
-            transformIndicatorData,
-            initialDragVertexStates,
-            colors,
-            initialCoordSystemStates
-        }, dataToScreen, findVertexById);
+        let facesToDraw = allFaces;
+        if (deformingCopyVertexId) {
+            facesToDraw = allFaces.filter(f => !f.vertexIds.includes(deformingCopyVertexId));
+        } else if (isRigidCopyDrag) {
+            facesToDraw = allFaces.filter(f => !f.vertexIds.some(id => rigidCopyVertexIds.has(id)));
+        }
+        
+        R.drawFaces(ctx, { allFaces: facesToDraw, facesVisible, isDragConfirmed, dragPreviewVertices: dragPreviewVertices, transformIndicatorData, initialDragVertexStates, colors, initialCoordSystemStates }, dataToScreen, findVertexById);
+        
+        if (deformingCopyVertexId) {
+            R.drawDeformingDragPreviewFaces(ctx, { copyCount, initialDragVertexStates, dragPreviewVertices, allFaces, findVertexById, colors }, dataToScreen);
+        } else if (isRigidCopyDrag) {
+        }
     }
 
-    const copyCount = parseInt(copyCountInput || '1', 10);
-    const isCopyPreviewActive = copyCount > 1 && isDragConfirmed && initialDragVertexStates.length > 0 && initialDragVertexStates.some(p => p.type === 'regular');
-
-    const edgesWithHover = hoveredEdgeId ? [...selectedEdgeIds, hoveredEdgeId] : selectedEdgeIds;
-    const stateForEdges = { allEdges, selectedEdgeIds: edgesWithHover, isDragConfirmed, dragPreviewVertices, colors, edgesVisible, snappedEdgeIds };
+    const edgesWithHover = hoveredEdgeId ? [...new Set([...selectedEdgeIds, hoveredEdgeId])] : selectedEdgeIds;
+    let edgesToDraw = allEdges;
+    if (deformingCopyVertexId) {
+        edgesToDraw = allEdges.filter(e => e.id1 !== deformingCopyVertexId && e.id2 !== deformingCopyVertexId);
+    } else if (isRigidCopyDrag) {
+        const originalDraggedVertexIds = new Set(initialDragVertexStates.map(v => v.id));
+        edgesToDraw = allEdges.filter(e => !originalDraggedVertexIds.has(e.id1) || !originalDraggedVertexIds.has(e.id2));
+    }
+    const stateForEdges = { allEdges: edgesToDraw, selectedEdgeIds: edgesWithHover, isDragConfirmed, dragPreviewVertices: (deformingCopyVertexId) ? [] : dragPreviewVertices, colors, edgesVisible, snappedEdgeIds };
     R.drawAllEdges(ctx, stateForEdges, dataToScreen, findVertexById, U.getEdgeId);
 
-    const originalDraggedVertexIds = isCopyPreviewActive
-        ? new Set(initialDragVertexStates.map(v => v.id))
-        : new Set();
+    if (deformingCopyVertexId) {
+        R.drawDeformingDragPreviewEdgesAndVertices(ctx, { copyCount, initialDragVertexStates, dragPreviewVertices, allEdges, findVertexById, findNeighbors: (id) => U.findNeighbors(id, allEdges), colors }, dataToScreen);
+    } else if (isRigidCopyDrag) {
+        R.drawCopyPreviews(ctx, { copyCount, isDragConfirmed, initialDragVertexStates, dragPreviewVertices, transformIndicatorData, allEdges, allFaces, findVertexById, findNeighbors: (id) => U.findNeighbors(id, allEdges), colors, snappedEdgesInfo: snappedEdgeIds, snappedVertexIds }, dataToScreen);
+    }
 
     allVertices.forEach(vertex => {
-        if (isCopyPreviewActive && originalDraggedVertexIds.has(vertex.id)) {
+        if ((deformingCopyVertexId && vertex.id === deformingCopyVertexId) || (isRigidCopyDrag && rigidCopyVertexIds.has(vertex.id))) {
             return;
         }
 
@@ -2735,249 +2629,37 @@ function redrawAll() {
         let isSnapped = false;
         if (snappedVertexIds.has(vertex.id)) {
             const indices = snappedVertexIds.get(vertex.id);
-            // A vertex is snapped if it's a static target (index is undefined)
-            // OR it's the moving source of a simple drag (index is 0).
-            if (indices.has(undefined) || (!isCopyPreviewActive && indices.has(0))) {
+            if (indices.has(undefined) || (!isRigidCopyDrag && indices.has(0))) {
                 isSnapped = true;
             }
         }
 
-        R.drawVertex(ctx, vertexToDraw, { 
-            selectedVertexIds, 
-            selectedCenterIds, 
-            activeCenterId, 
-            colors, 
-            verticesVisible, 
-            isHovered: hoveredVertexId === vertex.id,
-            isSnapped: isSnapped
-        }, dataToScreen, updateHtmlLabel);
+        R.drawVertex(ctx, vertexToDraw, { selectedVertexIds, selectedCenterIds, activeCenterId, colors, verticesVisible, isHovered: hoveredVertexId === vertex.id, isSnapped: isSnapped }, dataToScreen, updateHtmlLabel);
     });
+}
 
-    if (isCopyPreviewActive) {
-        R.drawCopyPreviews(ctx, { 
-            copyCount, 
-            isDragConfirmed, 
-            initialDragVertexStates, 
-            dragPreviewVertices, 
-            transformIndicatorData, 
-            allEdges, 
-            allFaces,
-            findVertexById, 
-            findNeighbors: (id) => U.findNeighbors(id, allEdges), 
-            colors,
-            snappedEdgesInfo: snappedEdgeIds,
-            snappedVertexIds: snappedVertexIds
-        }, dataToScreen);
-    }
-
-    if (facesVisible && allVertices.length > 0) {
-        R.drawFaceGlows(ctx, {
-            allFaces,
-            hoveredFaceId,
-            selectedFaceIds,
-            colors,
-            isDragConfirmed,
-            dragPreviewVertices
-        }, dataToScreen, findVertexById, U.getFaceId);
-        
-        ensureFaceCoordinateSystems();
-        
-        if (selectedFaceIds.length > 0) {
-            R.drawFaceCoordinateSystems(ctx, { 
-                allFaces, 
-                selectedFaceIds, 
-                colors, 
-                isDragConfirmed, 
-                dragPreviewVertices, 
-                initialDragVertexStates, 
-                transformIndicatorData, 
-                highlightedEdgeForSnap, 
-                draggedFaceId, 
-                coordSystemSnapAngle, 
-                coordSystemSnapType,
-                coordSystemSnapScale,
-                initialCoordSystemStates
-            }, dataToScreen, findVertexById);
-        }
-    }
-
-    if (isDrawingMode && currentShiftPressed && (frozenReference_D_du !== null || frozenReference_A_rad !== null) && currentDrawingPath.length >= 1 && frozenReference_Origin_Data) {
-        const lastSegmentStart = findVertexById(frozenReference_Origin_Data.id);
-        
-        if (lastSegmentStart) {
-            const frozenDisplayContext = {
-                frozen_Origin_Data_to_display: lastSegmentStart,
-                displayAngleA_valueRad_for_A_equals_label: frozenReference_A_rad,
-                frozen_A_baseRad_to_display: frozenReference_A_baseRad,
-                frozen_D_du_to_display: frozenReference_D_du,
-                frozen_D_g2g_to_display: frozenReference_D_g2g
-            };
-            const stateForRefGeo = { showAngles, showDistances, viewTransform, mousePos, colors };
-            R.drawReferenceElementsGeometry(ctx, frozenDisplayContext, dataToScreen, screenToData, stateForRefGeo);
-            const stateForRefTexts = { showAngles, showDistances, viewTransform, mousePos, frozenReference_D_du, distanceSigFigs, angleDisplayMode, colors };
-            R.prepareReferenceElementsTexts(htmlOverlay, frozenDisplayContext, stateForRefTexts, screenToData, dataToScreen, updateHtmlLabel);
-        }
-    }
-
-    const stateForFeedback = { lastGridState, showDistances, showAngles, distanceSigFigs, angleDisplayMode, angleSigFigs, currentShiftPressed, viewTransform, colors };
-
-    if (isDragConfirmed) {
-        if (actionContext && actionContext.dragSnap) {
-            const { dragOrigin, snappedData } = actionContext.dragSnap;
-            const targetDataPos = { x: snappedData.x, y: snappedData.y };
-            const edgeColorIndex = currentDrawingPath ? currentDrawingPath.length - 1 : 0;
-            const totalExpectedEdges = currentDrawingPath ? Math.max(currentDrawingPath.length, 2) : 2;
-            const nextEdgeColor = getColorForTarget(C.COLOR_TARGET_EDGE, edgeColorIndex, totalExpectedEdges);
-            
-            let edgeColormapInfo = null;
-            const colorIndex = colorAssignments[C.COLOR_TARGET_EDGE];
-            if (colorIndex !== -1) {
-                const colorItem = allColors[colorIndex];
-                if (colorItem && colorItem.type === 'colormap') {
-                    edgeColormapInfo = { colormapItem: colorItem, startT: 0, endT: 1 };
-                }
-            }
-
-            R.drawDrawingPreview(ctx, { startVertex: dragOrigin, snappedData, isShiftPressed: true, currentColor: getColorForTarget(C.COLOR_TARGET_VERTEX), nextCreationColor: getColorForTarget(C.COLOR_TARGET_VERTEX), nextEdgeColor, colors, edgeColormapInfo }, dataToScreen);
-            const stateForSnapInfo = { showDistances, showAngles, currentShiftPressed, distanceSigFigs, angleSigFigs, angleDisplayMode, viewTransform, frozenReference_D_du, gridDisplayMode, frozenReference_A_rad, colors };
-            R.prepareSnapInfoTexts(ctx, htmlOverlay, dragOrigin, targetDataPos, snappedData, stateForSnapInfo, dataToScreen, getDrawingContext(dragOrigin.id), updateHtmlLabel);
-        } else {
-            const hybridVertexStates = allVertices.map(p => {
-                const draggedVersion = dragPreviewVertices.find(dp => dp.id === p.id);
-                return draggedVersion || p;
-            });
-
-            if (actionContext && actionContext.targetVertex) {
-                R.drawDragFeedback(ctx, htmlOverlay, actionContext.targetVertex.id, hybridVertexStates, stateForFeedback, dataToScreen, (id) => U.findNeighbors(id, allEdges), U.getEdgeId, currentShiftPressed, null, updateHtmlLabel, selectedVertexIds, true, initialDragVertexStates, activeCenterId);
-            } else if (actionContext && actionContext.targetEdge) {
-                R.drawSelectedEdgeDistances(ctx, htmlOverlay, selectedEdgeIds, allEdges, { showDistances, distanceSigFigs, colors, lastGridState, currentShiftPressed }, findVertexById, U.getEdgeId, dataToScreen, updateHtmlLabel, dragPreviewVertices, initialDragVertexStates, transformIndicatorData);
-            }
-        }
-    } else if ((showDistances || showAngles) && !isDrawingMode && !isCopyPreviewActive && !isPlacingTransform) {
-        if (selectedVertexIds.length > 0 && selectedVertexIds.length <= C.MAX_VERTICES_FOR_ANGLES) {
-            selectedVertexIds.forEach(vertexId => {
-                R.drawDragFeedback(ctx, htmlOverlay, vertexId, allVertices, { ...stateForFeedback, currentShiftPressed: false }, dataToScreen, (id) => U.findNeighbors(id, allEdges), U.getEdgeId, false, null, updateHtmlLabel, selectedVertexIds, false, [], activeCenterId);
-            });
-        }
-        if (selectedEdgeIds.length > 0 && selectedEdgeIds.length <= C.MAX_EDGES_FOR_LABELS) {
-            R.drawSelectedEdgeDistances(ctx, htmlOverlay, selectedEdgeIds, allEdges, { showDistances, distanceSigFigs, colors, lastGridState }, findVertexById, U.getEdgeId, dataToScreen, updateHtmlLabel, dragPreviewVertices, initialDragVertexStates, transformIndicatorData);
-            R.drawSelectedEdgeAngles(ctx, htmlOverlay, selectedEdgeIds, allEdges, { showAngles, angleSigFigs, angleDisplayMode, currentShiftPressed, distanceSigFigs, viewTransform, lastGridState, colors }, findVertexById, U.getEdgeId, dataToScreen, (id) => U.findNeighbors(id, allEdges), updateHtmlLabel);
-        }
-    }
-
-    if (isDrawingMode && previewLineStartVertexId) {
-        const startVertex = findVertexById(previewLineStartVertexId);
-        if (startVertex) {
-            const currentPreviewDrawingContext = getDrawingContext(startVertex.id);
-            const snappedData = getSnappedPosition(startVertex, mousePos, currentShiftPressed);
-            
-            let nextEdgeColor = getColorForTarget(C.COLOR_TARGET_EDGE);
-            let edgeColormapInfo = null;
-            const colorIndex = colorAssignments[C.COLOR_TARGET_EDGE];
-
-            if (colorIndex !== -1) {
-                const colorItem = allColors[colorIndex];
-                if (colorItem && colorItem.type === 'colormap') {
-                    const totalEdges = currentDrawingPath ? Math.max(currentDrawingPath.length, 1) : 1;
-                    const nextEdgeIndex = currentDrawingPath ? currentDrawingPath.length - 1 : 0;
-                    const startT = totalEdges > 1 ? nextEdgeIndex / (totalEdges - 1) : 0;
-                    const endT = totalEdges > 1 ? (nextEdgeIndex + 1) / totalEdges : 1;
-                    
-                    edgeColormapInfo = { colormapItem: colorItem, startT: startT, endT: endT };
-                }
-            }
-            
-            R.drawDrawingPreview(ctx, { startVertex, snappedData, isShiftPressed: currentShiftPressed, currentColor: getColorForTarget(C.COLOR_TARGET_VERTEX), nextCreationColor: getColorForTarget(C.COLOR_TARGET_VERTEX), nextEdgeColor, colors, edgeColormapInfo }, dataToScreen);
-            
-            const targetDataPos = { x: snappedData.x, y: snappedData.y };
-            const stateForSnapInfo = { showDistances, showAngles, currentShiftPressed, distanceSigFigs, angleSigFigs, angleDisplayMode, viewTransform, frozenReference_D_du, gridDisplayMode, frozenReference_A_rad, colors };
-            R.prepareSnapInfoTexts(ctx, htmlOverlay, startVertex, targetDataPos, snappedData, stateForSnapInfo, dataToScreen, currentPreviewDrawingContext, updateHtmlLabel);
-        }
-    }
-
-    if (isRectangleSelecting && isDragConfirmed) {
-        R.drawSelectionRectangle(ctx, rectangleSelectStartPos, mousePos, colors);
-    }
-
-    R.drawDrawingSnapLabels(ctx, { info: { ...drawingSnapLabelInfo, startVertex: findVertexById(previewLineStartVertexId) }, colors }, dataToScreen, findVertexById, updateHtmlLabel);
-    
-    if (transformIndicatorData || coordSystemTransformIndicatorData) {
-        R.drawTransformIndicators(ctx, htmlOverlay, { transformIndicatorData, colors, coordSystemTransformIndicatorData, currentShiftPressed }, dataToScreen, updateHtmlLabel);   
-    }
-
-    ghostVertices.forEach(ghostVertex => {
-        const screenPos = dataToScreen(ghostVertex);
-        ctx.beginPath();
-        ctx.arc(screenPos.x, screenPos.y, C.VERTEX_RADIUS, 0, 2 * Math.PI);
-        ctx.fillStyle = colors.feedbackSnapped;
-        ctx.fill();
-    });
-
-    if (snappedEdgeIds.size > 0) {
-        snappedEdgeIds.forEach((copyIndices, edgeId) => {
-            if (copyIndices.has(0)) {
-                const edge = allEdges.find(e => U.getEdgeId(e) === edgeId);
-                if (edge) {
-                    let p1 = findVertexById(edge.id1);
-                    let p2 = findVertexById(edge.id2);
-                    if (isDragConfirmed && dragPreviewVertices.length > 0) {
-                        const p1Preview = dragPreviewVertices.find(dp => dp.id === edge.id1);
-                        const p2Preview = dragPreviewVertices.find(dp => dp.id === edge.id2);
-                        if (p1Preview) p1 = p1Preview;
-                        if (p2Preview) p2 = p2Preview;
-                    }
-                    if (p1 && p2) {
-                        const p1Screen = dataToScreen(p1);
-                        const p2Screen = dataToScreen(p2);
-                        ctx.save();
-                        ctx.beginPath();
-                        ctx.moveTo(p1Screen.x, p1Screen.y);
-                        ctx.lineTo(p2Screen.x, p2Screen.y);
-                        ctx.strokeStyle = colors.feedbackSnapped;
-                        ctx.lineWidth = C.LINE_WIDTH + C.EDGE_SELECTION_GLOW_WIDTH_OFFSET;
-                        ctx.stroke();
-                        ctx.restore();
-                    }
-                }
-            }
-        });
-    }
-
-    if (actionContext && actionContext.finalSnapResult && actionContext.finalSnapResult.snapType === 'vertex' && ghostVertices.length >= 2) {
-        for (let i = 0; i < ghostVertices.length; i += 2) {
-            if (i + 1 < ghostVertices.length) {
-                const p1_screen = dataToScreen(ghostVertices[i]);
-                const p2_screen = dataToScreen(ghostVertices[i+1]);
-                ctx.save();
-                ctx.beginPath();
-                ctx.moveTo(p1_screen.x, p1_screen.y);
-                ctx.lineTo(p2_screen.x, p2_screen.y);
-                ctx.strokeStyle = colors.feedbackSnapped;
-                ctx.lineWidth = C.LINE_WIDTH * 1.5;
-                ctx.stroke();
-                ctx.restore();
-            }
-        }
-    }
-
+function drawUIElements(colors, axisFormatInfo) {
     R.updateMouseCoordinates(htmlOverlay, { coordsDisplayMode, isMouseOverCanvas, currentShiftPressed, ghostVertexPosition, gridDisplayMode, lastGridState, angleDisplayMode, canvas, dpr, mousePos, colors, useScientific: axisFormatInfo.useScientific }, screenToData, updateHtmlLabel);
-    
-    R.drawGrid(ctx, { gridDisplayMode, canvas, dpr, viewTransform, gridAlpha, colors }, dataToScreen, screenToData, lastGridState, lastAngularGridState);
-
-    if (coordsDisplayMode !== C.COORDS_DISPLAY_MODE_NONE) {
-        const stateForAxes = { canvas, dpr, coordsDisplayMode, viewTransform, angleDisplayMode, colors };
-        axisFormatInfo = R.drawAxes(ctx, htmlOverlay, stateForAxes, dataToScreen, screenToData, lastGridState, lastAngularGridState, updateHtmlLabel);
-    }
     
     const stateForUI = {
         dpr, canvasUI, isToolbarExpanded, isColorPaletteExpanded, isTransformPanelExpanded, isDisplayPanelExpanded, isVisibilityPanelExpanded,
         isPlacingTransform, placingTransformType, placingSnapPos, mousePos,
         allColors, activeThemeName, colors, verticesVisible, edgesVisible, facesVisible, coordsDisplayMode, gridDisplayMode, angleDisplayMode, distanceDisplayMode,
-        namedColors: colorEditor.namedColors,
-        colorAssignments, activeColorTargets,
+        namedColors: colorEditor.namedColors, colorAssignments, activeColorTargets,
         isDraggingColorTarget, draggedColorTargetInfo
     };
     R.drawCanvasUI(ctx, htmlOverlay, stateForUI, updateHtmlLabel);
+}
+
+function redrawAll() {
+    labelsToKeepThisFrame.clear();
+    const colors = getColors();
+    R.clearCanvas(ctx, { canvas, dpr, colors });
+
+    const axisFormatInfo = drawEnvironment(colors);
+    drawMainGeometry(colors);
+    drawFeedbackAndIndicators(colors);
+    drawUIElements(colors, axisFormatInfo);
 
     cleanupHtmlLabels();
 }
@@ -4620,9 +4302,6 @@ function handleLeftMouseButtonUp(event) {
             const allNewFaces = [];
             lastCopySelectionIds = { vertices: [], edges: [], faces: [] };
 
-            // --- FIX 1: Correct copy logic ---
-            // The original object is the 0x copy, so we only create N-1 new ones.
-            // The loop starts at 1, and the multiplier is just 'i'.
             for (let i = 1; i < copyCount; i++) {
                 const copyMultiplier = i;
                 const newIdMapForThisCopy = new Map();
@@ -4644,6 +4323,20 @@ function handleLeftMouseButtonUp(event) {
                     allNewVertices.push(newVertex);
                     newIdMapForThisCopy.set(p.id, newVertex.id);
                     currentCopyVertices.push(newVertex.id);
+                });
+
+                verticesToCopy.forEach(p_orig => {
+                    const neighbors = U.findNeighbors(p_orig.id, allEdges);
+                    neighbors.forEach(neighborId => {
+                        const isNeighborBeingCopied = originalIds.has(neighborId);
+                        if (!isNeighborBeingCopied) {
+                            const newId1 = newIdMapForThisCopy.get(p_orig.id);
+                            if (newId1) {
+                                const newEdge = { id1: newId1, id2: neighborId, color: getColorForTarget(C.COLOR_TARGET_EDGE) };
+                                allNewEdges.push(newEdge);
+                            }
+                        }
+                    });
                 });
 
                 edgesToCopy.forEach(edge => {
@@ -5302,26 +4995,616 @@ function handleContextMenu(event){
     event.preventDefault()
 }
 
-function handleMouseMove(event) {
-    mousePos = U.getMousePosOnCanvas(event, canvas);
-    currentShiftPressed = event.shiftKey;
+function getDeformingShiftSnap(rawDelta) {
+    const snapStickinessData = C.SNAP_STICKINESS_RADIUS_SCREEN / viewTransform.scale;
+    const secondarySnapRadius = C.VERTEX_SELECT_RADIUS / viewTransform.scale;
 
-    if (isMouseInUIPanel(mousePos)) {
-        canvas.style.cursor = 'default';
-    } else if (isPlacingTransform) {
-        canvas.style.cursor = 'none';
-    } else if (isPanningBackground || isDragConfirmed) {
-        canvas.style.cursor = 'grabbing';
+    const draggedVertexIds = new Set(initialDragVertexStates.map(v => v.id));
+    const stretchingEdges = [];
+    const staticBoundaryVertices = new Map();
+
+    initialDragVertexStates.forEach(draggedV => {
+        U.findNeighbors(draggedV.id, allEdges).forEach(neighborId => {
+            if (!draggedVertexIds.has(neighborId)) {
+                const staticV = findVertexById(neighborId);
+                if (staticV) {
+                    stretchingEdges.push({ draggedV_initial: draggedV, staticV: staticV });
+                    if (!staticBoundaryVertices.has(neighborId)) {
+                        staticBoundaryVertices.set(neighborId, { vertex: staticV, connectedDraggedVertices: [] });
+                    }
+                    staticBoundaryVertices.get(neighborId).connectedDraggedVertices.push(draggedV);
+                }
+            }
+        });
+    });
+
+    if (stretchingEdges.length === 0) {
+        return { correction: { x: 0, y: 0 }, snapped: false };
+    }
+
+    const candidates = [];
+    const gridInterval = (lastGridState.alpha2 > lastGridState.alpha1 && lastGridState.interval2) ? lastGridState.interval2 : lastGridState.interval1;
+
+    initialDragVertexStates.forEach(draggedV => {
+        const previewPos = { x: draggedV.x + rawDelta.x, y: draggedV.y + rawDelta.y };
+        
+        allVertices.forEach(staticV => {
+            if (staticV.type === 'regular' && !draggedVertexIds.has(staticV.id)) {
+                const dist = U.distance(previewPos, staticV);
+                if (dist < secondarySnapRadius) {
+                    candidates.push({
+                        dist: dist,
+                        priority: 1,
+                        correction: { x: staticV.x - previewPos.x, y: staticV.y - previewPos.y },
+                        snapType: 'vertex',
+                        details: { sourceVertex: draggedV, targetVertex: staticV }
+                    });
+                }
+            }
+        });
+        
+        if (gridInterval) {
+            const gridPoints = U.getGridSnapCandidates(previewPos, gridDisplayMode, gridInterval, lastAngularGridState, true);
+            gridPoints.forEach(p => {
+                const dist = U.distance(previewPos, p);
+                 if (dist < secondarySnapRadius) {
+                    candidates.push({
+                        dist: dist,
+                        priority: 3,
+                        correction: { x: p.x - previewPos.x, y: p.y - previewPos.y },
+                        snapType: 'grid',
+                        details: { sourceVertex: draggedV }
+                    });
+                }
+            });
+        }
+    });
+
+    if (gridInterval) {
+        const step = 0.5 * gridInterval;
+        stretchingEdges.forEach(({ draggedV_initial, staticV }) => {
+            const previewPos = { x: draggedV_initial.x + rawDelta.x, y: draggedV_initial.y + rawDelta.y };
+            const currentRadius = U.distance(previewPos, staticV);
+            const snappedRadius = Math.round(currentRadius / step) * step;
+            if (snappedRadius > 0) {
+                const correction = U.getCorrectionVectorForCircleSnap(previewPos, staticV, snappedRadius);
+                const dist = Math.hypot(correction.x, correction.y);
+                if (dist < snapStickinessData) {
+                    candidates.push({
+                        dist: dist,
+                        priority: 4,
+                        correction: correction,
+                        snapType: 'geometric_length',
+                        details: { sourceVertex: draggedV_initial, staticVertex: staticV }
+                    });
+                }
+            }
+        });
+    }
+
+    initialDragVertexStates.forEach(draggedV => {
+        const connectedStaticNeighbors = stretchingEdges.filter(e => e.draggedV_initial.id === draggedV.id).map(e => e.staticV);
+        if (connectedStaticNeighbors.length >= 2) {
+            connectedStaticNeighbors.sort((a, b) => {
+                const angleA = Math.atan2(a.y - draggedV.y, a.x - draggedV.x);
+                const angleB = Math.atan2(b.y - draggedV.y, b.x - draggedV.x);
+                return angleA - angleB;
+            });
+            for (let i = 0; i < connectedStaticNeighbors.length; i++) {
+                const n1 = connectedStaticNeighbors[i];
+                const n2 = connectedStaticNeighbors[(i + 1) % connectedStaticNeighbors.length];
+                const previewPos = { x: draggedV.x + rawDelta.x, y: draggedV.y + rawDelta.y };
+
+                const bisector = U.getPerpendicularBisector(n1, n2);
+                const closestOnBisector = U.getClosestPointOnLine(previewPos, bisector.p1, bisector.p2);
+                const correction = { x: closestOnBisector.x - previewPos.x, y: closestOnBisector.y - previewPos.y };
+                const dist = Math.hypot(correction.x, correction.y);
+                if (dist < snapStickinessData) {
+                    candidates.push({ dist, priority: 5, correction, snapType: 'isosceles', details: { sourceVertex: draggedV }});
+                }
+
+                C.NINETY_DEG_ANGLE_SNAP_FRACTIONS.forEach(f => {
+                    const angle = f * (Math.PI / 2);
+                    if (angle > 0 && angle < Math.PI) {
+                        const circle = U.findCircleFromPointsAndAngle(n1, n2, angle, draggedV);
+                        if (circle) {
+                            const angleCorrection = U.getCorrectionVectorForCircleSnap(previewPos, circle.center, circle.radius);
+                            const angleDist = Math.hypot(angleCorrection.x, angleCorrection.y);
+                            if (angleDist < snapStickinessData) {
+                                candidates.push({ dist: angleDist, priority: 6, correction: angleCorrection, snapType: 'special_angle', details: { sourceVertex: draggedV }});
+                            }
+                        }
+                    }
+                });
+            }
+        }
+    });
+
+    if (candidates.length === 0) {
+        return { correction: { x: 0, y: 0 }, snapped: false };
+    }
+
+    candidates.sort((a, b) => {
+        if (a.priority !== b.priority) return a.priority - b.priority;
+        return a.dist - b.dist;
+    });
+
+    const bestCandidate = candidates[0];
+
+    return {
+        correction: bestCandidate.correction,
+        snapped: true,
+        snapType: bestCandidate.snapType,
+        details: bestCandidate.details
+    };
+}
+
+function handleShiftDeformingDrag(rawDelta) {
+    const snapResult = getDeformingShiftSnap(rawDelta);
+    const finalDelta = {
+        x: rawDelta.x + snapResult.correction.x,
+        y: rawDelta.y + snapResult.correction.y
+    };
+
+    initialDragVertexStates.forEach(originalVertexState => {
+        const previewVertexToUpdate = dragPreviewVertices.find(dp => dp && dp.id === originalVertexState.id);
+        if (previewVertexToUpdate) {
+            previewVertexToUpdate.x = originalVertexState.x + finalDelta.x;
+            previewVertexToUpdate.y = originalVertexState.y + finalDelta.y;
+        }
+    });
+    
+    snappedVertexIds.clear();
+    snappedEdgeIds.clear();
+
+    if (snapResult.snapped && snapResult.details) {
+        const { sourceVertex, targetVertex, targetEdge } = snapResult.details;
+        if (sourceVertex) {
+            if (!snappedVertexIds.has(sourceVertex.id)) snappedVertexIds.set(sourceVertex.id, new Set());
+            snappedVertexIds.get(sourceVertex.id).add(0);
+        }
+        if (targetVertex) {
+            if (!snappedVertexIds.has(targetVertex.id)) snappedVertexIds.set(targetVertex.id, new Set());
+            snappedVertexIds.get(targetVertex.id).add(undefined);
+        }
+        if (targetEdge) {
+            const edgeId = U.getEdgeId(targetEdge);
+            if (!snappedEdgeIds.has(edgeId)) snappedEdgeIds.set(edgeId, new Set());
+            snappedEdgeIds.get(edgeId).add(undefined);
+        }
+    }
+
+    actionContext.finalSnapResult = snapResult;
+}
+
+function handleTranslationDrag(rawDelta, mouseData) {
+    const draggedVertexIds = new Set(initialDragVertexStates.map(v => v.id));
+    let isDeformingDrag = false;
+
+    if (initialDragVertexStates.length > 0) {
+        const subgraphVertexIds = new Set(findAllVerticesInSubgraph(initialDragVertexStates[0].id));
+        isDeformingDrag = !(draggedVertexIds.size === subgraphVertexIds.size &&
+                          [...draggedVertexIds].every(id => subgraphVertexIds.has(id)));
+    }
+
+    if (currentShiftPressed) {
+        if (isDeformingDrag) {
+            handleShiftDeformingDrag(rawDelta);
+        } else {
+            handleShiftRigidDrag(rawDelta);
+        }
     } else {
-        canvas.style.cursor = 'crosshair';
+        if (isDeformingDrag) {
+            handleDeformingDrag(rawDelta);
+        } else {
+            handleRigidDrag(rawDelta);
+        }
+    }
+}
+
+function drawFeedbackAndIndicators(colors) {
+    if (facesVisible && allVertices.length > 0) {
+        R.drawFaceGlows(ctx, { allFaces, hoveredFaceId, selectedFaceIds, colors, isDragConfirmed, dragPreviewVertices }, dataToScreen, findVertexById, U.getFaceId);
+        if (selectedFaceIds.length > 0) {
+            R.drawFaceCoordinateSystems(ctx, { allFaces, selectedFaceIds, colors, isDragConfirmed, dragPreviewVertices, initialDragVertexStates, transformIndicatorData, highlightedEdgeForSnap, draggedFaceId, coordSystemSnapAngle, coordSystemSnapType, coordSystemSnapScale, initialCoordSystemStates }, dataToScreen, findVertexById);
+        }
     }
 
-    // --- Action Guard ---
-    if (isActionInProgress && !actionContext) {
-        isActionInProgress = false; // Reset inconsistent state
-        return;
+    if (isDrawingMode && currentShiftPressed && (frozenReference_D_du !== null || frozenReference_A_rad !== null) && currentDrawingPath.length >= 1 && frozenReference_Origin_Data) {
+        const lastSegmentStart = findVertexById(frozenReference_Origin_Data.id);
+        if (lastSegmentStart) {
+            const frozenDisplayContext = { frozen_Origin_Data_to_display: lastSegmentStart, displayAngleA_valueRad_for_A_equals_label: frozenReference_A_rad, frozen_A_baseRad_to_display: frozenReference_A_baseRad, frozen_D_du_to_display: frozenReference_D_du, frozen_D_g2g_to_display: frozenReference_D_g2g };
+            const stateForRefGeo = { showAngles, showDistances, viewTransform, mousePos, colors };
+            R.drawReferenceElementsGeometry(ctx, frozenDisplayContext, dataToScreen, screenToData, stateForRefGeo);
+            const stateForRefTexts = { showAngles, showDistances, viewTransform, mousePos, frozenReference_D_du, distanceSigFigs, angleDisplayMode, colors };
+            R.prepareReferenceElementsTexts(htmlOverlay, frozenDisplayContext, stateForRefTexts, screenToData, dataToScreen, updateHtmlLabel);
+        }
     }
 
+    const stateForFeedback = { lastGridState, showDistances, showAngles, distanceSigFigs, angleDisplayMode, angleSigFigs, currentShiftPressed, viewTransform, colors };
+
+    if (isDragConfirmed) {
+        const draggedVertexIds = new Set(initialDragVertexStates.map(v => v.id));
+        let isDeformingDrag = false;
+        if (initialDragVertexStates.length > 0) {
+            const subgraphVertexIds = new Set(findAllVerticesInSubgraph(initialDragVertexStates[0].id));
+            isDeformingDrag = !(draggedVertexIds.size === subgraphVertexIds.size &&
+                              [...draggedVertexIds].every(id => subgraphVertexIds.has(id)));
+        }
+
+        const hybridVertexStates = allVertices.map(p => {
+            const draggedVersion = dragPreviewVertices.find(dp => dp.id === p.id);
+            return draggedVersion || p;
+        });
+
+        if (isDeformingDrag && currentShiftPressed) {
+            initialDragVertexStates.forEach(draggedVertex => {
+                const hasStaticNeighbors = U.findNeighbors(draggedVertex.id, allEdges).some(neighborId => !draggedVertexIds.has(neighborId));
+                if (hasStaticNeighbors) {
+                    R.drawDragFeedback(ctx, htmlOverlay, draggedVertex.id, hybridVertexStates, stateForFeedback, dataToScreen, (id) => U.findNeighbors(id, allEdges), U.getEdgeId, currentShiftPressed, null, updateHtmlLabel, selectedVertexIds, true, initialDragVertexStates, activeCenterId);
+                }
+            });
+        } else if (actionContext && (actionContext.targetVertex || actionContext.targetEdge)) {
+            const primaryVertexId = actionContext.targetVertex ? actionContext.targetVertex.id : initialDragVertexStates[0]?.id;
+            if (primaryVertexId) {
+                R.drawDragFeedback(ctx, htmlOverlay, primaryVertexId, hybridVertexStates, stateForFeedback, dataToScreen, (id) => U.findNeighbors(id, allEdges), U.getEdgeId, currentShiftPressed, null, updateHtmlLabel, selectedVertexIds, true, initialDragVertexStates, activeCenterId);
+            }
+            if (actionContext.targetEdge) {
+                R.drawSelectedEdgeDistances(ctx, htmlOverlay, selectedEdgeIds, allEdges, { showDistances, distanceSigFigs, colors, lastGridState, currentShiftPressed }, findVertexById, U.getEdgeId, dataToScreen, updateHtmlLabel, dragPreviewVertices, initialDragVertexStates, transformIndicatorData);
+            }
+        }
+    } else if ((showDistances || showAngles) && !isDrawingMode && !(parseInt(copyCountInput || '1', 10) > 1 && isDragConfirmed) && !isPlacingTransform) {
+        if (selectedVertexIds.length > 0 && selectedVertexIds.length <= C.MAX_VERTICES_FOR_ANGLES) {
+            selectedVertexIds.forEach(vertexId => {
+                R.drawDragFeedback(ctx, htmlOverlay, vertexId, allVertices, { ...stateForFeedback, currentShiftPressed: false }, dataToScreen, (id) => U.findNeighbors(id, allEdges), U.getEdgeId, false, null, updateHtmlLabel, selectedVertexIds, false, [], activeCenterId);
+            });
+        }
+        if (selectedEdgeIds.length > 0 && selectedEdgeIds.length <= C.MAX_EDGES_FOR_LABELS) {
+            R.drawSelectedEdgeDistances(ctx, htmlOverlay, selectedEdgeIds, allEdges, { showDistances, distanceSigFigs, colors, lastGridState }, findVertexById, U.getEdgeId, dataToScreen, updateHtmlLabel, dragPreviewVertices, initialDragVertexStates, transformIndicatorData);
+            R.drawSelectedEdgeAngles(ctx, htmlOverlay, selectedEdgeIds, allEdges, { showAngles, angleSigFigs, angleDisplayMode, currentShiftPressed, distanceSigFigs, viewTransform, lastGridState, colors }, findVertexById, U.getEdgeId, dataToScreen, (id) => U.findNeighbors(id, allEdges), updateHtmlLabel);
+        }
+    }
+
+    if (isDrawingMode && previewLineStartVertexId) {
+        const startVertex = findVertexById(previewLineStartVertexId);
+        if (startVertex) {
+            const currentPreviewDrawingContext = getDrawingContext(startVertex.id);
+            const snappedData = getSnappedPosition(startVertex, mousePos, currentShiftPressed);
+            let nextEdgeColor = getColorForTarget(C.COLOR_TARGET_EDGE);
+            let edgeColormapInfo = null;
+            const colorIndex = colorAssignments[C.COLOR_TARGET_EDGE];
+            if (colorIndex !== -1) {
+                const colorItem = allColors[colorIndex];
+                if (colorItem && colorItem.type === 'colormap' && currentDrawingPath && currentDrawingPath.length >= 1) {
+                    const totalEdges = currentDrawingPath.length; const nextEdgeIndex = currentDrawingPath.length - 1;
+                    const startT = totalEdges > 1 ? nextEdgeIndex / (totalEdges - 1) : 0; const endT = totalEdges > 1 ? (nextEdgeIndex + 1) / totalEdges : 1;
+                    edgeColormapInfo = { colormapItem: colorItem, startT: startT, endT: endT };
+                }
+            }
+            R.drawDrawingPreview(ctx, { startVertex, snappedData, isShiftPressed: currentShiftPressed, currentColor: getColorForTarget(C.COLOR_TARGET_VERTEX), nextCreationColor: getColorForTarget(C.COLOR_TARGET_VERTEX), nextEdgeColor, colors, edgeColormapInfo }, dataToScreen);
+            const targetDataPos = { x: snappedData.x, y: snappedData.y };
+            const stateForSnapInfo = { showDistances, showAngles, currentShiftPressed, distanceSigFigs, angleSigFigs, angleDisplayMode, viewTransform, frozenReference_D_du, gridDisplayMode, frozenReference_A_rad, colors };
+            R.prepareSnapInfoTexts(ctx, htmlOverlay, startVertex, targetDataPos, snappedData, stateForSnapInfo, dataToScreen, currentPreviewDrawingContext, updateHtmlLabel);
+        }
+    }
+
+    if (isRectangleSelecting && isDragConfirmed) {
+        R.drawSelectionRectangle(ctx, rectangleSelectStartPos, mousePos, colors);
+    }
+
+    R.drawDrawingSnapLabels(ctx, { info: { ...drawingSnapLabelInfo, startVertex: findVertexById(previewLineStartVertexId) }, colors }, dataToScreen, findVertexById, updateHtmlLabel);
+    if (transformIndicatorData || coordSystemTransformIndicatorData) {
+        R.drawTransformIndicators(ctx, htmlOverlay, { transformIndicatorData, colors, coordSystemTransformIndicatorData, currentShiftPressed }, dataToScreen, updateHtmlLabel);
+    }
+
+    if (ghostVertexPosition) {
+        const ghostVertex = { ...ghostVertexPosition, id: 'ghost', type: 'regular' };
+        const options = {
+            selectedVertexIds: [],
+            selectedCenterIds: [],
+            activeCenterId: null,
+            colors: colors,
+            isSnapped: true
+        };
+        R.drawVertex(ctx, ghostVertex, options, dataToScreen, updateHtmlLabel);
+    }
+}
+
+function handleDeformingDrag(rawDelta) {
+    const wasSnapped = actionContext.finalSnapResult ? actionContext.finalSnapResult.snapped : false;
+    const snapResult = getTranslationSnap(initialDragVertexStates, rawDelta, 1, wasSnapped);
+    const finalDelta = snapResult.delta;
+
+    initialDragVertexStates.forEach(originalVertexState => {
+        const previewVertexToUpdate = dragPreviewVertices.find(dp => dp && dp.id === originalVertexState.id);
+        if (previewVertexToUpdate) {
+            previewVertexToUpdate.x = originalVertexState.x + finalDelta.x;
+            previewVertexToUpdate.y = originalVertexState.y + finalDelta.y;
+        }
+    });
+
+    ghostVertices = [];
+    snappedVertexIds.clear();
+    snappedEdgeIds.clear();
+
+    if (snapResult.snapped && snapResult.snapDetails) {
+        const snap = snapResult.snapDetails;
+        const snapType = snapResult.snapType;
+
+        let sourceId, targetId, sourceIndex, targetIndex;
+        let isVertexSource = false, isEdgeSource = false;
+        let isVertexTarget = false, isEdgeTarget = false;
+
+        if (snapType === 'vertex') {
+            isVertexSource = true; isVertexTarget = true;
+            sourceId = snap.sourceVertex.originalId;
+            sourceIndex = snap.sourceVertex.transformIndex;
+            targetId = snap.targetVertex.originalId || snap.targetVertex.id;
+            targetIndex = snap.targetVertex.transformIndex;
+        } else if (snapType === 'vertex-to-edge') {
+            isVertexSource = true; isEdgeTarget = true;
+            sourceId = snap.sourceVertex.originalId;
+            sourceIndex = snap.sourceVertex.transformIndex;
+            targetId = U.getEdgeId(snap.targetEdge.originalEdge);
+            targetIndex = snap.targetEdge.transformIndex;
+        } else if (snapType === 'edge-to-vertex') {
+            isEdgeSource = true; isVertexTarget = true;
+            sourceId = U.getEdgeId(snap.sourceEdge.originalEdge);
+            sourceIndex = snap.sourceEdge.transformIndex;
+            targetId = snap.targetVertex.originalId || snap.targetVertex.id;
+            targetIndex = snap.targetVertex.transformIndex;
+        }
+
+        const sourceMap = isVertexSource ? snappedVertexIds : snappedEdgeIds;
+        if (!sourceMap.has(sourceId)) sourceMap.set(sourceId, new Set());
+        sourceMap.get(sourceId).add(sourceIndex);
+
+        const targetMap = isVertexTarget ? snappedVertexIds : snappedEdgeIds;
+        if (!targetMap.has(targetId)) targetMap.set(targetId, new Set());
+        targetMap.get(targetId).add(targetIndex);
+    }
+
+    actionContext.finalSnapResult = snapResult;
+}
+
+function handleRigidDrag(rawDelta) {
+    const copyCount = parseInt(copyCountInput || '1', 10) || 1;
+    const wasSnapped = actionContext.finalSnapResult ? actionContext.finalSnapResult.snapped : false;
+    const snapResult = getTranslationSnap(initialDragVertexStates, rawDelta, copyCount, wasSnapped);
+    const finalDelta = snapResult.delta;
+
+    initialDragVertexStates.forEach(originalVertexState => {
+        const previewVertexToUpdate = dragPreviewVertices.find(dp => dp && dp.id === originalVertexState.id);
+        if (previewVertexToUpdate) {
+            previewVertexToUpdate.x = originalVertexState.x + finalDelta.x;
+            previewVertexToUpdate.y = originalVertexState.y + finalDelta.y;
+        }
+    });
+
+    ghostVertices = [];
+    snappedVertexIds.clear();
+    snappedEdgeIds.clear();
+
+    if (snapResult.snapped && snapResult.snapDetails) {
+        const snap = snapResult.snapDetails;
+        const snapType = snapResult.snapType;
+        const copyCount = parseInt(copyCountInput || '1', 10) || 1;
+
+        let sourceId, targetId, sourceIndex, targetIndex;
+        let isVertexSource = false, isEdgeSource = false;
+        let isVertexTarget = false, isEdgeTarget = false;
+
+        if (snapType === 'vertex') {
+            isVertexSource = true; isVertexTarget = true;
+            sourceId = snap.sourceVertex.originalId;
+            sourceIndex = snap.sourceVertex.transformIndex;
+            targetId = snap.targetVertex.originalId || snap.targetVertex.id;
+            targetIndex = snap.targetVertex.transformIndex;
+        } else if (snapType === 'vertex-to-edge') {
+            isVertexSource = true; isEdgeTarget = true;
+            sourceId = snap.sourceVertex.originalId;
+            sourceIndex = snap.sourceVertex.transformIndex;
+            targetId = U.getEdgeId(snap.targetEdge.originalEdge);
+            targetIndex = snap.targetEdge.transformIndex;
+        } else if (snapType === 'edge-to-vertex') {
+            isEdgeSource = true; isVertexTarget = true;
+            sourceId = U.getEdgeId(snap.sourceEdge.originalEdge);
+            sourceIndex = snap.sourceEdge.transformIndex;
+            targetId = snap.targetVertex.originalId || snap.targetVertex.id;
+            targetIndex = snap.targetVertex.transformIndex;
+        }
+
+        const isStaticTarget = targetIndex === undefined;
+        
+        if (!isStaticTarget && copyCount > 1) {
+            const indexDiff = sourceIndex - targetIndex;
+            if (indexDiff > 0) {
+                for (let i = 0; i <= copyCount - 1 - indexDiff; i++) {
+                    const srcIdx = i + indexDiff;
+                    const tgtIdx = i;
+
+                    const sourceMap = isVertexSource ? snappedVertexIds : snappedEdgeIds;
+                    if (!sourceMap.has(sourceId)) sourceMap.set(sourceId, new Set());
+                    sourceMap.get(sourceId).add(srcIdx);
+
+                    const targetMap = isVertexTarget ? snappedVertexIds : snappedEdgeIds;
+                    if (!targetMap.has(targetId)) targetMap.set(targetId, new Set());
+                    targetMap.get(targetId).add(tgtIdx);
+                }
+            }
+        } else {
+            const sourceMap = isVertexSource ? snappedVertexIds : snappedEdgeIds;
+            if (!sourceMap.has(sourceId)) sourceMap.set(sourceId, new Set());
+            sourceMap.get(sourceId).add(sourceIndex);
+
+            const targetMap = isVertexTarget ? snappedVertexIds : snappedEdgeIds;
+            if (!targetMap.has(targetId)) targetMap.set(targetId, new Set());
+            targetMap.get(targetId).add(targetIndex);
+        }
+    }
+
+    actionContext.finalSnapResult = snapResult;
+}
+
+function handleShiftRigidDrag(rawDelta) {
+    const finalDelta = rawDelta;
+
+    initialDragVertexStates.forEach(originalVertexState => {
+        const previewVertexToUpdate = dragPreviewVertices.find(dp => dp && dp.id === originalVertexState.id);
+        if (previewVertexToUpdate) {
+            previewVertexToUpdate.x = originalVertexState.x + finalDelta.x;
+            previewVertexToUpdate.y = originalVertexState.y + finalDelta.y;
+        }
+    });
+
+    ghostVertices = [];
+    snappedVertexIds.clear();
+    snappedEdgeIds.clear();
+    actionContext.finalSnapResult = { snapped: false };
+}
+
+
+function handleIdleMouseMove(mousePos) {
+    hoveredVertexId = null;
+    hoveredEdgeId = null;
+    hoveredFaceId = null;
+
+    if (!isActionInProgress) {
+        const p = findClickedVertex(mousePos);
+        const e = !p ? findClickedEdge(mousePos) : null;
+        const f = !p && !e ? findClickedFace(mousePos) : null;
+        if (p) hoveredVertexId = p.id;
+        else if (e) hoveredEdgeId = U.getEdgeId(e);
+        else if (f) hoveredFaceId = f.id;
+    }
+
+    if (currentShiftPressed && !isActionInProgress) {
+        const mouseDataPos = screenToData(mousePos);
+        if (isPlacingTransform) {
+            const potentialSnapPos = getBestSnapPosition(mouseDataPos);
+            if (potentialSnapPos) {
+                placingSnapPos = dataToScreen(potentialSnapPos);
+                ghostVertexPosition = potentialSnapPos;
+            }
+        } else {
+            const p = findClickedVertex(mousePos);
+            const e = !p ? findClickedEdge(mousePos) : null;
+            const f = !p && !e ? findClickedFace(mousePos) : null;
+            if (!p && !e && !f) {
+                ghostVertexPosition = getBestSnapPosition(mouseDataPos);
+            } else {
+                ghostVertexPosition = null;
+            }
+        }
+    } else if (!currentShiftPressed) {
+        drawingSnapLabelInfo = null;
+        ghostVertexPosition = null;
+        placingSnapPos = null;
+    }
+}
+
+function handleDrawingMouseMove(mousePos) {
+    if (previewLineStartVertexId) {
+        const startVertex = findVertexById(previewLineStartVertexId);
+        if (startVertex) {
+            if (currentShiftPressed) {
+                const snappedData = getSnappedPosition(startVertex, mousePos, currentShiftPressed);
+                drawingSnapLabelInfo = (snappedData.snapped && snappedData.snapType === 'edge_fraction')
+                    ? { edge: snappedData.targetEdge, fraction: snappedData.fraction, snapPoint: { x: snappedData.x, y: snappedData.y }, mousePos: mousePos }
+                    : null;
+            } else {
+                drawingSnapLabelInfo = null;
+            }
+        }
+    }
+    ghostVertexPosition = null;
+}
+
+function handleTransformDrag(mouseData, startReferenceVertex, center, centerType) {
+    const rawTransform = calculateTransformFromMouse(center, mouseData, startReferenceVertex, centerType, currentAccumulatedRotation);
+    let snapResult = {};
+    let finalTransform = {};
+    if (centerType === C.TRANSFORMATION_TYPE_ROTATION) {
+        snapResult = getBestRotationSnap(center, initialDragVertexStates, startReferenceVertex, rawTransform.rotation, mouseData);
+        finalTransform = { rotation: snapResult.rotation, scale: 1, directionalScale: false };
+        currentAccumulatedRotation = rawTransform.rotation;
+    } else if (centerType === C.TRANSFORMATION_TYPE_SCALE) {
+        snapResult = getBestScaleSnap(center, initialDragVertexStates, startReferenceVertex, rawTransform.scale);
+        finalTransform = { rotation: 0, scale: snapResult.scale || rawTransform.scale, directionalScale: false };
+    } else if (centerType === C.TRANSFORMATION_TYPE_ROTATE_SCALE) {
+        snapResult = getBestRotateScaleSnap(center, initialDragVertexStates, startReferenceVertex, rawTransform.rotation, rawTransform.scale);
+        finalTransform = { rotation: snapResult.rotation, scale: snapResult.scale, directionalScale: false };
+        currentAccumulatedRotation = rawTransform.rotation;
+    } else if (centerType === C.TRANSFORMATION_TYPE_DIRECTIONAL_SCALE) {
+        const startVector = { x: startReferenceVertex.x - center.x, y: startReferenceVertex.y - center.y };
+        snapResult = getBestDirectionalScaleSnap(center, initialDragVertexStates, startReferenceVertex, rawTransform.scale, startVector, mouseData);
+        finalTransform = { rotation: 0, scale: snapResult.scale || rawTransform.scale, directionalScale: true };
+    }
+
+    if (snapResult.snapped && snapResult.snapType === 'projection' && snapResult.projectionSource) {
+        ghostVertexPosition = snapResult.projectionSource;
+    }
+
+    const startVector = { x: startReferenceVertex.x - center.x, y: startReferenceVertex.y - center.y };
+
+    transformIndicatorData = {
+        center,
+        startPos: startReferenceVertex,
+        currentPos: snapResult.pos || mouseData,
+        rotation: finalTransform.rotation,
+        scale: finalTransform.scale,
+        isSnapping: snapResult.snapped || false,
+        transformType: centerType,
+        directionalScale: finalTransform.directionalScale,
+        snappedScaleValue: snapResult.snappedScaleValue || null,
+        gridToGridInfo: snapResult.gridToGridInfo || null,
+        gridPoint: snapResult.gridPoint || null,
+        nearbyVertex: snapResult.nearbyVertex || null,
+        projectionPoint: snapResult.projectionPoint || null,
+        projectionSource: snapResult.projectionSource || null,
+        snapType: snapResult.snapType || null,
+        projectionCenter: snapResult.snapType === 'projection' ? center : null,
+        projectionHandleInitial: snapResult.projectionHandleInitial || null,
+        startVector: startVector
+    };
+    const startVectorForApply = { x: startReferenceVertex.x - center.x, y: startReferenceVertex.y - center.y };
+    dragPreviewVertices = initialDragVertexStates.map(p_initial => {
+        const newPos = U.applyTransformToVertex(p_initial, center, finalTransform.rotation, finalTransform.scale, finalTransform.directionalScale, startVectorForApply);
+        return { ...p_initial, x: newPos.x, y: newPos.y };
+    });
+
+    if (snapResult.snapped && snapResult.snapType === 'merge' && snapResult.mergingVertex && snapResult.mergeTarget) {
+        const sourceVertexInitial = initialDragVertexStates.find(p => p.id === snapResult.mergingVertex.id);
+        if (sourceVertexInitial) {
+            const snappedVertexPreview = dragPreviewVertices.find(p => p.id === sourceVertexInitial.id);
+            if (snappedVertexPreview) {
+                const correctionVector = { x: snapResult.mergeTarget.x - snappedVertexPreview.x, y: snapResult.mergeTarget.y - snappedVertexPreview.y };
+                dragPreviewVertices.forEach(p => { p.x += correctionVector.x; p.y += correctionVector.y; });
+                if (transformIndicatorData.currentPos) { transformIndicatorData.currentPos.x += correctionVector.x; transformIndicatorData.currentPos.y += correctionVector.y; }
+            }
+        }
+    }
+    const mergeRadiusData = (C.VERTEX_RADIUS * 2) / viewTransform.scale;
+    const staticVerticesForMerge = allVertices.filter(p => p.type === 'regular' && !initialDragVertexStates.some(ip => ip.id === p.id));
+    dragPreviewVertices.forEach(previewVertex => {
+        if (previewVertex.type === 'regular') {
+            staticVerticesForMerge.forEach(staticVertex => {
+                if (U.distance(previewVertex, staticVertex) < mergeRadiusData) { ghostVertices.push({ x: staticVertex.x, y: staticVertex.y }); }
+            });
+        }
+    });
+    for (let i = 0; i < dragPreviewVertices.length; i++) {
+        for (let j = i + 1; j < dragPreviewVertices.length; j++) {
+            const p1 = dragPreviewVertices[i];
+            const p2 = dragPreviewVertices[j];
+            if (p1.type === 'regular' && p2.type === 'regular' && U.distance(p1, p2) < mergeRadiusData) {
+                ghostVertices.push({ x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 });
+            }
+        }
+    }
+}
+
+function handleUIDrag(mousePos) {
     if (isDraggingColorTarget && draggedColorTargetInfo) {
         const icon = canvasUI.colorTargetIcons.find(i => i.target === draggedColorTargetInfo.target);
         if (icon) {
@@ -5335,12 +5618,12 @@ function handleMouseMove(event) {
                 draggedColorTargetInfo.previewColorIndex = draggedColorTargetInfo.originalColorIndex;
             }
         }
-        return;
+        return true;
     }
 
     if (isDraggingColorSwatch) {
         const removeBtn = canvasUI.removeColorButton;
-        const isOverRemoveButton = removeBtn && 
+        const isOverRemoveButton = removeBtn &&
             mousePos.x >= removeBtn.x && mousePos.x <= removeBtn.x + removeBtn.width &&
             mousePos.y >= removeBtn.y && mousePos.y <= removeBtn.y + removeBtn.height;
 
@@ -5351,7 +5634,7 @@ function handleMouseMove(event) {
                 removeColorAtIndex(indexToRemove);
                 buildColorPaletteUI();
             }
-            return;
+            return true;
         } else if (!isOverRemoveButton && draggedSwatchTemporarilyRemoved) {
             draggedSwatchTemporarilyRemoved = false;
             allColors.splice(draggedSwatchInfo.originalIndex, 0, draggedSwatchInfo.item);
@@ -5366,10 +5649,10 @@ function handleMouseMove(event) {
                 }
             });
             buildColorPaletteUI();
-            return;
+            return true;
         }
 
-        if (draggedSwatchTemporarilyRemoved) return;
+        if (draggedSwatchTemporarilyRemoved) return true;
 
         const fromIndex = allColors.indexOf(draggedSwatchInfo.item);
         let targetIndex = fromIndex;
@@ -5397,377 +5680,151 @@ function handleMouseMove(event) {
             });
             buildColorPaletteUI();
         }
-        return;
-    }
-    
-    if (handleCoordinateSystemMouseMove(event)) return;
-
-    hoveredVertexId = null;
-    hoveredEdgeId = null;
-    hoveredFaceId = null;
-
-    if (!isActionInProgress) {
-        const p = findClickedVertex(mousePos);
-        const e = !p ? findClickedEdge(mousePos) : null;
-        const f = !p && !e ? findClickedFace(mousePos) : null;
-        if (p) hoveredVertexId = p.id;
-        else if (e) hoveredEdgeId = U.getEdgeId(e);
-        else if (f) hoveredFaceId = f.id;
+        return true;
     }
 
-    if (currentShiftPressed && !isActionInProgress) {
-        const mouseDataPos = screenToData(mousePos);
-        if (isPlacingTransform) {
-            const potentialSnapPos = getBestSnapPosition(mouseDataPos);
-            if (potentialSnapPos) {
-                placingSnapPos = dataToScreen(potentialSnapPos);
-                ghostVertexPosition = potentialSnapPos;
-            }
-        } else if (isDrawingMode && previewLineStartVertexId) {
-            const startVertex = findVertexById(previewLineStartVertexId);
-            if (startVertex) {
-                const snappedData = getSnappedPosition(startVertex, mousePos, currentShiftPressed);
-                ghostVertexPosition = { x: snappedData.x, y: snappedData.y };
-                drawingSnapLabelInfo = (snappedData.snapped && snappedData.snapType === 'edge_fraction')
-                    ? { edge: snappedData.targetEdge, fraction: snappedData.fraction, snapPoint: { x: snappedData.x, y: snappedData.y }, mousePos: mousePos }
-                    : null;
-            }
-        } else {
-            ghostVertexPosition = findClickedFace(mousePos) ? null : getBestSnapPosition(mouseDataPos);
-        }
-    } else if (!currentShiftPressed) {
-        drawingSnapLabelInfo = null;
-        ghostVertexPosition = null;
-        placingSnapPos = null;
+    return false;
+}
+
+function handleMouseMove(event) {
+    mousePos = U.getMousePosOnCanvas(event, canvas);
+    currentShiftPressed = event.shiftKey;
+
+    if (isMouseInUIPanel(mousePos)) {
+        canvas.style.cursor = 'default';
+    } else if (isPlacingTransform) {
+        canvas.style.cursor = 'none';
+    } else if (isPanningBackground || isDragConfirmed) {
+        canvas.style.cursor = 'grabbing';
+    } else {
+        canvas.style.cursor = 'crosshair';
     }
 
-    if (!isActionInProgress) return;
-
-    if (!actionContext) {
+    if (isActionInProgress && !actionContext) {
         isActionInProgress = false;
         return;
     }
 
-    if (!isDragConfirmed && U.distance(mousePos, actionStartPos) > C.DRAG_THRESHOLD) {
-        isDragConfirmed = true;
-        actionTargetVertex = actionContext.dragHandle;
-        isEdgeTransformDrag = !!actionContext.isTransformDrag;
-
-        if (actionContext.target === 'ui_icon_click') {
-            isDraggingColorTarget = true;
-            draggedColorTargetInfo = {
-                target: actionContext.element.target,
-                offsetX: mousePos.x - actionContext.element.x,
-                offsetY: mousePos.y - actionContext.element.y,
-                originalColorIndex: colorAssignments[actionContext.element.target],
-                previewColorIndex: colorAssignments[actionContext.element.target]
-            };
-            actionContext.target = 'ui_icon_drag';
-            activeColorTargets = [actionContext.element.target];
-        } else if (actionContext.target === 'ui_swatch') {
-            saveStateForUndo();
-            isDraggingColorSwatch = true;
-            draggedSwatchInfo = {
-                index: actionContext.element.index,
-                item: actionContext.element.item,
-                offsetX: mousePos.x - actionContext.element.x,
-                originalIndex: actionContext.element.index,
-                originalAllColors: JSON.parse(JSON.stringify(allColors)),
-                originalAssignments: JSON.parse(JSON.stringify(colorAssignments))
-            };
-        } else if (currentMouseButton === 2) {
-            isRectangleSelecting = true;
-            return;
-        } else if (actionContext.target === 'canvas') {
-            isPanningBackground = true;
-            backgroundPanStartOffset = { x: viewTransform.offsetX, y: viewTransform.offsetY };
-            canvas.style.cursor = 'move';
-        } else {
-            canvas.style.cursor = 'grabbing';
-            isDraggingCenter = actionContext.targetVertex && actionContext.targetVertex.type !== 'regular';
-
-            let verticesToDrag;
-
-            if (isDraggingCenter) {
-                verticesToDrag = [actionContext.targetVertex];
-            } else {
-                let verticesToDragIds = new Set(selectedVertexIds);
-                selectedEdgeIds.forEach(edgeId => {
-                    const [id1, id2] = edgeId.split(C.EDGE_ID_DELIMITER);
-                    verticesToDragIds.add(id1);
-                    verticesToDragIds.add(id2);
-                });
-                selectedFaceIds.forEach(faceId => {
-                    const face = allFaces.find(f => U.getFaceId(f) === faceId);
-                    if (face) {
-                        const allFamilyVertices = getDescendantVertices(face.id, allFaces);
-                        allFamilyVertices.forEach(id => verticesToDragIds.add(id));
-                    }
-                });
-                verticesToDrag = Array.from(verticesToDragIds).map(id => findVertexById(id)).filter(p => p && p.type === 'regular');
-            }
-
-            if (isDraggingCenter) {
-                if (actionContext.targetVertex.type === C.TRANSFORMATION_TYPE_ROTATION) {
-                    const center = actionContext.targetVertex;
-                    const startReferenceVertex = screenToData(actionStartPos);
-                    const startVector = { x: startReferenceVertex.x - center.x, y: startReferenceVertex.y - center.y };
-                    actionContext.initialRotationStartAngle = Math.atan2(startVector.y, startVector.x);
-                    currentAccumulatedRotation = 0;
-                }
-            }
-
-            if (verticesToDrag.length > 0) {
-                initialDragVertexStates = JSON.parse(JSON.stringify(verticesToDrag));
-                dragPreviewVertices = JSON.parse(JSON.stringify(verticesToDrag));
-                initialCoordSystemStates.clear();
-                const verticesThatMoved = new Set(initialDragVertexStates.map(v => v.id));
-                allFaces.forEach(face => {
-                    if (face.vertexIds.some(vId => verticesThatMoved.has(vId))) {
-                        if (face.localCoordSystem) {
-                            initialCoordSystemStates.set(face.id, JSON.parse(JSON.stringify(face.localCoordSystem)));
-                        }
-                    }
-                });
-            }
-        }
+    if (handleUIDrag(mousePos)) {
+        return;
     }
 
-    if (isDragConfirmed) {
-        const isTransformingSelection = activeCenterId && (selectedVertexIds.length > 0 || selectedEdgeIds.length > 0 || selectedFaceIds.length > 0) && !isEdgeTransformDrag;
-        actionContext.dragSnap = null;
-        ghostVertexPosition = null;
-        ghostVertices = [];
+    if (handleCoordinateSystemMouseMove(event)) return;
 
-        if (isPanningBackground) {
-            const deltaX_css = mousePos.x - actionStartPos.x;
-            const deltaY_css = mousePos.y - actionStartPos.y;
-            viewTransform.offsetX = backgroundPanStartOffset.x + (deltaX_css * dpr);
-            viewTransform.offsetY = backgroundPanStartOffset.y - (deltaY_css * dpr);
-        } else if ((isTransformingSelection || isEdgeTransformDrag) && !isDraggingCenter) {
-            const center = findVertexById(activeCenterId);
-            let startReferenceVertex = actionTargetVertex;
-            if (!startReferenceVertex && initialDragVertexStates.length > 0) {
-                startReferenceVertex = initialDragVertexStates.find(p => U.distance(p, center) > 1e-6) || initialDragVertexStates[0];
-            }
+    if (isActionInProgress) {
+        if (!isDragConfirmed && U.distance(mousePos, actionStartPos) > C.DRAG_THRESHOLD) {
+            isDragConfirmed = true;
+            actionTargetVertex = actionContext.dragHandle;
+            isEdgeTransformDrag = !!actionContext.isTransformDrag;
 
-            if (!center || !startReferenceVertex) return;
-            const centerType = center.type;
-            const mouseData = screenToData(mousePos);
-            const rawTransform = calculateTransformFromMouse(center, mouseData, startReferenceVertex, centerType, currentAccumulatedRotation);
-            let snapResult = {};
-            let finalTransform = {};
-            if (centerType === C.TRANSFORMATION_TYPE_ROTATION) {
-                snapResult = getBestRotationSnap(center, initialDragVertexStates, startReferenceVertex, rawTransform.rotation, mouseData);
-                finalTransform = { rotation: snapResult.rotation, scale: 1, directionalScale: false };
-                currentAccumulatedRotation = rawTransform.rotation;
-            } else if (centerType === C.TRANSFORMATION_TYPE_SCALE) {
-                snapResult = getBestScaleSnap(center, initialDragVertexStates, startReferenceVertex, rawTransform.scale);
-                finalTransform = { rotation: 0, scale: snapResult.scale || rawTransform.scale, directionalScale: false };
-            } else if (centerType === C.TRANSFORMATION_TYPE_ROTATE_SCALE) {
-                snapResult = getBestRotateScaleSnap(center, initialDragVertexStates, startReferenceVertex, rawTransform.rotation, rawTransform.scale);
-                finalTransform = { rotation: snapResult.rotation, scale: snapResult.scale, directionalScale: false };
-                currentAccumulatedRotation = rawTransform.rotation;
-            } else if (centerType === C.TRANSFORMATION_TYPE_DIRECTIONAL_SCALE) {
-                const startVector = { x: startReferenceVertex.x - center.x, y: startReferenceVertex.y - center.y };
-                const mouseData = screenToData(mousePos);
-                snapResult = getBestDirectionalScaleSnap(center, initialDragVertexStates, startReferenceVertex, rawTransform.scale, startVector, mouseData);
-                finalTransform = { rotation: 0, scale: snapResult.scale || rawTransform.scale, directionalScale: true };
-            }
+            if (actionContext.target === 'ui_icon_click') {
+                isDraggingColorTarget = true;
+                draggedColorTargetInfo = {
+                    target: actionContext.element.target,
+                    offsetX: mousePos.x - actionContext.element.x,
+                    offsetY: mousePos.y - actionContext.element.y,
+                    originalColorIndex: colorAssignments[actionContext.element.target],
+                    previewColorIndex: colorAssignments[actionContext.element.target]
+                };
+                actionContext.target = 'ui_icon_drag';
+                activeColorTargets = [actionContext.element.target];
+            } else if (actionContext.target === 'ui_swatch') {
+                saveStateForUndo();
+                isDraggingColorSwatch = true;
+                draggedSwatchInfo = {
+                    index: actionContext.element.index,
+                    item: actionContext.element.item,
+                    offsetX: mousePos.x - actionContext.element.x,
+                    originalIndex: actionContext.element.index,
+                    originalAllColors: JSON.parse(JSON.stringify(allColors)),
+                    originalAssignments: JSON.parse(JSON.stringify(colorAssignments))
+                };
+            } else if (currentMouseButton === 2) {
+                isRectangleSelecting = true;
+                return;
+            } else if (actionContext.target === 'canvas') {
+                isPanningBackground = true;
+                backgroundPanStartOffset = { x: viewTransform.offsetX, y: viewTransform.offsetY };
+                canvas.style.cursor = 'move';
+            } else {
+                canvas.style.cursor = 'grabbing';
+                isDraggingCenter = actionContext.targetVertex && actionContext.targetVertex.type !== 'regular';
 
-            if (snapResult.snapped && snapResult.snapType === 'projection' && snapResult.projectionSource) {
-                ghostVertexPosition = snapResult.projectionSource;
-            }
-
-            const startVector = { x: startReferenceVertex.x - center.x, y: startReferenceVertex.y - center.y };
-
-            transformIndicatorData = {
-                center,
-                startPos: startReferenceVertex,
-                currentPos: snapResult.pos || mouseData,
-                rotation: finalTransform.rotation,
-                scale: finalTransform.scale,
-                isSnapping: snapResult.snapped || false,
-                transformType: centerType,
-                directionalScale: finalTransform.directionalScale,
-                snappedScaleValue: snapResult.snappedScaleValue || null,
-                gridToGridInfo: snapResult.gridToGridInfo || null,
-                gridPoint: snapResult.gridPoint || null,
-                nearbyVertex: snapResult.nearbyVertex || null,
-                projectionPoint: snapResult.projectionPoint || null,
-                projectionSource: snapResult.projectionSource || null,
-                snapType: snapResult.snapType || null,
-                projectionCenter: snapResult.snapType === 'projection' ? center : null,
-                projectionHandleInitial: snapResult.projectionHandleInitial || null,
-                startVector: startVector
-            };
-            const startVectorForApply = { x: startReferenceVertex.x - center.x, y: startReferenceVertex.y - center.y };
-            dragPreviewVertices = initialDragVertexStates.map(p_initial => {
-                const newPos = U.applyTransformToVertex(p_initial, center, finalTransform.rotation, finalTransform.scale, finalTransform.directionalScale, startVectorForApply);
-                return { ...p_initial, x: newPos.x, y: newPos.y };
-            });
-
-            if (snapResult.snapped && snapResult.snapType === 'merge' && snapResult.mergingVertex && snapResult.mergeTarget) {
-                const sourceVertexInitial = initialDragVertexStates.find(p => p.id === snapResult.mergingVertex.id);
-                if (sourceVertexInitial) {
-                    const snappedVertexPreview = dragPreviewVertices.find(p => p.id === sourceVertexInitial.id);
-                    if (snappedVertexPreview) {
-                        const correctionVector = { x: snapResult.mergeTarget.x - snappedVertexPreview.x, y: snapResult.mergeTarget.y - snappedVertexPreview.y };
-                        dragPreviewVertices.forEach(p => { p.x += correctionVector.x; p.y += correctionVector.y; });
-                        if (transformIndicatorData.currentPos) { transformIndicatorData.currentPos.x += correctionVector.x; transformIndicatorData.currentPos.y += correctionVector.y; }
-                    }
-                }
-            }
-            const mergeRadiusData = (C.VERTEX_RADIUS * 2) / viewTransform.scale;
-            const staticVerticesForMerge = allVertices.filter(p => p.type === 'regular' && !initialDragVertexStates.some(ip => ip.id === p.id));
-            dragPreviewVertices.forEach(previewVertex => {
-                if (previewVertex.type === 'regular') {
-                    staticVerticesForMerge.forEach(staticVertex => {
-                        if (U.distance(previewVertex, staticVertex) < mergeRadiusData) { ghostVertices.push({ x: staticVertex.x, y: staticVertex.y }); }
+                let verticesToDrag;
+                if (isDraggingCenter) {
+                    verticesToDrag = [actionContext.targetVertex];
+                } else {
+                    let verticesToDragIds = new Set(selectedVertexIds);
+                    selectedEdgeIds.forEach(edgeId => {
+                        const [id1, id2] = edgeId.split(C.EDGE_ID_DELIMITER);
+                        verticesToDragIds.add(id1);
+                        verticesToDragIds.add(id2);
                     });
+                    selectedFaceIds.forEach(faceId => {
+                        const face = allFaces.find(f => U.getFaceId(f) === faceId);
+                        if (face) {
+                            const allFamilyVertices = getDescendantVertices(face.id, allFaces);
+                            allFamilyVertices.forEach(id => verticesToDragIds.add(id));
+                        }
+                    });
+                    verticesToDrag = Array.from(verticesToDragIds).map(id => findVertexById(id)).filter(p => p && p.type === 'regular');
                 }
-            });
-            for (let i = 0; i < dragPreviewVertices.length; i++) {
-                for (let j = i + 1; j < dragPreviewVertices.length; j++) {
-                    const p1 = dragPreviewVertices[i];
-                    const p2 = dragPreviewVertices[j];
-                    if (p1.type === 'regular' && p2.type === 'regular' && U.distance(p1, p2) < mergeRadiusData) {
-                        ghostVertices.push({ x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 });
+
+                if (isDraggingCenter) {
+                    if (actionContext.targetVertex.type === C.TRANSFORMATION_TYPE_ROTATION) {
+                        const center = actionContext.targetVertex;
+                        const startReferenceVertex = screenToData(actionStartPos);
+                        const startVector = { x: startReferenceVertex.x - center.x, y: startReferenceVertex.y - center.y };
+                        actionContext.initialRotationStartAngle = Math.atan2(startVector.y, startVector.x);
+                        currentAccumulatedRotation = 0;
                     }
                 }
-            }
-        } else if (isDraggingCenter && dragPreviewVertices.length > 0) {
-            const mouseData = screenToData(mousePos);
-            let finalPos = mouseData;
-            if (currentShiftPressed) {
-                const potentialSnapPos = getBestSnapPosition(mouseData);
-                if (potentialSnapPos) {
-                    finalPos = potentialSnapPos;
-                    ghostVertexPosition = potentialSnapPos;
-                }
-            } else {
-                ghostVertexPosition = null;
-            }
-            
-            const previewCenterToUpdate = dragPreviewVertices.find(dp => dp && dp.id === initialDragVertexStates[0].id);
-            if (previewCenterToUpdate) {
-                previewCenterToUpdate.x = finalPos.x;
-                previewCenterToUpdate.y = finalPos.y;
-            }
-        } else if (dragPreviewVertices.length > 0) {
-            const mouseData = screenToData(mousePos);
-            const startMouseData = screenToData(actionStartPos);
-            const rawDelta = { x: mouseData.x - startMouseData.x, y: mouseData.y - startMouseData.y };
-            let snapResult = { snapped: false };
-            const copyCount = parseInt(copyCountInput || '1', 10);
 
-            const isDeformingDrag = currentShiftPressed &&
-                initialDragVertexStates.length === 1 &&
-                initialDragVertexStates[0].type === 'regular' &&
-                U.findNeighbors(initialDragVertexStates[0].id, allEdges).some(id => !selectedVertexIds.includes(id));
-
-            if (isDeformingDrag) {
-                const dragOrigin = initialDragVertexStates[0];
-                snapResult = getDeformingSnapPosition(dragOrigin, mouseData, selectedVertexIds);
-                const previewVertexToUpdate = dragPreviewVertices.find(dp => dp && dp.id === dragOrigin.id);
-                if (previewVertexToUpdate) {
-                    previewVertexToUpdate.x = snapResult.pos.x;
-                    previewVertexToUpdate.y = snapResult.pos.y;
-                }
-                actionContext.finalSnapResult = snapResult;
-            } else {
-                const copyCount = parseInt(copyCountInput || '1', 10) || 1;
-                let finalDelta = rawDelta;
-                
-                // --- FIX: Always run snapping logic during translational drag ---
-                const wasSnapped = actionContext.finalSnapResult ? actionContext.finalSnapResult.snapped : false;
-                const snapResult = getTranslationSnap(initialDragVertexStates, rawDelta, copyCount, wasSnapped);
-                finalDelta = snapResult.delta;
-                
-                initialDragVertexStates.forEach(originalVertexState => {
-                    const previewVertexToUpdate = dragPreviewVertices.find(dp => dp && dp.id === originalVertexState.id);
-                    if (previewVertexToUpdate) {
-                        previewVertexToUpdate.x = originalVertexState.x + finalDelta.x;
-                        previewVertexToUpdate.y = originalVertexState.y + finalDelta.y;
-                    }
-                });
-
-                ghostVertices = [];
-                snappedVertexIds.clear();
-                snappedEdgeIds.clear();
-
-                if (snapResult.snapped && snapResult.snapDetails) {
-                    const snap = snapResult.snapDetails;
-                    const snapType = snapResult.snapType;
-                    const copyCount = parseInt(copyCountInput || '1', 10) || 1;
-
-                    let sourceId, targetId, sourceIndex, targetIndex;
-                    let isVertexSource = false, isEdgeSource = false;
-                    let isVertexTarget = false, isEdgeTarget = false;
-
-                    if (snapType === 'vertex') {
-                        isVertexSource = true; isVertexTarget = true;
-                        sourceId = snap.sourceVertex.originalId;
-                        sourceIndex = snap.sourceVertex.transformIndex;
-                        targetId = snap.targetVertex.originalId || snap.targetVertex.id;
-                        targetIndex = snap.targetVertex.transformIndex;
-                    } else if (snapType === 'vertex-to-edge') {
-                        isVertexSource = true; isEdgeTarget = true;
-                        sourceId = snap.sourceVertex.originalId;
-                        sourceIndex = snap.sourceVertex.transformIndex;
-                        targetId = U.getEdgeId(snap.targetEdge.originalEdge);
-                        targetIndex = snap.targetEdge.transformIndex;
-                    } else if (snapType === 'edge-to-vertex') {
-                        isEdgeSource = true; isVertexTarget = true;
-                        sourceId = U.getEdgeId(snap.sourceEdge.originalEdge);
-                        sourceIndex = snap.sourceEdge.transformIndex;
-                        targetId = snap.targetVertex.originalId || snap.targetVertex.id;
-                        targetIndex = snap.targetVertex.transformIndex;
-                    }
-
-                    const isStaticTarget = targetIndex === undefined;
-                    
-                    if (!isStaticTarget && copyCount > 1) {
-                        const indexDiff = sourceIndex - targetIndex;
-                        if (indexDiff > 0) {
-                            for (let i = 0; i <= copyCount - 1 - indexDiff; i++) {
-                                const srcIdx = i + indexDiff;
-                                const tgtIdx = i;
-
-                                const sourceMap = isVertexSource ? snappedVertexIds : snappedEdgeIds;
-                                if (!sourceMap.has(sourceId)) sourceMap.set(sourceId, new Set());
-                                sourceMap.get(sourceId).add(srcIdx);
-
-                                const targetMap = isVertexTarget ? snappedVertexIds : snappedEdgeIds;
-                                if (!targetMap.has(targetId)) targetMap.set(targetId, new Set());
-                                targetMap.get(targetId).add(tgtIdx);
+                if (verticesToDrag.length > 0) {
+                    initialDragVertexStates = JSON.parse(JSON.stringify(verticesToDrag));
+                    dragPreviewVertices = JSON.parse(JSON.stringify(verticesToDrag));
+                    initialCoordSystemStates.clear();
+                    const verticesThatMoved = new Set(initialDragVertexStates.map(v => v.id));
+                    allFaces.forEach(face => {
+                        if (face.vertexIds.some(vId => verticesThatMoved.has(vId))) {
+                            if (face.localCoordSystem) {
+                                initialCoordSystemStates.set(face.id, JSON.parse(JSON.stringify(face.localCoordSystem)));
                             }
                         }
-                    } else {
-                        const sourceMap = isVertexSource ? snappedVertexIds : snappedEdgeIds;
-                        if (!sourceMap.has(sourceId)) sourceMap.set(sourceId, new Set());
-                        sourceMap.get(sourceId).add(sourceIndex);
-
-                        const targetMap = isVertexTarget ? snappedVertexIds : snappedEdgeIds;
-                        if (!targetMap.has(targetId)) targetMap.set(targetId, new Set());
-                        targetMap.get(targetId).add(targetIndex);
-                    }
+                    });
                 }
-
-                actionContext.finalSnapResult = snapResult;
-            }
-            actionContext.finalSnapResult = snapResult;
-
-
-            console.log('%c[handleMouseMove] Generated Highlight Info:', 'color: cyan; font-weight: bold;', { 
-                snapType: snapResult.snapType,
-                verticesToHighlight: ghostVertices.length, 
-                edgesToHighlight: snappedEdgeIds 
-            });
-            if (snapResult.snapped && snapResult.mergeTarget) {
-                ghostVertexPosition = snapResult.mergeTarget;
             }
         }
+
+        if (isDragConfirmed) {
+            if (isPanningBackground) {
+                const deltaX_css = mousePos.x - actionStartPos.x;
+                const deltaY_css = mousePos.y - actionStartPos.y;
+                viewTransform.offsetX = backgroundPanStartOffset.x + (deltaX_css * dpr);
+                viewTransform.offsetY = backgroundPanStartOffset.y - (deltaY_css * dpr);
+            } else if (!isRectangleSelecting) {
+                const isTransformingSelection = activeCenterId && (selectedVertexIds.length > 0 || selectedEdgeIds.length > 0 || selectedFaceIds.length > 0) && !isEdgeTransformDrag;
+                if (isTransformingSelection) {
+                    const center = findVertexById(activeCenterId);
+                    let startReferenceVertex = actionTargetVertex;
+                    if (!startReferenceVertex && initialDragVertexStates.length > 0) {
+                        startReferenceVertex = initialDragVertexStates.find(p => U.distance(p, center) > 1e-6) || initialDragVertexStates[0];
+                    }
+                    if (center && startReferenceVertex) {
+                        handleTransformDrag(screenToData(mousePos), startReferenceVertex, center, center.type);
+                    }
+                } else if (dragPreviewVertices.length > 0) {
+                    const mouseData = screenToData(mousePos);
+                    const startMouseData = screenToData(actionStartPos);
+                    const rawDelta = { x: mouseData.x - startMouseData.x, y: mouseData.y - startMouseData.y };
+                    handleTranslationDrag(rawDelta, mouseData);
+                }
+            }
+        }
+    } else if (isDrawingMode) {
+        handleDrawingMouseMove(mousePos);
+    } else {
+        handleIdleMouseMove(mousePos);
     }
 }
 
@@ -5890,7 +5947,7 @@ function handleKeyDown(event) {
                 const potentialSnapPos = getBestSnapPosition(mouseDataPos);
                 if (potentialSnapPos) {
                     ghostVertexPosition = potentialSnapPos;
-                    // Apply the snap to the coordinate system
+                    
                     const face = draggedCoordSystemElement.face;
                     const coordSystem = face.localCoordSystem;
                     const faceVertices = face.vertexIds.map(id => findVertexById(id)).filter(p => p && p.type === 'regular');
@@ -5900,8 +5957,10 @@ function handleKeyDown(event) {
                     coordSystem.isCustom = true;
                 }
             } else {
-                const clickedFace = findClickedFace(mousePos);
-                if (!clickedFace) {
+                const p = findClickedVertex(mousePos);
+                const e = !p ? findClickedEdge(mousePos) : null;
+                const f = !p && !e ? findClickedFace(mousePos) : null;
+                if (!p && !e && !f) {
                     ghostVertexPosition = getBestSnapPosition(mouseDataPos);
                 } else {
                     ghostVertexPosition = null;

@@ -1201,6 +1201,26 @@ export function calculateIncenter(vertices) {
     return findLargestInscribedCircle(vertices);
 }
 
+
+export function getCorrectionVectorForCircleSnap(point, circleCenter, circleRadius) {
+    const vectorToPoint = { x: point.x - circleCenter.x, y: point.y - circleCenter.y };
+    const mag = Math.hypot(vectorToPoint.x, vectorToPoint.y);
+
+    if (mag < C.GEOMETRY_CALCULATION_EPSILON) {
+        return { x: 0, y: 0 };
+    }
+
+    const snappedPoint = {
+        x: circleCenter.x + (vectorToPoint.x / mag) * circleRadius,
+        y: circleCenter.y + (vectorToPoint.y / mag) * circleRadius
+    };
+    
+    return {
+        x: snappedPoint.x - point.x,
+        y: snappedPoint.y - point.y
+    };
+}
+
 export function findLargestInscribedCircle(vertices) {
     if (vertices.length < 3) return null;
 

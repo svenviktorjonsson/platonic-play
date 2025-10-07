@@ -674,6 +674,93 @@ export function drawCopyPreviews(ctx, params, dataToScreen) {
     ctx.restore();
 }
 
+export function drawDeformingDragPreviewFaces(ctx, params, dataToScreen) {
+    const { copyCount, initialDragVertexStates, dragPreviewVertices, allFaces, findVertexById, colors } = params;
+
+    if (initialDragVertexStates.length !== 1) return;
+
+    const originalVertex = initialDragVertexStates[0];
+    const deltaX = dragPreviewVertices[0].x - originalVertex.x;
+    const deltaY = dragPreviewVertices[0].y - originalVertex.y;
+    const affectedFaces = allFaces.filter(face => face.vertexIds.includes(originalVertex.id));
+
+    for (let i = 1; i <= copyCount; i++) {
+        const effectiveDeltaX = deltaX * i;
+        const effectiveDeltaY = deltaY * i;
+        
+        const getLiveVertexForCopy = (vertexId) => {
+            if (vertexId === originalVertex.id) {
+                return { ...originalVertex, x: originalVertex.x + effectiveDeltaX, y: originalVertex.y + effectiveDeltaY };
+            }
+            return findVertexById(vertexId);
+        };
+
+        affectedFaces.forEach(originalFace => {
+            const faceVerticesForThisCopy = originalFace.vertexIds.map(getLiveVertexForCopy).filter(Boolean);
+            if (faceVerticesForThisCopy.length >= 3) {
+                const screenVertices = faceVerticesForThisCopy.map(v => dataToScreen(v));
+                drawFace(ctx, screenVertices, originalFace, colors, dataToScreen, findVertexById, allFaces, getLiveVertexForCopy, true);
+            }
+        });
+    }
+}
+
+export function drawDeformingDragPreviewEdgesAndVertices(ctx, params, dataToScreen) {
+    const { copyCount, initialDragVertexStates, dragPreviewVertices, allEdges, findVertexById, findNeighbors, colors } = params;
+
+    if (initialDragVertexStates.length !== 1) return;
+
+    const originalVertex = initialDragVertexStates[0];
+    const deltaX = dragPreviewVertices[0].x - originalVertex.x;
+    const deltaY = dragPreviewVertices[0].y - originalVertex.y;
+
+    const incidentEdges = allEdges.filter(edge => edge.id1 === originalVertex.id || edge.id2 === originalVertex.id);
+
+    for (let i = 1; i <= copyCount; i++) {
+        const effectiveDeltaX = deltaX * i;
+        const effectiveDeltaY = deltaY * i;
+        
+        const previewVertex = {
+            ...originalVertex,
+            x: originalVertex.x + effectiveDeltaX,
+            y: originalVertex.y + effectiveDeltaY
+        };
+
+        const getLiveVertexForCopy = (vertexId) => {
+            if (vertexId === originalVertex.id) return previewVertex;
+            return findVertexById(vertexId);
+        };
+
+        // Draw Edges
+        incidentEdges.forEach(originalEdge => {
+            const p1 = getLiveVertexForCopy(originalEdge.id1);
+            const p2 = getLiveVertexForCopy(originalEdge.id2);
+            if (p1 && p2) {
+                const p1Screen = dataToScreen(p1);
+                const p2Screen = dataToScreen(p2);
+                ctx.save();
+                ctx.beginPath();
+                ctx.moveTo(p1Screen.x, p1Screen.y);
+                ctx.lineTo(p2Screen.x, p2Screen.y);
+                ctx.strokeStyle = originalEdge.color || colors.edge;
+                ctx.lineWidth = C.LINE_WIDTH;
+                ctx.stroke();
+                ctx.restore();
+            }
+        });
+
+        // Draw Vertices
+        const screenPos = dataToScreen(previewVertex);
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(screenPos.x, screenPos.y, C.VERTEX_RADIUS, 0, C.RADIANS_IN_CIRCLE);
+        ctx.fillStyle = colors.feedbackSnapped;
+        ctx.fill();
+        ctx.restore();
+    }
+}
+
+
 export function drawDrawingPreview(ctx, { startVertex, snappedData, isShiftPressed, currentColor, nextCreationColor, nextEdgeColor, colors, edgeColormapInfo }, dataToScreen) {
     const startScreen = dataToScreen(startVertex);
     const targetScreen = dataToScreen(snappedData);
@@ -2305,7 +2392,7 @@ export function drawAllEdges(ctx, { allEdges, selectedEdgeIds, isDragConfirmed, 
 
         const edgeId = getEdgeId(edge);
         const isSelected = selectedEdgeIds.includes(edgeId);
-        const isSnapped = snappedEdgeIds && snappedEdgeIds.has(edgeId) && snappedEdgeIds.get(edgeId).has(undefined);
+        const isSnapped = snappedEdgeIds && snappedEdgeIds.has(edgeId) && (snappedEdgeIds.get(edgeId).has(undefined) || snappedEdgeIds.get(edgeId).has(0));
 
         if (!edgesVisible && !isSelected && !isSnapped) return;
 
