@@ -73,6 +73,7 @@ export const COORD_SYSTEM_EDGE_FRACTION_LABEL_OFFSET = 25;
 export const FRACTION_LABEL_FONT_SIZE = 20;
 export const INSCRIBED_CIRCLE_ITERATIONS = 20;
 export const INSCRIBED_CIRCLE_STEP_FACTOR = 0.1;
+export const ALT_SNAP_FRACTIONS = [1 / 4, 1 / 3, 1 / 2, 2 / 3, 3 / 4];
 
 // --- GEOMETRY & DRAWING ---
 export const TRANSFORM_ICON_SIZE = 30;

@@ -2383,6 +2383,95 @@ export function drawVertex(ctx, vertex, { selectedVertexIds, selectedCenterIds, 
     }
 }
 
+function drawFractionalSnapLabels(ctx, { info, colors, idPrefix, startVertexScreen }, dataToScreen, findVertexById, updateHtmlLabel) {
+    if (!info || !info.edge) return;
+
+    const { edge, fraction, snapPoint } = info;
+    const p1 = findVertexById(edge.id1);
+    const p2 = findVertexById(edge.id2);
+    if (!p1 || !p2) return;
+
+    const p1Screen = dataToScreen(p1);
+    const p2Screen = dataToScreen(p2);
+    const snapPointScreen = dataToScreen(snapPoint);
+    const color = colors.feedbackSnapped;
+
+    const perpVec = U.normalize({ x: -(p2Screen.y - p1Screen.y), y: p2Screen.x - p1Screen.x });
+    
+    let offsetMultiplier = 1;
+    if (startVertexScreen) { // This logic is specific to draw mode to place the label on the correct side
+        const side = (p2Screen.x - p1Screen.x) * (startVertexScreen.y - p1Screen.y) - (p2Screen.y - p1Screen.y) * (startVertexScreen.x - p1Screen.x);
+        offsetMultiplier = side > 0 ? -1 : 1;
+    }
+
+    const offset = C.COORD_SYSTEM_EDGE_FRACTION_LABEL_OFFSET;
+
+    const mid1 = { x: (p1Screen.x + snapPointScreen.x) / 2, y: (p1Screen.y + snapPointScreen.y) / 2 };
+    const labelPos1 = { x: mid1.x + offsetMultiplier * perpVec.x * offset, y: mid1.y + offsetMultiplier * perpVec.y * offset };
+    const text1 = U.formatFraction(fraction, 0.001, 8);
+
+    updateHtmlLabel({
+        id: `${idPrefix}-1`,
+        content: text1,
+        x: labelPos1.x,
+        y: labelPos1.y,
+        color: color,
+        fontSize: C.FRACTION_LABEL_FONT_SIZE,
+        options: { textAlign: 'center', textBaseline: 'middle' }
+    });
+
+    const mid2 = { x: (snapPointScreen.x + p2Screen.x) / 2, y: (snapPointScreen.y + p2Screen.y) / 2 };
+    const labelPos2 = { x: mid2.x + offsetMultiplier * perpVec.x * offset, y: mid2.y + offsetMultiplier * perpVec.y * offset };
+    const text2 = U.formatFraction(1 - fraction, 0.001, 8);
+
+    updateHtmlLabel({
+        id: `${idPrefix}-2`,
+        content: text2,
+        x: labelPos2.x,
+        y: labelPos2.y,
+        color: color,
+        fontSize: C.FRACTION_LABEL_FONT_SIZE,
+        options: { textAlign: 'center', textBaseline: 'middle' }
+    });
+}
+
+
+
+export function drawAltHoverIndicator(ctx, { altHoverInfo, colors }, dataToScreen, findVertexById, updateHtmlLabel) {
+    if (!altHoverInfo) return;
+
+    const { point, element, shiftKey, fraction } = altHoverInfo;
+    const screenPos = dataToScreen(point);
+
+    const fillColor = shiftKey ? colors.feedbackSnapped : colors.vertex;
+    const glowColor = shiftKey ? colors.feedbackSnapped : colors.vertex;
+
+    // Draw the glow
+    ctx.save();
+    ctx.shadowColor = glowColor;
+    ctx.shadowBlur = C.SELECTION_GLOW_BLUR_RADIUS;
+    ctx.globalAlpha = C.SELECTION_GLOW_ALPHA;
+    ctx.beginPath();
+    const glowRadius = C.VERTEX_RADIUS + C.SELECTION_GLOW_RADIUS_OFFSET;
+    ctx.arc(screenPos.x, screenPos.y, glowRadius, 0, C.RADIANS_IN_CIRCLE);
+    ctx.strokeStyle = glowColor;
+    ctx.lineWidth = C.SELECTION_GLOW_LINE_WIDTH;
+    ctx.stroke();
+    ctx.restore();
+
+    // Draw the main point
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(screenPos.x, screenPos.y, C.VERTEX_RADIUS, 0, C.RADIANS_IN_CIRCLE);
+    ctx.fillStyle = fillColor;
+    ctx.fill();
+    ctx.restore();
+
+    if (element.type === 'edge' && shiftKey) {
+        drawAltHoverSnapLabels(ctx, { info: { edge: element.edge, fraction, snapPoint: point }, colors }, dataToScreen, findVertexById, updateHtmlLabel);
+    }
+}
+
 export function drawAllEdges(ctx, { allEdges, selectedEdgeIds, isDragConfirmed, dragPreviewVertices, colors, edgesVisible, snappedEdgeIds }, dataToScreen, findVertexById, getEdgeId) {
     ctx.lineWidth = C.LINE_WIDTH;
     allEdges.forEach(edge => {
@@ -2451,52 +2540,14 @@ export function drawAllEdges(ctx, { allEdges, selectedEdgeIds, isDragConfirmed, 
     ctx.strokeStyle = colors.defaultStroke;
 }
 
+function drawAltHoverSnapLabels(ctx, { info, colors }, dataToScreen, findVertexById, updateHtmlLabel) {
+    drawFractionalSnapLabels(ctx, { info, colors, idPrefix: 'alt-snap-label' }, dataToScreen, findVertexById, updateHtmlLabel);
+}
+
 export function drawDrawingSnapLabels(ctx, { info, colors }, dataToScreen, findVertexById, updateHtmlLabel) {
-    if (!info || !info.edge || !info.startVertex) return;
-
-    const { edge, fraction, snapPoint, startVertex } = info;
-    const p1 = findVertexById(edge.id1);
-    const p2 = findVertexById(edge.id2);
-    if (!p1 || !p2) return;
-
-    const p1Screen = dataToScreen(p1);
-    const p2Screen = dataToScreen(p2);
-    const snapPointScreen = dataToScreen(snapPoint);
-    const startVertexScreen = dataToScreen(startVertex);
-    const color = colors.feedbackSnapped;
-
-    const perpVec = U.normalize({ x: -(p2Screen.y - p1Screen.y), y: p2Screen.x - p1Screen.x });
-    const side = (p2Screen.x - p1Screen.x) * (startVertexScreen.y - p1Screen.y) - (p2Screen.y - p1Screen.y) * (startVertexScreen.x - p1Screen.x);
-    const offsetMultiplier = side > 0 ? -1 : 1;
-    const offset = C.COORD_SYSTEM_EDGE_FRACTION_LABEL_OFFSET;
-
-    const mid1 = { x: (p1Screen.x + snapPointScreen.x) / 2, y: (p1Screen.y + snapPointScreen.y) / 2 };
-    const labelPos1 = { x: mid1.x + offsetMultiplier * perpVec.x * offset, y: mid1.y + offsetMultiplier * perpVec.y * offset };
-    const text1 = U.formatFraction(fraction, 0.01, 8);
-
-    updateHtmlLabel({
-        id: 'snap-label-1',
-        content: text1,
-        x: labelPos1.x,
-        y: labelPos1.y,
-        color: color,
-        fontSize: C.FRACTION_LABEL_FONT_SIZE,
-        options: { textAlign: 'center', textBaseline: 'middle' }
-    });
-
-    const mid2 = { x: (snapPointScreen.x + p2Screen.x) / 2, y: (snapPointScreen.y + p2Screen.y) / 2 };
-    const labelPos2 = { x: mid2.x + offsetMultiplier * perpVec.x * offset, y: mid2.y + offsetMultiplier * perpVec.y * offset };
-    const text2 = U.formatFraction(1 - fraction, 0.01, 8);
-
-    updateHtmlLabel({
-        id: 'snap-label-2',
-        content: text2,
-        x: labelPos2.x,
-        y: labelPos2.y,
-        color: color,
-        fontSize: C.FRACTION_LABEL_FONT_SIZE,
-        options: { textAlign: 'center', textBaseline: 'middle' }
-    });
+    if (!info || !info.startVertex) return;
+    const startVertexScreen = dataToScreen(info.startVertex);
+    drawFractionalSnapLabels(ctx, { info, colors, idPrefix: 'snap-label', startVertexScreen }, dataToScreen, findVertexById, updateHtmlLabel);
 }
 
 function drawRotationIndicator(ctx, { transformIndicatorData, colors, currentShiftPressed }, dataToScreen) {

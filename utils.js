@@ -175,6 +175,8 @@ export function findAllVertexMerges(sourceVertices, targetVertices, snapRadius) 
 
 export function findVertexToEdgeSnaps(sourceVertices, targetEdges, snapRadius) {
     const candidates = [];
+    console.log(`[DEBUG-4] findVertexToEdgeSnaps: Checking ${sourceVertices.length} sources against ${targetEdges.length} targets.`);
+
     for (const sourceVertex of sourceVertices) {
         for (const targetEdge of targetEdges) {
             if (!targetEdge || !targetEdge.originalEdge || !targetEdge.p1 || !targetEdge.p2) {
@@ -189,7 +191,11 @@ export function findVertexToEdgeSnaps(sourceVertices, targetEdges, snapRadius) {
             }
 
             const closest = getClosestPointOnLineSegment(sourceVertex, targetEdge.p1, targetEdge.p2);
-            if (closest.distance < snapRadius && closest.onSegmentStrict) {
+            const shouldSnap = closest.distance < snapRadius && closest.onSegmentStrict;
+
+            if (shouldSnap) {
+                const edgeId = getEdgeId(targetEdge.originalEdge);
+                console.log(`[DEBUG-5] findVertexToEdgeSnaps: SUCCESS! V:${sourceVertex.originalId} is snapping to E:${edgeId}. Dist: ${closest.distance.toFixed(4)}`);
                 candidates.push({
                     dist: closest.distance,
                     sourceVertex: sourceVertex,
@@ -1218,6 +1224,22 @@ export function getCorrectionVectorForCircleSnap(point, circleCenter, circleRadi
     return {
         x: snappedPoint.x - point.x,
         y: snappedPoint.y - point.y
+    };
+}
+
+export function getBestFractionalSnap(pointOnEdge, p1, p2) {
+    const bestFraction = C.ALT_SNAP_FRACTIONS.reduce((best, current) => {
+        return Math.abs(current - pointOnEdge.t) < Math.abs(best - pointOnEdge.t) ? current : best;
+    });
+    
+    const finalPoint = {
+        x: p1.x + bestFraction * (p2.x - p1.x),
+        y: p1.y + bestFraction * (p2.y - p1.y)
+    };
+    
+    return {
+        fraction: bestFraction,
+        point: finalPoint
     };
 }
 
