@@ -10805,27 +10805,37 @@ function handleShiftDeformingDrag(rawDelta) {
 }
 
 function handleTranslationDrag(rawDelta, mouseData) {
-    const draggedVertexIds = new Set(initialDragVertexStates.map(v => v.id));
-    let isDeformingDrag = false;
-
-    if (initialDragVertexStates.length > 0) {
-        const subgraphVertexIds = new Set(findAllVerticesInSubgraph(initialDragVertexStates[0].id));
-        isDeformingDrag = !(draggedVertexIds.size === subgraphVertexIds.size &&
-                          [...draggedVertexIds].every(id => subgraphVertexIds.has(id)));
-    }
-
     if (currentShiftPressed) {
+        const draggedVertexIds = new Set(initialDragVertexStates.map(v => v.id));
+        let isDeformingDrag = false;
+        if (initialDragVertexStates.length > 0) {
+            const subgraphVertexIds = new Set(findAllVerticesInSubgraph(initialDragVertexStates[0].id));
+            isDeformingDrag = !(draggedVertexIds.size === subgraphVertexIds.size &&
+                                [...draggedVertexIds].every(id => subgraphVertexIds.has(id)));
+        }
+
         if (isDeformingDrag) {
             handleShiftDeformingDrag(rawDelta);
         } else {
             handleShiftRigidDrag(rawDelta);
         }
     } else {
-        if (isDeformingDrag) {
-            handleDeformingDrag(rawDelta);
-        } else {
-            handleRigidDrag(rawDelta);
-        }
+        const copyCount = parseInt(copyCountInput || '1', 10) || 1;
+        const wasSnapped = actionContext.finalSnapResult ? actionContext.finalSnapResult.snapped : false;
+        const snapResult = getTranslationSnap(initialDragVertexStates, rawDelta, copyCount, wasSnapped);
+        const finalDelta = snapResult.delta;
+
+        initialDragVertexStates.forEach(originalVertexState => {
+            const previewVertexToUpdate = dragPreviewVertices.find(dp => dp && dp.id === originalVertexState.id);
+            if (previewVertexToUpdate) {
+                previewVertexToUpdate.x = originalVertexState.x + finalDelta.x;
+                previewVertexToUpdate.y = originalVertexState.y + finalDelta.y;
+            }
+        });
+        
+        handleTranslationDragSnapVisualization(finalDelta, snapResult);
+
+        actionContext.finalSnapResult = snapResult;
     }
 }
 
@@ -10937,148 +10947,112 @@ function drawFeedbackAndIndicators(colors) {
     }
 }
 
-function handleDeformingDrag(rawDelta) {
-    const wasSnapped = actionContext.finalSnapResult ? actionContext.finalSnapResult.snapped : false;
-    // For deforming drag, we don't handle copies, so copyCount is always 1.
-    const snapResult = getTranslationSnap(initialDragVertexStates, rawDelta, 1, wasSnapped);
-    const finalDelta = snapResult.delta;
-
-    initialDragVertexStates.forEach(originalVertexState => {
-        const previewVertexToUpdate = dragPreviewVertices.find(dp => dp && dp.id === originalVertexState.id);
-        if (previewVertexToUpdate) {
-            previewVertexToUpdate.x = originalVertexState.x + finalDelta.x;
-            previewVertexToUpdate.y = originalVertexState.y + finalDelta.y;
-        }
-    });
-
+function handleMultiCopyTranslationSnapVisualization(finalDelta, snapResult) {
     snappedVertexIds.clear();
     snappedEdgeIds.clear();
 
-    if (snapResult.snapped) {
-        const mergeRadius = C.MERGE_RADIUS_SCREEN / viewTransform.scale;
-        const verticesToDrag = initialDragVertexStates.filter(p => p.type === 'regular');
-        const initialDraggedIds = new Set(verticesToDrag.map(p => p.id));
-        
-        const allFinalPoints = [];
-        
-        // Add static points
-        allVertices.forEach(p => {
-            if (p.type === 'regular' && !initialDraggedIds.has(p.id)) {
-                allFinalPoints.push({
-                    x: p.x, y: p.y, originalId: p.id, transformIndex: undefined 
-                });
-            }
-        });
+    if (!snapResult.snapped) return;
 
-        // Add the single set of dragged points
-        verticesToDrag.forEach(p_orig => {
-            allFinalPoints.push({
-                x: p_orig.x + finalDelta.x,
-                y: p_orig.y + finalDelta.y,
-                originalId: p_orig.id,
-                transformIndex: 0 // The main drag is always index 0
-            });
-        });
-        
-        // Find all pairs of points that are close enough to merge
-        for (let i = 0; i < allFinalPoints.length; i++) {
-            for (let j = i + 1; j < allFinalPoints.length; j++) {
-                const p1 = allFinalPoints[i];
-                const p2 = allFinalPoints[j];
-
-                if (U.distance(p1, p2) < mergeRadius) {
-                    // Snap point 1
-                    if (!snappedVertexIds.has(p1.originalId)) {
-                        snappedVertexIds.set(p1.originalId, new Set());
-                    }
-                    snappedVertexIds.get(p1.originalId).add(p1.transformIndex);
-                    
-                    // Snap point 2
-                    if (!snappedVertexIds.has(p2.originalId)) {
-                        snappedVertexIds.set(p2.originalId, new Set());
-                    }
-                    snappedVertexIds.get(p2.originalId).add(p2.transformIndex);
-                }
-            }
-        }
-    }
-
-    actionContext.finalSnapResult = snapResult;
-}
-
-function handleRigidDrag(rawDelta) {
     const copyCount = parseInt(copyCountInput || '1', 10) || 1;
-    const wasSnapped = actionContext.finalSnapResult ? actionContext.finalSnapResult.snapped : false;
-    const snapResult = getTranslationSnap(initialDragVertexStates, rawDelta, copyCount, wasSnapped);
-    const finalDelta = snapResult.delta;
+    const mergeRadius = C.MERGE_RADIUS_SCREEN / viewTransform.scale;
+    const verticesToDrag = initialDragVertexStates.filter(p => p.type === 'regular');
+    const initialDraggedIds = new Set(verticesToDrag.map(p => p.id));
 
-    // Update preview vertices for the main dragged object
-    initialDragVertexStates.forEach(originalVertexState => {
-        const previewVertexToUpdate = dragPreviewVertices.find(dp => dp && dp.id === originalVertexState.id);
-        if (previewVertexToUpdate) {
-            previewVertexToUpdate.x = originalVertexState.x + finalDelta.x;
-            previewVertexToUpdate.y = originalVertexState.y + finalDelta.y;
+    // Create a temporary map of all vertices that are NOT copies, in their final positions
+    const finalNonCopyPositions = new Map();
+    allVertices.forEach(v => {
+        if (!initialDraggedIds.has(v.id)) {
+            finalNonCopyPositions.set(v.id, v); // Static vertices
+        }
+    });
+    dragPreviewVertices.forEach(pv => {
+        finalNonCopyPositions.set(pv.id, pv); // Dragged vertices (at final position)
+    });
+
+    // 1. Build lists of all STATIC and MOVING elements
+    const staticVertices = allVertices
+        .filter(p => p.type === 'regular' && !initialDraggedIds.has(p.id))
+        .map(p => ({ ...p, originalId: p.id, transformIndex: undefined }));
+
+    const allMovingVertices = [];
+    for (let i = 0; i < copyCount; i++) {
+        verticesToDrag.forEach(p_orig => {
+            allMovingVertices.push({
+                x: p_orig.x + finalDelta.x * (i + 1),
+                y: p_orig.y + finalDelta.y * (i + 1),
+                originalId: p_orig.id,
+                transformIndex: i
+            });
+        });
+    }
+    
+    // Edges that are not part of the rigidly moving group (i.e., static or stretching edges)
+    const nonMovingFinalEdges = allEdges.map(edge => {
+        const isRigidlyMoving = initialDraggedIds.has(edge.id1) && initialDraggedIds.has(edge.id2);
+        if (isRigidlyMoving) return null;
+        
+        return {
+            p1: finalNonCopyPositions.get(edge.id1),
+            p2: finalNonCopyPositions.get(edge.id2),
+            originalEdge: edge,
+            transformIndex: undefined
+        };
+    }).filter(e => e && e.p1 && e.p2);
+    
+    // Edges that ARE part of the rigidly moving group, for all copies
+    const allMovingEdges = [];
+    for (let i = 0; i < copyCount; i++) {
+        const currentCopyVertices = allMovingVertices.filter(v => v.transformIndex === i);
+        const originalMovingEdges = allEdges.filter(e => initialDraggedIds.has(e.id1) && initialDraggedIds.has(e.id2));
+        originalMovingEdges.forEach(edge => {
+            const p1Copy = currentCopyVertices.find(v => v.originalId === edge.id1);
+            const p2Copy = currentCopyVertices.find(v => v.originalId === edge.id2);
+            if (p1Copy && p2Copy) {
+                allMovingEdges.push({ p1: p1Copy, p2: p2Copy, originalEdge: edge, transformIndex: i });
+            }
+        });
+    }
+
+    // 2. Check for ALL possible snaps
+
+    // V-V snaps (moving vs static AND moving vs other moving)
+    const vvSnaps = U.findAllVertexMerges(allMovingVertices, [...staticVertices, ...allMovingVertices], mergeRadius);
+    vvSnaps.forEach(({ sourceVertex, targetVertex }) => {
+        if (sourceVertex.originalId === targetVertex.originalId && sourceVertex.transformIndex === targetVertex.transformIndex) return;
+        if (!snappedVertexIds.has(sourceVertex.originalId)) snappedVertexIds.set(sourceVertex.originalId, new Set());
+        snappedVertexIds.get(sourceVertex.originalId).add(sourceVertex.transformIndex);
+        
+        if (!snappedVertexIds.has(targetVertex.originalId)) snappedVertexIds.set(targetVertex.originalId, new Set());
+        snappedVertexIds.get(targetVertex.originalId).add(targetVertex.transformIndex);
+    });
+
+    // V-E snaps (moving vertices against ALL other edges)
+    const veSnaps = U.findVertexToEdgeSnaps(allMovingVertices, [...nonMovingFinalEdges, ...allMovingEdges], mergeRadius);
+    veSnaps.forEach(({ sourceVertex, targetEdge }) => {
+         if (sourceVertex) {
+            if (!snappedVertexIds.has(sourceVertex.originalId)) snappedVertexIds.set(sourceVertex.originalId, new Set());
+            snappedVertexIds.get(sourceVertex.originalId).add(sourceVertex.transformIndex);
+        }
+        if (targetEdge && targetEdge.originalEdge) {
+            const edgeId = U.getEdgeId(targetEdge.originalEdge);
+            if (!snappedEdgeIds.has(edgeId)) snappedEdgeIds.set(edgeId, new Set());
+            snappedEdgeIds.get(edgeId).add(targetEdge.transformIndex);
         }
     });
 
-    snappedVertexIds.clear();
-    snappedEdgeIds.clear();
-
-    if (snapResult.snapped) {
-        const mergeRadius = C.MERGE_RADIUS_SCREEN / viewTransform.scale;
-        const verticesToDrag = initialDragVertexStates.filter(p => p.type === 'regular');
-        const initialDraggedIds = new Set(verticesToDrag.map(p => p.id));
-
-        // 1. Build a list of ALL points in their final positions (static, dragged, and all copies)
-        const allFinalPoints = [];
-        
-        // Add static points
-        allVertices.forEach(p => {
-            if (p.type === 'regular' && !initialDraggedIds.has(p.id)) {
-                allFinalPoints.push({
-                    x: p.x, y: p.y, originalId: p.id, transformIndex: undefined 
-                });
-            }
-        });
-
-        // Add dragged points and all copies
-        // 'copyCount' means total instances (1 dragged + (copyCount - 1) copies)
-        for (let i = 0; i < copyCount; i++) {
-            const copyMultiplier = i + 1; // The main drag is multiplier 1
-            verticesToDrag.forEach(p_orig => {
-                allFinalPoints.push({
-                    x: p_orig.x + finalDelta.x * copyMultiplier,
-                    y: p_orig.y + finalDelta.y * copyMultiplier,
-                    originalId: p_orig.id,
-                    transformIndex: i // 0 for main drag, 1+ for copies
-                });
-            });
+    // E-V snaps (moving edges against static vertices)
+    const evSnaps = U.findVertexToEdgeSnaps(staticVertices, allMovingEdges, mergeRadius);
+     evSnaps.forEach(({ sourceVertex: targetVertex, targetEdge: sourceEdge }) => {
+         if (sourceEdge && sourceEdge.originalEdge) {
+            const edgeId = U.getEdgeId(sourceEdge.originalEdge);
+            if (!snappedEdgeIds.has(edgeId)) snappedEdgeIds.set(edgeId, new Set());
+            snappedEdgeIds.get(edgeId).add(sourceEdge.transformIndex);
         }
-        
-        // 2. Find all pairs of points that are close enough to merge
-        for (let i = 0; i < allFinalPoints.length; i++) {
-            for (let j = i + 1; j < allFinalPoints.length; j++) {
-                const p1 = allFinalPoints[i];
-                const p2 = allFinalPoints[j];
-
-                if (U.distance(p1, p2) < mergeRadius) {
-                    // Snap point 1
-                    if (!snappedVertexIds.has(p1.originalId)) {
-                        snappedVertexIds.set(p1.originalId, new Set());
-                    }
-                    snappedVertexIds.get(p1.originalId).add(p1.transformIndex);
-                    
-                    // Snap point 2
-                    if (!snappedVertexIds.has(p2.originalId)) {
-                        snappedVertexIds.set(p2.originalId, new Set());
-                    }
-                    snappedVertexIds.get(p2.originalId).add(p2.transformIndex);
-                }
-            }
+        if (targetVertex) {
+            if (!snappedVertexIds.has(targetVertex.originalId)) snappedVertexIds.set(targetVertex.originalId, new Set());
+            snappedVertexIds.get(targetVertex.originalId).add(targetVertex.transformIndex);
         }
-    }
-
-    actionContext.finalSnapResult = snapResult;
+    });
 }
 
 function handleShiftRigidDrag(rawDelta) {
@@ -11477,6 +11451,116 @@ function handleMouseMove(event) {
             updateHoverStates();
         }
     }
+}
+
+function handleTranslationDragSnapVisualization(finalDelta, snapResult) {
+    snappedVertexIds.clear();
+    snappedEdgeIds.clear();
+
+    if (!snapResult.snapped) return;
+
+    const copyCount = parseInt(copyCountInput || '1', 10) || 1;
+    const mergeRadius = C.MERGE_RADIUS_SCREEN / viewTransform.scale;
+    const verticesToDrag = initialDragVertexStates.filter(p => p.type === 'regular');
+    const initialDraggedIds = new Set(verticesToDrag.map(p => p.id));
+
+    // Create a temporary map of all vertices that are NOT copies, in their final positions
+    const finalNonCopyPositions = new Map();
+    allVertices.forEach(v => {
+        if (!initialDraggedIds.has(v.id)) {
+            finalNonCopyPositions.set(v.id, v); // Static vertices
+        }
+    });
+    dragPreviewVertices.forEach(pv => {
+        finalNonCopyPositions.set(pv.id, pv); // Dragged vertices (at final position)
+    });
+
+    // 1. Build lists of all STATIC and MOVING elements
+    const staticVertices = allVertices
+        .filter(p => p.type === 'regular' && !initialDraggedIds.has(p.id))
+        .map(p => ({ ...p, originalId: p.id, transformIndex: undefined }));
+
+    const allMovingVertices = [];
+    for (let i = 0; i < copyCount; i++) {
+        verticesToDrag.forEach(p_orig => {
+            allMovingVertices.push({
+                x: p_orig.x + finalDelta.x * (i + 1),
+                y: p_orig.y + finalDelta.y * (i + 1),
+                originalId: p_orig.id,
+                transformIndex: i
+            });
+        });
+    }
+    
+    const nonMovingFinalEdges = allEdges.map(edge => {
+        const isRigidlyMoving = initialDraggedIds.has(edge.id1) && initialDraggedIds.has(edge.id2);
+        if (isRigidlyMoving) return null;
+        
+        return {
+            p1: finalNonCopyPositions.get(edge.id1),
+            p2: finalNonCopyPositions.get(edge.id2),
+            originalEdge: edge,
+            transformIndex: undefined
+        };
+    }).filter(e => e && e.p1 && e.p2);
+    
+    const allMovingEdges = [];
+    const originalRigidEdges = allEdges.filter(e => initialDraggedIds.has(e.id1) && initialDraggedIds.has(e.id2));
+    const originalStretchingEdges = allEdges.filter(e => initialDraggedIds.has(e.id1) ^ initialDraggedIds.has(e.id2));
+
+    for (let i = 0; i < copyCount; i++) {
+        const currentCopyVertices = allMovingVertices.filter(v => v.transformIndex === i);
+        
+        originalRigidEdges.forEach(edge => {
+            const p1Copy = currentCopyVertices.find(v => v.originalId === edge.id1);
+            const p2Copy = currentCopyVertices.find(v => v.originalId === edge.id2);
+            if (p1Copy && p2Copy) {
+                allMovingEdges.push({ p1: p1Copy, p2: p2Copy, originalEdge: edge, transformIndex: i });
+            }
+        });
+
+        originalStretchingEdges.forEach(edge => {
+            const movingId = initialDraggedIds.has(edge.id1) ? edge.id1 : edge.id2;
+            const staticId = initialDraggedIds.has(edge.id1) ? edge.id2 : edge.id1;
+            const p_moving = currentCopyVertices.find(v => v.originalId === movingId);
+            const p_static = staticVertices.find(v => v.originalId === staticId);
+            if (p_moving && p_static) {
+                allMovingEdges.push({ p1: p_moving, p2: p_static, originalEdge: edge, transformIndex: i });
+            }
+        });
+    }
+
+    // 2. Check for ALL possible snaps
+    const allFinalVertices = [...staticVertices, ...allMovingVertices];
+    for (let i = 0; i < allFinalVertices.length; i++) {
+        for (let j = i + 1; j < allFinalVertices.length; j++) {
+            const p1 = allFinalVertices[i];
+            const p2 = allFinalVertices[j];
+            if (p1.originalId === p2.originalId && p1.transformIndex === p2.transformIndex) continue;
+
+            if (U.distance(p1, p2) < mergeRadius) {
+                if (!snappedVertexIds.has(p1.originalId)) snappedVertexIds.set(p1.originalId, new Set());
+                snappedVertexIds.get(p1.originalId).add(p1.transformIndex);
+                
+                if (!snappedVertexIds.has(p2.originalId)) snappedVertexIds.set(p2.originalId, new Set());
+                snappedVertexIds.get(p2.originalId).add(p2.transformIndex);
+            }
+        }
+    }
+
+    const allFinalEdgesForCheck = [...nonMovingFinalEdges, ...allMovingEdges];
+    const veSnaps = U.findVertexToEdgeSnaps(allMovingVertices, allFinalEdgesForCheck, mergeRadius);
+    veSnaps.forEach(({ sourceVertex, targetEdge }) => {
+         if (sourceVertex) {
+            if (!snappedVertexIds.has(sourceVertex.originalId)) snappedVertexIds.set(sourceVertex.originalId, new Set());
+            snappedVertexIds.get(sourceVertex.originalId).add(sourceVertex.transformIndex);
+        }
+        if (targetEdge && targetEdge.originalEdge) {
+            const edgeId = U.getEdgeId(targetEdge.originalEdge);
+            if (!snappedEdgeIds.has(edgeId)) snappedEdgeIds.set(edgeId, new Set());
+            snappedEdgeIds.get(edgeId).add(targetEdge.transformIndex);
+        }
+    });
 }
 
 function handleMouseUpDispatcher(event) {
