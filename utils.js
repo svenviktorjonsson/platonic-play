@@ -890,8 +890,9 @@ export function getCoordinateSystemCenterSnap(mouseDataPos, snapTargets, gridDis
                     minDistance = dist;
                     bestSnap = {
                         snapped: true,
-                        snapPoint: midpoint,
-                        snapType: 'edge'
+                        snapPoint: { x: midpoint.x, y: midpoint.y },
+                        snapType: 'edge',
+                        edgeInfo: { v1: midpoint.v1, v2: midpoint.v2 }
                     };
                 }
             });

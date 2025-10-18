@@ -74,6 +74,7 @@ export const FRACTION_LABEL_FONT_SIZE = 20;
 export const INSCRIBED_CIRCLE_ITERATIONS = 20;
 export const INSCRIBED_CIRCLE_STEP_FACTOR = 0.1;
 export const ALT_SNAP_FRACTIONS = [1 / 4, 1 / 3, 1 / 2, 2 / 3, 3 / 4];
+export const EDGE_GLOW_OFFSET_DISTANCE = 4; // Pixels to offset the glow line
 
 // --- GEOMETRY & DRAWING ---
 export const TRANSFORM_ICON_SIZE = 30;
@@ -261,7 +262,6 @@ export const ANGULAR_GRID_FADE_IN_THRESHOLD = 0.01;
 export const GEOMETRY_CALCULATION_EPSILON = 1e-9;
 export const FLOATING_POINT_PRECISION_LIMIT = 1e-15;
 export const VERTICAL_LINE_COS_THRESHOLD = 0.1;
-export const SNAP_STICKINESS_RADIUS_SCREEN = 30;
 export const LINE_TO_SNAP_RADIUS_SCREEN = 10;
 export const VERTEX_ON_LINE_SNAP_RADIUS_SCREEN = 15;
 export const DRAG_SNAP_GEOMETRIC_DISTANCE_FACTORS = [0.5, 1, 1.5, 2, 3, 4, 5];
@@ -278,11 +278,9 @@ export const MAX_INITIAL_METER_SNAP_MULTIPLIER = 10;
 export const MAX_SNAP_DENOMINATOR = 6;
 export const MAX_SNAP_INTEGER = 10;
 
-export const MERGE_RADIUS_SCREEN = VERTEX_RADIUS*2;
-
 export const NINETY_DEG_ANGLE_SNAP_FRACTIONS = (() => {
     const uniqueFractions = new Set();
-    const denominators = [1, 2, 3, 4, 5, 6];
+    const denominators = [1, 2, 3, 4, 5];
     for (const q of denominators) {
         for (let p = 1; p <= q * 4; p++) {
             uniqueFractions.add(p / q);
