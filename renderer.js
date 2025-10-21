@@ -385,9 +385,11 @@ export function drawFaces(ctx, { allFaces, facesVisible, isDragConfirmed, dragPr
 
     const getLiveVertex = (vertexId) => {
         if (isDragConfirmed && dragPreviewVertices) {
-            const previewVertex = dragPreviewVertices.find(p => p && p.id === vertexId);
+            // Find the preview vertex matching the original ID, if available
+            const previewVertex = dragPreviewVertices.find(p => p && (p.id === vertexId || p.originalId === vertexId));
             if (previewVertex) return previewVertex;
         }
+        // Fallback to the original vertex from the main state
         return findVertexById(vertexId);
     };
 
@@ -395,25 +397,32 @@ export function drawFaces(ctx, { allFaces, facesVisible, isDragConfirmed, dragPr
     const topLevelFaces = allFaces.filter(f => !f.parentFaceId);
     topLevelFaces.forEach((face) => {
         if (!face || !face.vertexIds || face.vertexIds.length < 3) return;
-        
+
         const liveVertices = face.vertexIds.map(id => getLiveVertex(id)).filter(p => p && p.type === 'regular');
         if (liveVertices.length < 3) return;
 
         const screenVertices = liveVertices.map(v => dataToScreen(v));
 
         let faceToDraw = face;
-        if (isDragConfirmed && face.localCoordSystem && face.vertexIds.some(vid => dragPreviewVertices.some(pv => pv.id === vid))) {
-            const initialSystem = initialCoordSystemStates.get(face.id);
-            const previewSystem = calculatePreviewCoordSystem(face, { initialSystem, dragPreviewVertices, initialDragVertexStates, findVertexById, transformIndicatorData });
-            faceToDraw = { ...face, localCoordSystem: previewSystem };
+        let systemToUse = face.localCoordSystem; // Use the current system by default
+
+        // Check if any vertex of this face is being dragged
+        const isFaceBeingDragged = isDragConfirmed && face.vertexIds.some(vid => dragPreviewVertices.some(pv => pv.id === vid));
+
+        if (isFaceBeingDragged && face.localCoordSystem) {
+             const initialSystem = initialCoordSystemStates.get(face.id);
+             // Always calculate the preview system if dragging and system exists
+             systemToUse = calculatePreviewCoordSystem(face, { initialSystem, dragPreviewVertices, initialDragVertexStates, findVertexById, transformIndicatorData });
+             faceToDraw = { ...face, localCoordSystem: systemToUse }; // Update face data for drawing function
         }
-        
+
+
         if (screenVertices.every(v => v && typeof v.x === 'number' && typeof v.y === 'number')) {
-            drawFace(ctx, screenVertices, faceToDraw, colors, dataToScreen, findVertexById, allFaces, getLiveVertex, true);
+            drawFace(ctx, screenVertices, faceToDraw, colors, dataToScreen, findVertexById, allFaces, getLiveVertex, true); // Pass true to draw holes
         }
     });
 
-    // Second pass: Draw the fills for child faces that are not meant to be holes yet
+    // Second pass: Draw the fills for child faces that are NOT holes
     const childFaces = allFaces.filter(f => f.parentFaceId && f.color !== 'transparent');
     childFaces.forEach((face) => {
         if (!face || !face.vertexIds || face.vertexIds.length < 3) return;
@@ -422,16 +431,20 @@ export function drawFaces(ctx, { allFaces, facesVisible, isDragConfirmed, dragPr
         if (liveVertices.length < 3) return;
 
         const screenVertices = liveVertices.map(v => dataToScreen(v));
-        
+
         let faceToDraw = face;
-        if (isDragConfirmed && face.localCoordSystem && face.vertexIds.some(vid => dragPreviewVertices.some(pv => pv.id === vid))) {
+        let systemToUse = face.localCoordSystem;
+
+        const isFaceBeingDragged = isDragConfirmed && face.vertexIds.some(vid => dragPreviewVertices.some(pv => pv.id === vid));
+
+        if (isFaceBeingDragged && face.localCoordSystem) {
             const initialSystem = initialCoordSystemStates.get(face.id);
-            const previewSystem = calculatePreviewCoordSystem(face, { initialSystem, dragPreviewVertices, initialDragVertexStates, findVertexById, transformIndicatorData });
-            faceToDraw = { ...face, localCoordSystem: previewSystem };
+            systemToUse = calculatePreviewCoordSystem(face, { initialSystem, dragPreviewVertices, initialDragVertexStates, findVertexById, transformIndicatorData });
+            faceToDraw = { ...face, localCoordSystem: systemToUse };
         }
 
         if (screenVertices.every(v => v && typeof v.x === 'number' && typeof v.y === 'number')) {
-            drawFace(ctx, screenVertices, faceToDraw, colors, dataToScreen, findVertexById, allFaces, getLiveVertex, false);
+             drawFace(ctx, screenVertices, faceToDraw, colors, dataToScreen, findVertexById, allFaces, getLiveVertex, false); // Pass false, don't draw holes within children
         }
     });
 }
@@ -565,293 +578,152 @@ function calculatePreviewCoordSystem(face, { initialSystem, dragPreviewVertices,
     return previewSystem;
 }
 
-function drawDeformingMultiCopyPreviews(ctx, params, dataToScreen) {
-    const { copyCount, initialDragVertexStates, dragPreviewVertices, transformIndicatorData, allEdges, allFaces, findVertexById, colors, snappedEdgesInfo, snappedVertexIds } = params;
+export function drawRigidDragPreview(ctx, params, dataToScreen) {
+    const { copyCount, isDragConfirmed, initialDragVertexStates, dragPreviewVertices, transformIndicatorData, allEdges, allFaces, findVertexById, colors, snappedEdgesInfo, snappedVertexIds } = params;
 
-    const verticesToCopy = initialDragVertexStates.filter(p => p.type === 'regular');
-    const originalIds = new Set(verticesToCopy.map(p => p.id));
-
-    const incidentEdges = allEdges.filter(edge => originalIds.has(edge.id1) && originalIds.has(edge.id2));
-    const boundaryEdges = allEdges.filter(edge =>
-        (originalIds.has(edge.id1) && !originalIds.has(edge.id2)) ||
-        (originalIds.has(edge.id2) && !originalIds.has(edge.id1))
-    );
-
-    const relevantStaticVertexIds = new Set();
-    boundaryEdges.forEach(e => {
-        if (!originalIds.has(e.id1)) relevantStaticVertexIds.add(e.id1);
-        if (!originalIds.has(e.id2)) relevantStaticVertexIds.add(e.id2);
-    });
-    snappedVertexIds.forEach((snaps, sourceOrigId) => {
-         if (originalIds.has(sourceOrigId)) {
-             snaps.forEach(snap => {
-                 const targetId = snap.targetVertexId || snap.mergeTarget?.id;
-                 if (targetId && !originalIds.has(targetId)) {
-                     relevantStaticVertexIds.add(targetId);
-                 }
-             });
-         }
-    });
-    const relevantStaticVertices = Array.from(relevantStaticVertexIds).map(id => findVertexById(id)).filter(Boolean);
-
-    for (let i = 0; i < copyCount; i++) {
-        const multiplier = i;
-        const copyIndex = i - 1; // 0x -> -1, 1x -> 0, etc. Matches original logic.
-
-        let previewVerticesForThisCopy;
-        if (i === 0) {
-            previewVerticesForThisCopy = verticesToCopy.map(v => ({...v, id: `preview_${v.id}_${i}`, originalId: v.id }));
-        } else if (i === 1) {
-             previewVerticesForThisCopy = dragPreviewVertices.map(v => ({...v, id: `preview_${v.id}_${i}`, originalId: initialDragVertexStates.find(iv=>iv.id === v.id)?.id || v.id }));
-        } else {
-             if (transformIndicatorData) {
-                  const { center, rotation, scale, directionalScale, startPos } = transformIndicatorData;
-                  const startVector = { x: startPos.x - center.x, y: startPos.y - center.y };
-                  previewVerticesForThisCopy = verticesToCopy.map(p => {
-                      const newPos = U.applyTransformToVertex(p, center, rotation * multiplier, Math.pow(scale, multiplier), directionalScale, startVector);
-                      return { ...p, ...newPos, id: `preview_${p.id}_${i}`, originalId: p.id };
-                  });
-             } else {
-                 const deltaX = dragPreviewVertices[0].x - initialDragVertexStates[0].x;
-                 const deltaY = dragPreviewVertices[0].y - initialDragVertexStates[0].y;
-                 previewVerticesForThisCopy = verticesToCopy.map(p => ({
-                     ...p, x: p.x + deltaX * multiplier, y: p.y + deltaY * multiplier, id: `preview_${p.id}_${i}`, originalId: p.id
-                 }));
-             }
-        }
-        if (!previewVerticesForThisCopy) continue;
-
-        const currentVerticesMap = new Map();
-        previewVerticesForThisCopy.forEach(v => currentVerticesMap.set(v.id, v));
-        relevantStaticVertices.forEach(v => currentVerticesMap.set(v.id, v));
-
-        const parent = new Map();
-        currentVerticesMap.forEach((v, id) => parent.set(id, id));
-        const findRoot = (id) => {
-            if (!parent.has(id)) return id;
-             if (parent.get(id) === id) return id;
-             const rootId = findRoot(parent.get(id));
-             parent.set(id, rootId);
-             return rootId;
-        };
-
-        snappedVertexIds.forEach((snaps, sourceOrigId) => {
-             const sourcePreviewVertex = previewVerticesForThisCopy.find(v => v.originalId === sourceOrigId);
-             if (!sourcePreviewVertex) return;
-             snaps.forEach(snap => {
-                 if (snap.copyIndex === copyIndex && snap.type === 'vertex-vertex' && snap.mergeTarget) {
-                      const targetVertexId = snap.mergeTarget.id;
-                      const targetInMap = currentVerticesMap.has(targetVertexId);
-                      const targetIsOtherPreviewInThisCopy = previewVerticesForThisCopy.find(pv => pv.id === targetVertexId);
-                      if (targetInMap || targetIsOtherPreviewInThisCopy) {
-                         const root1 = findRoot(sourcePreviewVertex.id);
-                         const root2 = findRoot(targetVertexId);
-                         if (root1 !== root2) parent.set(root2, root1);
-                      }
-                 }
-             });
-        });
-
-        const tempEdges = [];
-        incidentEdges.forEach(edge => {
-            const previewV1 = previewVerticesForThisCopy.find(v => v.originalId === edge.id1);
-            const previewV2 = previewVerticesForThisCopy.find(v => v.originalId === edge.id2);
-            if (!previewV1 || !previewV2) return;
-            const root1 = findRoot(previewV1.id);
-            const root2 = findRoot(previewV2.id);
-            if (root1 !== root2) tempEdges.push({ ...edge, id1: root1, id2: root2 });
-        });
-        boundaryEdges.forEach(edge => {
-            const staticVertexId = originalIds.has(edge.id1) ? edge.id2 : edge.id1;
-            const originalDraggedVertexId = originalIds.has(edge.id1) ? edge.id1 : edge.id2;
-            const previewDraggedVertex = previewVerticesForThisCopy.find(v => v.originalId === originalDraggedVertexId);
-            if (previewDraggedVertex) {
-                 const rootDragged = findRoot(previewDraggedVertex.id);
-                 const rootStatic = findRoot(staticVertexId);
-                 if (rootDragged !== rootStatic) tempEdges.push({ ...edge, id1: rootDragged, id2: rootStatic });
-            }
-        });
-
-        const tempFindVertexById = (id) => currentVerticesMap.get(parent.get(id) || id);
-        const detectedFacesForThisCopy = U.detectClosedPolygons(tempEdges, tempFindVertexById);
-
-        detectedFacesForThisCopy.forEach(face => {
-             const faceVertices = face.vertexIds.map(id => tempFindVertexById(id)).filter(Boolean);
-             if (faceVertices.length >= 3) {
-                  const uniqueFaceVertices = [];
-                  const seenIds = new Set();
-                  faceVertices.forEach(v => { if (!seenIds.has(v.id)) { uniqueFaceVertices.push(v); seenIds.add(v.id); } });
-                  if (uniqueFaceVertices.length >= 3) {
-                       drawFace(ctx, uniqueFaceVertices.map(v => dataToScreen(v)), face, colors, dataToScreen, findVertexById, [], (id) => tempFindVertexById(id), false);
-                  }
-             }
-        });
-
-        ctx.setLineDash([]);
-        ctx.lineWidth = C.LINE_WIDTH;
-
-        tempEdges.forEach(edge => {
-             const p1 = tempFindVertexById(edge.id1);
-             const p2 = tempFindVertexById(edge.id2);
-             if (p1 && p2 && p1.id !== p2.id) {
-                 const p1Screen = dataToScreen(p1);
-                 const p2Screen = dataToScreen(p2);
-                 ctx.beginPath();
-                 ctx.moveTo(p1Screen.x, p1Screen.y);
-                 ctx.lineTo(p2Screen.x, p2Screen.y);
-                 ctx.strokeStyle = edge.color || colors.edge;
-                 ctx.stroke();
-                 let originalEdgeForSnap = incidentEdges.find(origE =>
-                     (origE.id1 === (p1.originalId || p1.id) && origE.id2 === (p2.originalId || p2.id)) ||
-                     (origE.id1 === (p2.originalId || p2.id) && origE.id2 === (p1.originalId || p1.id))
-                 ) || boundaryEdges.find(origE =>
-                       (origE.id1 === (p1.originalId || p1.id) && origE.id2 === p2.id) ||
-                       (origE.id1 === p1.id && origE.id2 === (p2.originalId || p2.id)) ||
-                       (origE.id1 === (p2.originalId || p2.id) && origE.id2 === p1.id) ||
-                       (origE.id1 === p2.id && origE.id2 === (p1.originalId || p1.id))
-                 );
-                 if (originalEdgeForSnap) {
-                     const snapEntries = snappedEdgesInfo?.get(U.getEdgeId(originalEdgeForSnap)) || [];
-                     if (snapEntries.some(s => s.copyIndex === copyIndex)) {
-                          ctx.save();
-                          ctx.beginPath();
-                          ctx.moveTo(p1Screen.x, p1Screen.y);
-                          ctx.lineTo(p2Screen.x, p2Screen.y);
-                          ctx.strokeStyle = colors.feedbackSnapped;
-                          ctx.globalAlpha = C.SELECTION_GLOW_ALPHA;
-                          ctx.lineWidth = C.LINE_WIDTH + C.EDGE_SELECTION_GLOW_WIDTH_OFFSET;
-                          ctx.stroke();
-                          ctx.restore();
-                     }
-                 }
-             }
-         });
-
-        previewVerticesForThisCopy.forEach((vertex) => {
-            const originalVertexId = vertex.originalId || vertex.id;
-            const snapEntries = snappedVertexIds.get(originalVertexId) || [];
-            const checkIndex = isMultiCopy ? copyIndex : 0; // Or just copyIndex if using the separated deforming function
-            const isSnapped = snapEntries.some(s => s.copyIndex === checkIndex && (s.type === 'vertex-vertex' || s.type === 'vertex-to-edge'));
-            // ONLY DRAW THE BASE SHAPE HERE
-            drawVertexBaseOnly(ctx, vertex, { colors, verticesVisible: true, isSnapped }, dataToScreen);
-        });
-    }
-}
-
-export function drawDragPreviews(ctx, params, dataToScreen) {
-    const { copyCount, isDragConfirmed, initialDragVertexStates, allEdges } = params;
-
-    if (!isDragConfirmed || !initialDragVertexStates.length) {
+    const isDeformingDrag = initialDragVertexStates.length === 1 && !transformIndicatorData && initialDragVertexStates[0].type === 'regular';
+    if (!isDragConfirmed || !initialDragVertexStates.length || copyCount <= 0 || isDeformingDrag) {
         return;
     }
 
-    // --- DELEGATION LOGIC ---
-    const isMultiCopy = copyCount > 1;
-    if (isMultiCopy) {
-        const verticesToCopy = initialDragVertexStates.filter(p => p.type === 'regular');
-        if (verticesToCopy.length > 0) {
-            const originalIds = new Set(verticesToCopy.map(p => p.id));
-            const boundaryEdges = allEdges.filter(edge =>
-                (originalIds.has(edge.id1) && !originalIds.has(edge.id2)) ||
-                (originalIds.has(edge.id2) && !originalIds.has(edge.id1))
-            );
-            const isPartialDrag = boundaryEdges.length > 0;
+    const verticesToDraw = initialDragVertexStates.filter(p => p.type === 'regular');
+    if (verticesToDraw.length === 0) return;
 
-            if (isPartialDrag) {
-                drawDeformingMultiCopyPreviews(ctx, params, dataToScreen);
-                return; // Exit: the specialized function handled it.
-            }
-        }
-    }
-    // --- END DELEGATION ---
-
-    // --- ORIGINAL, UNTOUCHED LOGIC FOR RIGID AND SINGLE-COPY DRAGS ---
-    const { dragPreviewVertices, transformIndicatorData, allFaces, findVertexById, colors, snappedEdgesInfo, snappedVertexIds } = params;
-
-    const verticesToCopy = initialDragVertexStates.filter(p => p.type === 'regular');
-    if (verticesToCopy.length === 0) return;
-
-    const incidentEdges = allEdges.filter(edge => 
-        initialDragVertexStates.some(v => v.id === edge.id1) && 
-        initialDragVertexStates.some(v => v.id === edge.id2)
-    );
-    const affectedFaces = allFaces.filter(face => 
-        face.vertexIds.every(vId => initialDragVertexStates.some(v => v.id === vId))
-    );
+    const originalIds = new Set(verticesToDraw.map(p => p.id));
+    const incidentEdges = allEdges.filter(edge => originalIds.has(edge.id1) && originalIds.has(edge.id2));
+    const boundaryEdges = allEdges.filter(edge => (originalIds.has(edge.id1) && !originalIds.has(edge.id2)) || (originalIds.has(edge.id2) && !originalIds.has(edge.id1)));
+    const affectedFaces = allFaces.filter(face => face.vertexIds.every(vId => originalIds.has(vId)));
 
     ctx.save();
     ctx.globalAlpha = 1.0;
 
-    const loopStart = isMultiCopy ? 0 : 1; 
-    const loopEnd = isMultiCopy ? copyCount : 2;
+    for (let i = 0; i < copyCount; i++) {
+        i += copyCount == 1; // Added line
 
-    for (let i = loopStart; i < loopEnd; i++) {
-        const multiplier = i;
-        const copyIndex = isMultiCopy ? i - 1 : 0;
+        // Loop condition i < copyCount is checked naturally at the start of the next iteration.
 
-        let previewVerticesForThisCopy;
+        const copyIndex = i;
+        const positionMultiplier = i;
 
-        if (i === 0) { // 0x static copy (only in multi-drag)
-            previewVerticesForThisCopy = verticesToCopy;
-        } else if (i === 1) { // 1x dragged copy (for both single and multi-drag)
-            previewVerticesForThisCopy = dragPreviewVertices;
-        } else { // 2x, 3x, etc. extra copies
-            if (transformIndicatorData) {
-                const { center, rotation, scale, directionalScale, startPos } = transformIndicatorData;
-                const startVector = { x: startPos.x - center.x, y: startPos.y - center.y };
-                previewVerticesForThisCopy = verticesToCopy.map(p => {
-                    const newPos = U.applyTransformToVertex(p, center, rotation * multiplier, Math.pow(scale, multiplier), directionalScale, startVector);
-                    return { ...p, ...newPos, id: `preview_${p.id}_${i}`, originalId: p.id };
-                });
-            } else { // Simple Translation
-                const deltaX = dragPreviewVertices[0].x - initialDragVertexStates[0].x;
-                const deltaY = dragPreviewVertices[0].y - initialDragVertexStates[0].y;
-                previewVerticesForThisCopy = verticesToCopy.map(p => ({
-                    ...p, x: p.x + deltaX * multiplier, y: p.y + deltaY * multiplier, id: `preview_${p.id}_${i}`, originalId: p.id
-                }));
-            }
+        let verticesForThisCopy;
+        const currentIdMap = new Map();
+
+        if (transformIndicatorData) {
+            const { center, rotation, scale, directionalScale, startPos } = transformIndicatorData;
+            const startVector = { x: startPos.x - center.x, y: startPos.y - center.y };
+            verticesForThisCopy = verticesToDraw.map(p => {
+                const newPos = U.applyTransformToVertex(p, center, rotation * positionMultiplier, Math.pow(scale, positionMultiplier), directionalScale, startVector);
+                return { ...p, ...newPos, id: `preview_${p.id}_${copyIndex}`, originalId: p.id, transformIndex: copyIndex };
+            });
+        } else { // Translation
+             // i now starts at 1 if copyCount is 1
+             const deltaX_1x = dragPreviewVertices.length > 0 ? dragPreviewVertices[0].x - initialDragVertexStates[0].x : 0;
+             const deltaY_1x = dragPreviewVertices.length > 0 ? dragPreviewVertices[0].y - initialDragVertexStates[0].y : 0;
+             verticesForThisCopy = verticesToDraw.map(p => ({
+                 ...p, x: p.x + deltaX_1x * positionMultiplier, y: p.y + deltaY_1x * positionMultiplier, id: `preview_${p.id}_${copyIndex}`, originalId: p.id, transformIndex: copyIndex
+             }));
         }
 
-        const newIdMapForThisCopy = new Map();
-        previewVerticesForThisCopy.forEach(pv => newIdMapForThisCopy.set(pv.originalId || pv.id, pv));
+        // It's possible i is now >= copyCount if copyCount was 1. Check before proceeding.
+        if (!verticesForThisCopy || verticesForThisCopy.length === 0) continue;
+        verticesForThisCopy.forEach(pv => currentIdMap.set(pv.originalId, pv));
 
-        affectedFaces.forEach(face => drawFace(ctx, face.vertexIds.map(id => dataToScreen(newIdMapForThisCopy.get(id))), face, colors, dataToScreen, findVertexById, allFaces, id => newIdMapForThisCopy.get(id), true));
+        affectedFaces.forEach(face => { /* Draw faces */
+            const faceVertices = face.vertexIds.map(id => currentIdMap.get(id)).filter(Boolean);
+            if(faceVertices.length === face.vertexIds.length) {
+                const faceVerticesScreen = faceVertices.map(v => dataToScreen(v));
+                drawFace(ctx, faceVerticesScreen, face, colors, dataToScreen, findVertexById, [], id => currentIdMap.get(id), false);
+            }
+        });
 
         ctx.setLineDash([]);
         ctx.lineWidth = C.LINE_WIDTH;
 
-        incidentEdges.forEach(edge => {
-            const p1 = newIdMapForThisCopy.get(edge.id1);
-            const p2 = newIdMapForThisCopy.get(edge.id2);
+        incidentEdges.forEach(edge => { /* Draw incident edges + snaps */
+            const p1 = currentIdMap.get(edge.id1); const p2 = currentIdMap.get(edge.id2);
             if (p1 && p2) {
-                const p1Screen = dataToScreen(p1);
-                const p2Screen = dataToScreen(p2);
-                ctx.beginPath();
-                ctx.moveTo(p1Screen.x, p1Screen.y);
-                ctx.lineTo(p2Screen.x, p2Screen.y);
-                ctx.strokeStyle = edge.color || colors.edge;
+                const p1Screen = dataToScreen(p1); const p2Screen = dataToScreen(p2);
+                ctx.beginPath(); ctx.moveTo(p1Screen.x, p1Screen.y); ctx.lineTo(p2Screen.x, p2Screen.y);
+                if (edge.colormapItem) { /* Colormap logic */
+                    const gradient = ctx.createLinearGradient(p1Screen.x, p1Screen.y, p2Screen.x, p2Screen.y);
+                    const startColor = U.sampleColormap(edge.colormapItem, edge.gradientStart);
+                    const endColor = U.sampleColormap(edge.colormapItem, edge.gradientEnd);
+                    gradient.addColorStop(0, startColor); gradient.addColorStop(1, endColor);
+                    ctx.strokeStyle = gradient;
+                } else { ctx.strokeStyle = edge.color || colors.edge; }
                 ctx.stroke();
-
-                const snapEntries = snappedEdgesInfo?.get(U.getEdgeId(edge)) || [];
-                if (snapEntries.some(s => s.copyIndex === copyIndex)) {
+                const originalEdgeId = U.getEdgeId(edge);
+                const snapEntries = snappedEdgesInfo?.get(originalEdgeId) || [];
+                if (snapEntries.some(s => s.copyIndex === copyIndex)) { /* Draw snap glow */
                     ctx.save();
-                    ctx.beginPath();
-                    ctx.moveTo(p1Screen.x, p1Screen.y);
-                    ctx.lineTo(p2Screen.x, p2Screen.y);
-                    ctx.strokeStyle = colors.feedbackSnapped;
-                    ctx.globalAlpha = C.SELECTION_GLOW_ALPHA;
-                    ctx.lineWidth = C.LINE_WIDTH + C.EDGE_SELECTION_GLOW_WIDTH_OFFSET;
-                    ctx.stroke();
+                    ctx.strokeStyle = colors.feedbackSnapped; ctx.globalAlpha = C.SELECTION_GLOW_ALPHA; ctx.lineWidth = C.SELECTION_GLOW_LINE_WIDTH;
+                    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+                    const vecX = p2Screen.x - p1Screen.x; const vecY = p2Screen.y - p1Screen.y;
+                    const mag = Math.hypot(vecX, vecY); const offsetDist = C.EDGE_GLOW_OFFSET_DISTANCE;
+                    if (mag > C.GEOMETRY_CALCULATION_EPSILON) {
+                        const normPerpX = -vecY / mag; const normPerpY = vecX / mag;
+                        const offsetX = normPerpX * offsetDist; const offsetY = normPerpY * offsetDist;
+                        ctx.beginPath();
+                        ctx.arc(p1Screen.x, p1Screen.y, offsetDist, Math.atan2(offsetY, offsetX), Math.atan2(-offsetY, -offsetX));
+                        ctx.lineTo(p2Screen.x - offsetX, p2Screen.y - offsetY);
+                        ctx.arc(p2Screen.x, p2Screen.y, offsetDist, Math.atan2(-offsetY, -offsetX), Math.atan2(offsetY, offsetX));
+                        ctx.closePath(); ctx.stroke();
+                    } else { ctx.beginPath(); ctx.arc(p1Screen.x, p1Screen.y, offsetDist, 0, C.RADIANS_IN_CIRCLE); ctx.stroke(); }
                     ctx.restore();
                 }
             }
         });
+        boundaryEdges.forEach(edge => { /* Draw boundary edges + snaps */
+            const staticVertexId = originalIds.has(edge.id1) ? edge.id2 : edge.id1;
+            const originalDraggedVertexId = originalIds.has(edge.id1) ? edge.id1 : edge.id2;
+            const p1_moving = currentIdMap.get(originalDraggedVertexId);
+            const p2_static = findVertexById(staticVertexId);
+            if (p1_moving && p2_static) {
+                const p1Screen = dataToScreen(p1_moving); const p2Screen = dataToScreen(p2_static);
+                ctx.beginPath(); ctx.moveTo(p1Screen.x, p1Screen.y); ctx.lineTo(p2Screen.x, p2Screen.y);
+                if (edge.colormapItem) { /* Colormap logic */
+                     const gradient = ctx.createLinearGradient(p1Screen.x, p1Screen.y, p2Screen.x, p2Screen.y);
+                     const startColor = U.sampleColormap(edge.colormapItem, edge.gradientStart);
+                     const endColor = U.sampleColormap(edge.colormapItem, edge.gradientEnd);
+                     gradient.addColorStop(0, startColor); gradient.addColorStop(1, endColor);
+                     ctx.strokeStyle = gradient;
+                 } else { ctx.strokeStyle = edge.color || colors.edge; }
+                ctx.stroke();
+                const originalEdgeId = U.getEdgeId(edge);
+                const snapEntries = snappedEdgesInfo?.get(originalEdgeId) || [];
+                 if (snapEntries.some(s => s.copyIndex === copyIndex)) { /* Draw snap glow */
+                     ctx.save();
+                     ctx.strokeStyle = colors.feedbackSnapped; ctx.globalAlpha = C.SELECTION_GLOW_ALPHA; ctx.lineWidth = C.SELECTION_GLOW_LINE_WIDTH;
+                     ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+                     const vecX = p2Screen.x - p1Screen.x; const vecY = p2Screen.y - p1Screen.y;
+                     const mag = Math.hypot(vecX, vecY); const offsetDist = C.EDGE_GLOW_OFFSET_DISTANCE;
+                     if (mag > C.GEOMETRY_CALCULATION_EPSILON) {
+                         const normPerpX = -vecY / mag; const normPerpY = vecX / mag;
+                         const offsetX = normPerpX * offsetDist; const offsetY = normPerpY * offsetDist;
+                         ctx.beginPath();
+                         ctx.arc(p1Screen.x, p1Screen.y, offsetDist, Math.atan2(offsetY, offsetX), Math.atan2(-offsetY, -offsetX));
+                         ctx.lineTo(p2Screen.x - offsetX, p2Screen.y - offsetY);
+                         ctx.arc(p2Screen.x, p2Screen.y, offsetDist, Math.atan2(-offsetY, -offsetX), Math.atan2(offsetY, offsetX));
+                         ctx.closePath(); ctx.stroke();
+                     } else { ctx.beginPath(); ctx.arc(p1Screen.x, p1Screen.y, offsetDist, 0, C.RADIANS_IN_CIRCLE); ctx.stroke(); }
+                     ctx.restore();
+                 }
+            }
+        });
 
-        previewVerticesForThisCopy.forEach((vertex) => {
-            const originalVertexId = vertex.originalId || vertex.id;
-            const snapEntries = snappedVertexIds.get(originalVertexId) || [];
-            const isSnapped = snapEntries.some(s => s.copyIndex === copyIndex);
-            drawVertex(ctx, vertex, { isSnapped, selectedVertexIds: [], selectedCenterIds: [], activeCenterId: null, colors, verticesVisible: true }, dataToScreen, () => {});
+        verticesForThisCopy.forEach((vertex) => { /* Draw vertices + snaps */
+             const originalVertexId = vertex.originalId;
+             const snapEntries = snappedVertexIds.get(originalVertexId) || [];
+             const isSnapped = snapEntries.some(s => s.copyIndex === copyIndex);
+             const relevantSnap = snapEntries.find(s => s.copyIndex === copyIndex);
+             const snapType = relevantSnap ? relevantSnap.type : null;
+             drawVertexBaseOnly(ctx, vertex, { colors, verticesVisible: true, isSnapped: false }, dataToScreen);
+             if (isSnapped) {
+                 drawVertexGlowsOnly(ctx, vertex, {
+                     selectedVertexIds: [], selectedCenterIds: [], activeCenterId: null, colors,
+                     verticesVisible: true, isHovered: false, isSnapped: true, snapType: snapType, currentAltPressed: false
+                 }, dataToScreen, () => {});
+             }
         });
     }
     ctx.restore();
@@ -939,8 +811,7 @@ export function drawVertexGlowsOnly(ctx, vertex, options, dataToScreen, updateHt
         isSelected = selectedCenterIds.includes(vertex.id);
     }
 
-    const isMergeSnap = isSnapped && (snapType === 'vertex' || snapType === 'edge' || snapType === 'edge_fraction');
-    const shouldGlow = isSelected || isHovered || isMergeSnap;
+    const shouldGlow = isSelected || isHovered || isSnapped; // Simplified glow condition
 
     if (shouldGlow) {
         const screenPos = dataToScreen(vertex);
@@ -949,7 +820,7 @@ export function drawVertexGlowsOnly(ctx, vertex, options, dataToScreen, updateHt
         if (vertex.id === activeCenterId && vertex.type !== 'regular') {
              glowColor = colors.activeCenterGlow;
         }
-        else if (isMergeSnap) {
+        else if (isSnapped) { // Use snap color if snapped
              glowColor = colors.feedbackSnapped;
         }
         else if (isHovered) {
@@ -973,6 +844,106 @@ export function drawVertexGlowsOnly(ctx, vertex, options, dataToScreen, updateHt
         ctx.shadowColor = 'transparent';
         ctx.shadowBlur = 0;
         ctx.restore();
+    }
+}
+
+export function drawDeformingDragPreview(ctx, params, dataToScreen) {
+    const { initialDragVertexStates, dragPreviewVertices, allEdges, allFaces, findVertexById, findNeighbors, colors, snappedEdgesInfo, snappedVertexIds } = params;
+
+    if (!initialDragVertexStates || initialDragVertexStates.length !== 1 || !dragPreviewVertices || dragPreviewVertices.length === 0) {
+        return;
+    }
+
+    const originalVertex = initialDragVertexStates[0];
+    // Use the single preview vertex available
+    const previewVertex = { ...dragPreviewVertices[0], originalId: originalVertex.id, transformIndex: 0 }; // Assign index 0 for snap checks
+
+    const incidentEdges = allEdges.filter(edge => edge.id1 === originalVertex.id || edge.id2 === originalVertex.id);
+    const affectedFaces = allFaces.filter(face => face.vertexIds.includes(originalVertex.id));
+
+    const getLiveVertexForDeform = (vertexId) => {
+        if (vertexId === originalVertex.id) {
+            return previewVertex;
+        }
+        return findVertexById(vertexId);
+    };
+
+    affectedFaces.forEach(originalFace => {
+        const faceVerticesForPreview = originalFace.vertexIds.map(getLiveVertexForDeform).filter(Boolean);
+        if (faceVerticesForPreview.length >= 3) {
+            const screenVertices = faceVerticesForPreview.map(v => dataToScreen(v));
+            drawFace(ctx, screenVertices, originalFace, colors, dataToScreen, findVertexById, allFaces, getLiveVertexForDeform, true);
+        }
+    });
+
+    ctx.save();
+    ctx.lineWidth = C.LINE_WIDTH;
+    ctx.setLineDash([]);
+    incidentEdges.forEach(originalEdge => {
+        const p1 = getLiveVertexForDeform(originalEdge.id1);
+        const p2 = getLiveVertexForDeform(originalEdge.id2);
+        if (p1 && p2) {
+            const p1Screen = dataToScreen(p1);
+            const p2Screen = dataToScreen(p2);
+            ctx.beginPath();
+            ctx.moveTo(p1Screen.x, p1Screen.y);
+            ctx.lineTo(p2Screen.x, p2Screen.y);
+
+            if (originalEdge.colormapItem) {
+                const gradient = ctx.createLinearGradient(p1Screen.x, p1Screen.y, p2Screen.x, p2Screen.y);
+                const startColor = U.sampleColormap(originalEdge.colormapItem, originalEdge.gradientStart);
+                const endColor = U.sampleColormap(originalEdge.colormapItem, originalEdge.gradientEnd);
+                gradient.addColorStop(0, startColor);
+                gradient.addColorStop(1, endColor);
+                ctx.strokeStyle = gradient;
+            } else {
+                ctx.strokeStyle = originalEdge.color || colors.edge;
+            }
+            ctx.stroke();
+
+            const originalEdgeId = U.getEdgeId(originalEdge);
+            const snapEntries = snappedEdgesInfo?.get(originalEdgeId) || [];
+            // Deforming drag uses index 0 for snap checks
+            if (snapEntries.some(s => s.copyIndex === 0)) {
+                 ctx.save();
+                 ctx.strokeStyle = colors.feedbackSnapped;
+                 ctx.globalAlpha = C.SELECTION_GLOW_ALPHA;
+                 ctx.lineWidth = C.SELECTION_GLOW_LINE_WIDTH;
+                 ctx.lineCap = 'round';
+                 ctx.lineJoin = 'round';
+                 const vecX = p2Screen.x - p1Screen.x; const vecY = p2Screen.y - p1Screen.y;
+                 const mag = Math.hypot(vecX, vecY); const offsetDist = C.EDGE_GLOW_OFFSET_DISTANCE;
+                 if (mag > C.GEOMETRY_CALCULATION_EPSILON) {
+                     const normPerpX = -vecY / mag; const normPerpY = vecX / mag;
+                     const offsetX = normPerpX * offsetDist; const offsetY = normPerpY * offsetDist;
+                     ctx.beginPath();
+                     ctx.arc(p1Screen.x, p1Screen.y, offsetDist, Math.atan2(offsetY, offsetX), Math.atan2(-offsetY, -offsetX));
+                     ctx.lineTo(p2Screen.x - offsetX, p2Screen.y - offsetY);
+                     ctx.arc(p2Screen.x, p2Screen.y, offsetDist, Math.atan2(-offsetY, -offsetX), Math.atan2(offsetY, offsetX));
+                     ctx.closePath(); ctx.stroke();
+                 } else {
+                     ctx.beginPath(); ctx.arc(p1Screen.x, p1Screen.y, offsetDist, 0, C.RADIANS_IN_CIRCLE); ctx.stroke();
+                 }
+                 ctx.restore();
+             }
+        }
+    });
+    ctx.restore();
+
+    const snapEntries = snappedVertexIds.get(originalVertex.id) || [];
+    const isSnapped = snapEntries.some(s => s.copyIndex === 0); // Index 0 for single drag
+    const relevantSnap = snapEntries.find(s => s.copyIndex === 0);
+    const snapType = relevantSnap ? relevantSnap.type : null;
+
+    // Ensure previewVertex has correct ID info for drawing functions
+    const vertexToDraw = {...previewVertex, id: `preview_${originalVertex.id}_0`, originalId: originalVertex.id, transformIndex: 0};
+
+    drawVertexBaseOnly(ctx, vertexToDraw, { colors, verticesVisible: true, isSnapped: false }, dataToScreen);
+    if (isSnapped) {
+        drawVertexGlowsOnly(ctx, vertexToDraw, {
+            selectedVertexIds: [], selectedCenterIds: [], activeCenterId: null, colors,
+            verticesVisible: true, isHovered: false, isSnapped: true, snapType: snapType, currentAltPressed: false
+        }, dataToScreen, () => {});
     }
 }
 
@@ -2704,14 +2675,14 @@ export function drawAllEdges(ctx, { allEdges, selectedEdgeIds, hoveredEdgeId, is
 
         if (!edgesVisible && !isSelected && !isSnapped && !isHovered) return;
 
-        let p1_render = { ...p1_orig };
-        let p2_render = { ...p2_orig };
+        let p1_render = p1_orig;
+        let p2_render = p2_orig;
 
-        if (isDragConfirmed && dragPreviewVertices.length > 0) {
-            const p1Preview = dragPreviewVertices.find(dp => dp.id === p1_orig.id);
-            const p2Preview = dragPreviewVertices.find(dp => dp.id === p2_orig.id);
-            if (p1Preview) { p1_render.x = p1Preview.x; p1_render.y = p1Preview.y; }
-            if (p2Preview) { p2_render.x = p2Preview.x; p2_render.y = p2Preview.y; }
+        if (isDragConfirmed && dragPreviewVertices && dragPreviewVertices.length > 0) {
+            const p1Preview = dragPreviewVertices.find(dp => dp && dp.id === p1_orig.id);
+            const p2Preview = dragPreviewVertices.find(dp => dp && dp.id === p2_orig.id);
+            if (p1Preview) { p1_render = p1Preview; }
+            if (p2Preview) { p2_render = p2Preview; }
         }
 
         const p1Screen = dataToScreen(p1_render);
@@ -2775,27 +2746,55 @@ export function drawAllEdges(ctx, { allEdges, selectedEdgeIds, hoveredEdgeId, is
 }
 
 export function drawVertex(ctx, vertex, options, dataToScreen, updateHtmlLabel) {
-     let isSelected;
-     const { selectedVertexIds, selectedCenterIds, activeCenterId, colors, verticesVisible = true, isHovered = false, isSnapped = false } = options;
+    const { selectedVertexIds, selectedCenterIds, activeCenterId, colors, verticesVisible = true, isHovered = false, snappedVertexIds, isDragConfirmed, dragPreviewVertices, currentAltPressed } = options;
 
-    if (vertex.type === C.VERTEX_TYPE_REGULAR) {
-        isSelected = selectedVertexIds.includes(vertex.id);
-        if (!verticesVisible && !isSelected && !isHovered && !isSnapped) {
-            return; // Don't draw base if completely invisible
+    let vertexToRender = vertex;
+    let isSnapped = false;
+    let snapType = null;
+    let copyIndex = undefined;
+
+    if (isDragConfirmed && dragPreviewVertices) {
+        const previewVertex = dragPreviewVertices.find(dp => dp && (dp.id === vertex.id || dp.originalId === vertex.id));
+        if (previewVertex) {
+            vertexToRender = previewVertex;
+            copyIndex = previewVertex.transformIndex;
         }
-    } else {
-        isSelected = selectedCenterIds.includes(vertex.id);
     }
 
-    const screenPos = dataToScreen(vertex);
+    if (snappedVertexIds && vertexToRender.originalId && snappedVertexIds.has(vertexToRender.originalId)) {
+         const snapEntries = snappedVertexIds.get(vertexToRender.originalId);
+         const relevantSnap = snapEntries.find(snap => snap.copyIndex === copyIndex);
+         if (relevantSnap) {
+             isSnapped = true;
+             snapType = relevantSnap.type;
+         }
+    } else if (snappedVertexIds && !vertexToRender.originalId && snappedVertexIds.has(vertexToRender.id)) {
+         const snapEntries = snappedVertexIds.get(vertexToRender.id);
+         const relevantSnap = snapEntries.find(snap => snap.copyIndex === copyIndex);
+         if (relevantSnap) {
+             isSnapped = true;
+             snapType = relevantSnap.type;
+         }
+    }
 
-    // --- Draw Base Shape ---
-    switch (vertex.type) {
+
+    let isSelected;
+    if (vertexToRender.type === C.VERTEX_TYPE_REGULAR) {
+        isSelected = selectedVertexIds.includes(vertexToRender.id);
+        if (!verticesVisible && !isSelected && !isHovered && !isSnapped && !(currentAltPressed && isHovered)) {
+            return;
+        }
+    } else {
+        isSelected = selectedCenterIds.includes(vertexToRender.id);
+    }
+
+    const screenPos = dataToScreen(vertexToRender);
+
+    switch (vertexToRender.type) {
         case C.VERTEX_TYPE_REGULAR:
             ctx.beginPath();
             ctx.arc(screenPos.x, screenPos.y, C.VERTEX_RADIUS, 0, C.RADIANS_IN_CIRCLE);
-             // Base color uses snap color if snapped, otherwise assigned or default
-            ctx.fillStyle = isSnapped ? colors.feedbackSnapped : (vertex.color || colors.vertex);
+            ctx.fillStyle = vertexToRender.color || colors.vertex; // Always use assigned/default color
             ctx.fill();
             break;
         case C.TRANSFORMATION_TYPE_ROTATION:
@@ -2804,7 +2803,7 @@ export function drawVertex(ctx, vertex, options, dataToScreen, updateHtmlLabel) 
         case C.TRANSFORMATION_TYPE_DIRECTIONAL_SCALE:
             const onCanvasIconSize = C.CENTER_POINT_VISUAL_RADIUS * 2;
             const icon = {
-                type: vertex.type,
+                type: vertexToRender.type,
                 x: screenPos.x - onCanvasIconSize / 2,
                 y: screenPos.y - onCanvasIconSize / 2,
                 width: onCanvasIconSize,
@@ -2813,11 +2812,13 @@ export function drawVertex(ctx, vertex, options, dataToScreen, updateHtmlLabel) 
             drawUITransformationSymbols(ctx, icon, colors);
             break;
     }
-     // --- END Draw Base Shape ---
 
-    // --- Draw Glow (using the separate function for clarity) ---
-    drawVertexGlowsOnly(ctx, vertex, options, dataToScreen, updateHtmlLabel);
-     // --- END Draw Glow ---
+    const glowOptions = {
+        ...options,
+        isSnapped: isSnapped,
+        snapType: snapType
+    };
+    drawVertexGlowsOnly(ctx, vertexToRender, glowOptions, dataToScreen, updateHtmlLabel);
 }
 
 export function drawAltHoverIndicator(ctx, { altHoverInfo, colors }, dataToScreen, findVertexById, updateHtmlLabel) {

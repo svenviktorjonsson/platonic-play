@@ -149,23 +149,28 @@ export function getGridSnapCandidates(mouseDataPos, gridDisplayMode, gridInterva
 
 export function findAllVertexMerges(sourceVertices, targetVertices, snapRadius) {
     const mergeCandidates = [];
-
-    for (const source of sourceVertices) {
-        for (const target of targetVertices) {
-            // A vertex cannot snap to itself.
-            // This checks if they represent the same original vertex at the same transformation step.
+    for (const source of sourceVertices) { // source.transformIndex is always >= 1
+        for (const target of targetVertices) { // target.transformIndex can be >= 1 or undefined
+            // Prevent snapping a vertex instance to itself in the same copy/state
             if (source.originalId === target.originalId && source.transformIndex === target.transformIndex) {
                 continue;
             }
 
-            const dist = distance(source, target);
+            const dist = U.distance(source, target);
             if (dist < snapRadius) {
+                // Log if one is moving (source always is) and target is static
+                if (target.transformIndex === undefined) {
+                    console.log(`[Snap Log] VV Merge Candidate: Moving V${source.originalId} (copy ${source.transformIndex}) -> Static V${target.originalId}. Dist: ${dist.toFixed(4)}`);
+                } else {
+                    // Optional: Log copy-to-copy snaps if needed, but commented out for now
+                    // console.log(`[Snap Log] VV Merge Candidate: Moving V${source.originalId} (copy ${source.transformIndex}) -> Moving V${target.originalId} (copy ${target.transformIndex}). Dist: ${dist.toFixed(4)}`);
+                }
                 mergeCandidates.push({
-                    dist,
+                    dist: dist,
                     sourceVertex: source,
                     targetVertex: target,
-                    // A target is "static" if it's not a moving copy (i.e., it has no transformIndex or its index is 0).
-                    targetIsStatic: target.transformIndex === undefined || target.transformIndex === 0
+                    correctionVector: { x: target.x - source.x, y: target.y - source.y },
+                    type: 'vertex-vertex'
                 });
             }
         }
@@ -175,33 +180,44 @@ export function findAllVertexMerges(sourceVertices, targetVertices, snapRadius) 
 
 export function findVertexToEdgeSnaps(sourceVertices, targetEdges, snapRadius) {
     const candidates = [];
-    console.log(`[DEBUG-4] findVertexToEdgeSnaps: Checking ${sourceVertices.length} sources against ${targetEdges.length} targets.`);
-
-    for (const sourceVertex of sourceVertices) {
-        for (const targetEdge of targetEdges) {
+    for (const sourceVertex of sourceVertices) { // source.transformIndex can be >= 1 or undefined
+        for (const targetEdge of targetEdges) { // target.transformIndex can be >= 1 or undefined
             if (!targetEdge || !targetEdge.originalEdge || !targetEdge.p1 || !targetEdge.p2) {
                 continue;
             }
-            
-            const isSameInstance = sourceVertex.transformIndex === targetEdge.transformIndex;
-            const isOwnEndpoint = sourceVertex.originalId === targetEdge.originalEdge.id1 || sourceVertex.originalId === targetEdge.originalEdge.id2;
 
-            if (isSameInstance && isOwnEndpoint) {
+            const isOwnEndpoint = sourceVertex.originalId === targetEdge.originalEdge.id1 || sourceVertex.originalId === targetEdge.originalEdge.id2;
+            const isSameInstance = sourceVertex.transformIndex === targetEdge.transformIndex; // Handles undefined comparison correctly
+
+            if (isOwnEndpoint && isSameInstance) {
                 continue;
             }
 
-            const closest = getClosestPointOnLineSegment(sourceVertex, targetEdge.p1, targetEdge.p2);
-            const shouldSnap = closest.distance < snapRadius && closest.onSegmentStrict;
+            const closest = U.getClosestPointOnLineSegment(sourceVertex, targetEdge.p1, targetEdge.p2);
+            const isOnSegmentStrict = closest.t > C.ON_SEGMENT_STRICT_T_MIN && closest.t < C.ON_SEGMENT_STRICT_T_MAX;
+            const shouldSnap = closest.distance < snapRadius && isOnSegmentStrict;
 
             if (shouldSnap) {
-                const edgeId = getEdgeId(targetEdge.originalEdge);
-                console.log(`[DEBUG-5] findVertexToEdgeSnaps: SUCCESS! V:${sourceVertex.originalId} is snapping to E:${edgeId}. Dist: ${closest.distance.toFixed(4)}`);
+                const sourceIsMoving = sourceVertex.transformIndex !== undefined;
+                const targetIsStatic = targetEdge.transformIndex === undefined;
+
+                // Log snaps involving one moving and one static element
+                if (sourceIsMoving && targetIsStatic) {
+                    console.log(`[Snap Log] VE Snap Candidate: Moving V${sourceVertex.originalId} (copy ${sourceVertex.transformIndex}) -> Static E${targetEdge.originalEdgeId}. Dist: ${closest.distance.toFixed(4)}`);
+                } else if (!sourceIsMoving && !targetIsStatic) { // Static Vertex to Moving Edge
+                    console.log(`[Snap Log] EV Snap Candidate: Static V${sourceVertex.originalId} -> Moving E${targetEdge.originalEdgeId} (copy ${targetEdge.transformIndex}). Dist: ${closest.distance.toFixed(4)}`);
+                } else if (sourceIsMoving && !targetIsStatic) {
+                    // Optional: Log copy-to-copy snaps if needed
+                    console.log(`[Snap Log] VE Snap Candidate: Moving V${sourceVertex.originalId} (copy ${sourceVertex.transformIndex}) -> Moving E${targetEdge.originalEdgeId} (copy ${targetEdge.transformIndex}). Dist: ${closest.distance.toFixed(4)}`);
+                }
+
                 candidates.push({
                     dist: closest.distance,
                     sourceVertex: sourceVertex,
                     targetEdge: targetEdge,
                     snapPoint: { x: closest.x, y: closest.y },
-                    snapType: 'vertex-to-edge'
+                    correctionVector: { x: closest.x - sourceVertex.x, y: closest.y - sourceVertex.y },
+                    type: 'vertex-to-edge'
                 });
             }
         }

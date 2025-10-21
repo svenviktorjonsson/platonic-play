@@ -49,20 +49,19 @@ print(f"Output file: {output_filename}")
 # The instructions to be added at the end of the file
 llm_instructions = """
 === LLM Instructions ===
-Now please just read the project and the rules for writing code and just wait for instructions.
+Always explain what you changed exactly and then provide always COMPLETE functions WITHOUT comments or placeholders.
 
-Here are the rules:
-1. DONT write comments, placeholders or docstrings if not explicitely told.
-2. Write functions with the correct initial indentation so that if the function is indented so is your code that you write.
-3. DO NOT USE NON-TERMINATED SPACES. MAKE SURE TO FOLLOW THIS! ITS SUPER IMPORTANT AND YOU SEEM TO BREAK IT, PLEASE!!!
-4. For changes that require multiple replacements please tell me what to replace with what instead of rewriting large portions of text. You can use vscode valid regexp for instance.
-5. For small functions less than 100 lines of code please rewrite the full function. For larger functions please only write complete control statements if/while/case.
-6. Never omit/change working logic if not explicitely statet that it should be removed/change
-7. DONT use the CANVAS TOOL where code is written in artifacts.
-8. Write only functions that are new seperately from functions that needs updates.
-9. Make sure to write what has been change where to place/what to replace for each code snippet.
+For very large functions >200 lines please make sure to write a complete conditional scope a indentation in python or {replace all of this} in javascript.
 
-So only confirm that you have read and then wait for instructions!
+In html you always write the full file since these files are small. For CSS write complete sections.
+
+Always seek confirmation before writing code and write 1-5 functions at the time one in each code block.
+
+For class methods make sure to use 4 extra spaces att the start of each line except the first one ( function name line).
+
+DONT use the Canvas Artifact, only write in codeblocks directly in the chat.
+
+Please just Read this and confirm that you have read and understood the rules, then just wait for instructions!
 """
 
 

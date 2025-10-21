@@ -471,56 +471,53 @@ function updateComponentDrawOrder() {
     componentDrawOrder = newComponentOrder;
 }
 
-function drawComponent(componentVertexIds, colors) {
-    const copyCount = parseInt(copyCountInput || '1', 10);
-    const isDeformingDrag = isDragConfirmed && currentShiftPressed && initialDragVertexStates.length === 1 && initialDragVertexStates[0].type === 'regular';
-    const deformingCopyVertexId = (isDeformingDrag && copyCount > 1) ? initialDragVertexStates[0].id : null;
-
-    let componentFaces = allFaces.filter(f => f.vertexIds.every(id => componentVertexIds.has(id)));
-    if (deformingCopyVertexId) {
-        componentFaces = componentFaces.filter(f => !f.vertexIds.includes(deformingCopyVertexId));
+function drawComponent(componentVertexIds, colors, isDragConfirmed = false, initialDragVertexStates = [], copyCount = 1) {
+    if (isDragConfirmed && initialDragVertexStates.length > 0) {
+        const componentHasDraggedVertex = [...componentVertexIds].some(id =>
+            initialDragVertexStates.some(v => v.id === id)
+        );
+        if (componentHasDraggedVertex) {
+            return;
+        }
     }
+
+    const componentFaces = allFaces.filter(f => f.vertexIds.every(id => componentVertexIds.has(id)));
 
     R.drawFaces(ctx, {
-        allFaces: componentFaces, facesVisible, isDragConfirmed, 
-        dragPreviewVertices, transformIndicatorData, initialDragVertexStates, 
-        colors, initialCoordSystemStates
+        allFaces: componentFaces, facesVisible,
+        isDragConfirmed: false,
+        dragPreviewVertices: [],
+        transformIndicatorData: null, initialDragVertexStates: [],
+        colors, initialCoordSystemStates: new Map()
     }, dataToScreen, findVertexById);
 
-    let componentEdges = allEdges.filter(e => componentVertexIds.has(e.id1) && componentVertexIds.has(e.id2));
-    if (deformingCopyVertexId) {
-        componentEdges = componentEdges.filter(e => e.id1 !== deformingCopyVertexId && e.id2 !== deformingCopyVertexId);
-    }
-    const edgesWithHover = hoveredEdgeId ? [...new Set([...selectedEdgeIds, hoveredEdgeId])] : selectedEdgeIds;
+    const componentEdges = allEdges.filter(e => componentVertexIds.has(e.id1) && componentVertexIds.has(e.id2));
+
     R.drawAllEdges(ctx, {
-        allEdges: componentEdges, selectedEdgeIds: edgesWithHover, isDragConfirmed, 
-        dragPreviewVertices: deformingCopyVertexId ? [] : dragPreviewVertices, 
-        colors, edgesVisible, snappedEdgeIds
+        allEdges: componentEdges, selectedEdgeIds, hoveredEdgeId,
+        isDragConfirmed: false,
+        dragPreviewVertices: [],
+        colors, edgesVisible, snappedEdgeIds, currentAltPressed
     }, dataToScreen, findVertexById, U.getEdgeId);
 
     const componentVertices = allVertices.filter(v => componentVertexIds.has(v.id));
     componentVertices.forEach(vertex => {
-        if (deformingCopyVertexId && vertex.id === deformingCopyVertexId) {
-            return;
-        }
-
-        let vertexToDraw = { ...vertex };
-        if (isDragConfirmed && dragPreviewVertices.length > 0) {
-            const preview = dragPreviewVertices.find(dp => dp.id === vertex.id);
-            if (preview) vertexToDraw = { ...preview };
-        }
-
         let isSnapped = false;
-        if (snappedVertexIds.has(vertex.id)) {
-            const snapEntries = snappedVertexIds.get(vertex.id);
-            if (snapEntries.some(snap => snap.copyIndex === undefined || snap.copyIndex === 0)) {
-                isSnapped = true;
-            }
-        }
+         if (snappedVertexIds.has(vertex.id)) {
+             const snapEntries = snappedVertexIds.get(vertex.id);
+             if (snapEntries.some(snap => snap.copyIndex === undefined)) {
+                 isSnapped = true;
+             }
+         }
 
-        R.drawVertex(ctx, vertexToDraw, { 
-            selectedVertexIds, selectedCenterIds, activeCenterId, colors, 
-            verticesVisible, isHovered: hoveredVertexId === vertex.id, isSnapped: isSnapped 
+        R.drawVertex(ctx, vertex, {
+            selectedVertexIds, selectedCenterIds, activeCenterId, colors,
+            verticesVisible, isHovered: hoveredVertexId === vertex.id,
+            isSnapped: isSnapped,
+            snappedVertexIds,
+            isDragConfirmed: false,
+            dragPreviewVertices: [],
+            currentAltPressed
         }, dataToScreen, updateHtmlLabel);
     });
 }
@@ -2209,7 +2206,7 @@ function insertVertexOnEdgeWithFaces(targetEdge, insertionVertex, gridInterval, 
 function getBestRotateScaleSnap(center, initialVertexStates, handleVertex, rawRotation, rawScale) {
     const mouseDataPos = U.applyTransformToVertex(handleVertex, center, rawRotation, rawScale, false, null);
     const startVector = { x: handleVertex.x - center.x, y: handleVertex.y - center.y };
-    const snapRadius = C.MERGE_RADIUS_SCREEN / viewTransform.scale;
+    const snapRadius = 2 * C.VERTEX_RADIUS / viewTransform.scale;
     const verticesToTransform = initialVertexStates.filter(p => p.type === 'regular');
 
     // --- 1. Check for an overriding Merge Snap ---
@@ -2295,7 +2292,7 @@ function getBestRotationSnap(center, initialVertexStates, handleVertex, rawRotat
     const copyCount = parseInt(copyCountInput || '1', 10);
     let allPossibleSnaps = [];
     const handleRadius = Math.hypot(handleVertex.x - center.x, handleVertex.y - center.y);
-    const snapRadius = C.MERGE_RADIUS_SCREEN / viewTransform.scale;
+    const snapRadius = 2 * C.VERTEX_RADIUS / viewTransform.scale;
 
     const verticesToTransform = initialVertexStates.filter(p => p.type === 'regular');
     const staticVertices = allVertices.filter(p => p.type === 'regular' && !initialVertexStates.some(ip => ip.id === p.id));
@@ -2393,7 +2390,7 @@ function getBestRotationSnap(center, initialVertexStates, handleVertex, rawRotat
 
 function getBestScaleSnap(center, initialVertexStates, handleVertex, rawScale) {
     const mouseCursorDataPos = screenToData(mousePos);
-    const snapRadius = C.MERGE_RADIUS_SCREEN / viewTransform.scale;
+    const snapRadius = 2 * C.VERTEX_RADIUS / viewTransform.scale;
     const verticesToTransform = initialVertexStates.filter(p => p.type === 'regular');
     
     // --- 1. Check for an overriding Merge Snap ---
@@ -2481,7 +2478,7 @@ function getBestScaleSnap(center, initialVertexStates, handleVertex, rawScale) {
 
 function getBestDirectionalScaleSnap(center, initialVertexStates, handleVertex, rawScale, startVector, mouseCursorDataPos) {
     let allPossibleSnaps = [];
-    const snapRadius = C.MERGE_RADIUS_SCREEN / viewTransform.scale;
+    const snapRadius = 2 * C.VERTEX_RADIUS / viewTransform.scale;
     const verticesToTransform = initialVertexStates.filter(p => p.type === 'regular');
 
     // --- 1. Check for an overriding Merge Snap ---
@@ -2570,38 +2567,80 @@ function drawEnvironment(colors) {
 }
 
 function drawMainGeometry(colors) {
-    const copyCount = parseInt(copyCountInput || '1', 10);
-    const isDeformingDrag = isDragConfirmed && currentShiftPressed && initialDragVertexStates.length === 1 && initialDragVertexStates[0].type === 'regular';
-    const isRigidDrag = isDragConfirmed && !isDeformingDrag;
-    const rigidDragVertexIds = isRigidDrag ? new Set(initialDragVertexStates.map(v => v.id)) : new Set();
-    const deformingCopyVertexId = (isDeformingDrag && copyCount > 1) ? initialDragVertexStates[0].id : null;
+    const isDeformingDrag = isDragConfirmed && initialDragVertexStates.length === 1 && !transformIndicatorData && initialDragVertexStates[0].type === 'regular';
 
+    // Draw ONLY static components (those NOT being dragged)
     componentDrawOrder.forEach(componentVertexIds => {
-        if (isRigidDrag && [...componentVertexIds].every(id => rigidDragVertexIds.has(id))) {
-            return;
+        const isDraggedComponent = isDragConfirmed && initialDragVertexStates.length > 0 &&
+            [...componentVertexIds].some(id =>
+                initialDragVertexStates.some(v => v.id === id)
+            );
+
+        // If the component IS NOT being dragged, draw it.
+        if (!isDraggedComponent) {
+             drawComponent(componentVertexIds, colors, false, [], 0);
         }
-        drawComponent(componentVertexIds, colors);
+        // If it IS being dragged, the preview function will handle drawing it entirely.
     });
 
-    allVertices.forEach(vertex => {
-        if (vertex.type !== 'regular') {
-            let vertexToDraw = { ...vertex };
-            if (isDragConfirmed && dragPreviewVertices.length > 0) {
-                const preview = dragPreviewVertices.find(dp => dp.id === vertex.id);
-                if (preview) vertexToDraw = { ...preview };
-            }
-            R.drawVertex(ctx, vertexToDraw, { 
-                selectedVertexIds, selectedCenterIds, activeCenterId, colors, 
-                verticesVisible, isHovered: hoveredVertexId === vertex.id, isSnapped: false 
-            }, dataToScreen, updateHtmlLabel);
-        }
-    });
+    // Draw non-regular vertices (centers) - potentially transformed
+     allVertices.forEach(vertex => {
+         if (vertex.type !== 'regular') {
+             const isDraggedCenter = isDragConfirmed && initialDragVertexStates.some(v => v.id === vertex.id);
+             // Skip drawing static center if it's part of a rigid drag (previews handle it)
+             if (isDraggedCenter && !isDeformingDrag) {
+                 return;
+             }
 
-    if (deformingCopyVertexId) {
-        R.drawDeformingDragPreviewFaces(ctx, { copyCount, initialDragVertexStates, dragPreviewVertices, allFaces, findVertexById, colors }, dataToScreen);
-        R.drawDeformingDragPreviewEdgesAndVertices(ctx, { copyCount, initialDragVertexStates, dragPreviewVertices, allEdges, findVertexById, findNeighbors: (id) => U.findNeighbors(id, allEdges), colors }, dataToScreen);
-    } else if (isRigidDrag) {
-        R.drawDragPreviews(ctx, { copyCount, isDragConfirmed, initialDragVertexStates, dragPreviewVertices, transformIndicatorData, allEdges, allFaces, findVertexById, findNeighbors: (id) => U.findNeighbors(id, allEdges), colors, snappedEdgesInfo: snappedEdgeIds, snappedVertexIds }, dataToScreen);
+             let vertexToDraw = vertex;
+             let isSnapped = false;
+             let copyIndexForSnapCheck = isDraggedCenter ? 0 : undefined; // Index 0 for dragged center preview
+
+             // Find the preview position ONLY for rigid drags (handled by drawRigidDragPreview)
+             if (isDraggedCenter && !isDeformingDrag && dragPreviewVertices.length > 0) {
+                 const preview = dragPreviewVertices.find(dp => dp && dp.originalId === vertex.id && dp.transformIndex === 0);
+                  if (preview) {
+                      vertexToDraw = preview; // Use preview position for drawing
+                  }
+             }
+
+             if (snappedVertexIds) {
+                 const idToCheck = vertex.originalId || vertex.id;
+                 if (snappedVertexIds.has(idToCheck)) {
+                     const snapEntries = snappedVertexIds.get(idToCheck);
+                     const relevantSnap = snapEntries.find(snap => snap.copyIndex === copyIndexForSnapCheck);
+                     if (relevantSnap) {
+                         isSnapped = true;
+                     }
+                 }
+             }
+
+             const centerOptions = {
+                 selectedVertexIds: [], selectedCenterIds, activeCenterId, colors,
+                 verticesVisible: true, isHovered: hoveredVertexId === vertex.id && !currentAltPressed,
+                 isSnapped: isSnapped, snappedVertexIds,
+                 isDragConfirmed, dragPreviewVertices, currentAltPressed
+             };
+             R.drawVertex(ctx, vertexToDraw, centerOptions, dataToScreen, updateHtmlLabel);
+         }
+     });
+
+
+    // --- Call the appropriate preview function ---
+    if (isDragConfirmed) {
+        const copyCount = parseInt(copyCountInput || '1', 10);
+        const params = {
+             copyCount, isDragConfirmed, initialDragVertexStates, dragPreviewVertices, transformIndicatorData,
+             allEdges, allFaces, findVertexById, findNeighbors: (id) => U.findNeighbors(id, allEdges), colors,
+             snappedEdgesInfo: snappedEdgeIds,
+             snappedVertexIds
+         };
+
+        if (isDeformingDrag) {
+            R.drawDeformingDragPreview(ctx, params, dataToScreen);
+        } else {
+            R.drawRigidDragPreview(ctx, params, dataToScreen);
+        }
     }
 }
 
@@ -2625,37 +2664,12 @@ function redrawAll() {
 
     const axisFormatInfo = drawEnvironment(colors);
 
-    componentDrawOrder.forEach(componentVertexIds => {
-        const isDraggedComponent = isDragConfirmed && [...componentVertexIds].every(id => initialDragVertexStates.some(v => v.id === id));
-        if (isDraggedComponent) return;
-
-        const componentFaces = allFaces.filter(f => f.vertexIds.every(id => componentVertexIds.has(id)));
-        R.drawFaces(ctx, { allFaces: componentFaces, facesVisible, isDragConfirmed: false, dragPreviewVertices: [], transformIndicatorData: null, initialDragVertexStates: [], colors, initialCoordSystemStates: new Map() }, dataToScreen, findVertexById);
-
-        const componentEdges = allEdges.filter(e => componentVertexIds.has(e.id1) && componentVertexIds.has(e.id2));
-        R.drawAllEdges(ctx, { allEdges: componentEdges, selectedEdgeIds, hoveredEdgeId, isDragConfirmed: false, dragPreviewVertices: [], colors, edgesVisible, snappedEdgeIds, currentAltPressed }, dataToScreen, findVertexById, U.getEdgeId);
-    });
-
-    if (isDragConfirmed && dragPreviewVertices.length > 0) {
-        const copyCount = parseInt(copyCountInput || '1', 10);
-        const paramsForPreview = {
-             copyCount, isDragConfirmed, initialDragVertexStates, dragPreviewVertices, transformIndicatorData,
-             allEdges, allFaces, findVertexById, findNeighbors: (id) => U.findNeighbors(id, allEdges), colors, snappedEdgesInfo: snappedEdgeIds, snappedVertexIds
-        };
-        R.drawDragPreviews(ctx, paramsForPreview, dataToScreen);
-    }
+    drawMainGeometry(colors); // Call the dedicated function
 
     R.drawFaceGlows(ctx, { allFaces, hoveredFaceId, selectedFaceIds, colors, isDragConfirmed, dragPreviewVertices, currentAltPressed }, dataToScreen, findVertexById, U.getFaceId);
     if (selectedFaceIds.length > 0) {
-         R.drawFaceCoordinateSystems(ctx, { allFaces, selectedFaceIds, colors, isDragConfirmed, dragPreviewVertices, initialDragVertexStates, transformIndicatorData, highlightedEdgeForSnap, draggedFaceId, coordSystemSnapAngle, coordSystemSnapType, coordSystemSnapScale, initialCoordSystemStates }, dataToScreen, findVertexById);
+        R.drawFaceCoordinateSystems(ctx, { allFaces, selectedFaceIds, colors, isDragConfirmed, dragPreviewVertices, initialDragVertexStates, transformIndicatorData, highlightedEdgeForSnap, draggedFaceId, coordSystemSnapAngle, coordSystemSnapType, coordSystemSnapScale, initialCoordSystemStates }, dataToScreen, findVertexById);
     }
-
-    allVertices.forEach(vertex => {
-        if (isDragConfirmed && initialDragVertexStates.some(v => v.id === vertex.id)) return;
-
-        let isSnapped = snappedVertexIds.has(vertex.id) && (snappedVertexIds.get(vertex.id).some(snap => snap.copyIndex === undefined));
-        R.drawVertex(ctx, vertex, { selectedVertexIds, selectedCenterIds, activeCenterId, colors, verticesVisible, isHovered: hoveredVertexId === vertex.id, isSnapped, currentAltPressed }, dataToScreen, updateHtmlLabel);
-    });
 
     drawFeedbackAndIndicators(colors);
     R.drawAltHoverIndicator(ctx, { altHoverInfo, colors }, dataToScreen, findVertexById, updateHtmlLabel);
@@ -4247,12 +4261,22 @@ function getFinalDragPositions(initialDragVertexStates, allVertices, finalDelta,
 
 function finalizeDragAction() {
     saveStateForUndo();
-    const copyCount = parseInt(copyCountInput, 10) || 1;
-    let lastCopySelectionIds = null;
 
-    const isDeformingEdgeSnap = isDragConfirmed && 
-                              initialDragVertexStates.length === 1 && 
-                              actionContext?.finalSnapResult?.snapType === 'edge';
+    const initiallySelectedVertexIds = [...selectedVertexIds];
+    const initiallySelectedEdgeIds = [...selectedEdgeIds];
+    const initiallySelectedFaceIds = [...selectedFaceIds];
+    selectedVertexIds = [];
+    selectedEdgeIds = [];
+    selectedFaceIds = [];
+    selectedCenterIds = [];
+    activeCenterId = null;
+
+    const copyCount = parseInt(copyCountInput, 10) || 1;
+    let firstCopySelectionIds = null;
+
+    const isDeformingEdgeSnap = isDragConfirmed &&
+        initialDragVertexStates.length === 1 &&
+        actionContext?.finalSnapResult?.snapType === 'edge';
 
     if (isDeformingEdgeSnap) {
         const snapResult = actionContext.finalSnapResult;
@@ -4264,24 +4288,19 @@ function finalizeDragAction() {
             const edgesBefore = JSON.parse(JSON.stringify(allEdges));
             const gridInterval = (lastGridState.alpha2 > lastGridState.alpha1 && lastGridState.interval2) ? lastGridState.interval2 : lastGridState.interval1;
 
-            // 1. Move the dragged vertex to the snap point.
             vertexToUpdate.x = snapResult.pos.x;
             vertexToUpdate.y = snapResult.pos.y;
 
-            // 2. Remove the old edge that was split.
             allEdges = allEdges.filter(e => U.getEdgeId(e) !== U.getEdgeId(targetEdge));
 
-            // 3. Create two new edges from the old edge's endpoints to the moved vertex.
             const p1 = findVertexById(targetEdge.id1);
             const p2 = findVertexById(targetEdge.id2);
             allEdges.push(U.createEdge(p1, vertexToUpdate, gridInterval, getColorForTarget));
             allEdges.push(U.createEdge(p2, vertexToUpdate, gridInterval, getColorForTarget));
 
-            // 4. Update face geometry.
             updateFaces(edgesBefore, allEdges);
         }
     } else {
-        // This is the existing, working logic for all other drag types.
         if (transformIndicatorData) {
             const { center, rotation, scale, directionalScale, startPos } = transformIndicatorData;
             const startVector = { x: startPos.x - center.x, y: startPos.y - center.y };
@@ -4303,87 +4322,75 @@ function finalizeDragAction() {
 
             const verticesToCopy = initialDragVertexStates.filter(p => p.type === 'regular');
             if (copyCount > 1 && verticesToCopy.length > 0) {
-            const originalIds = new Set(verticesToCopy.map(p => p.id));
-            const edgesToCopy = allEdges.filter(e => originalIds.has(e.id1) && originalIds.has(e.id2));
-            const facesToCopy = allFaces.filter(f => f.vertexIds.every(id => originalIds.has(id)));
+                const originalIds = new Set(verticesToCopy.map(p => p.id));
+                const edgesToCopy = allEdges.filter(e => originalIds.has(e.id1) && originalIds.has(e.id2));
+                const facesToCopy = allFaces.filter(f => f.vertexIds.every(id => originalIds.has(id)));
+                const boundaryEdges = allEdges.filter(e =>
+                    (originalIds.has(e.id1) && !originalIds.has(e.id2)) ||
+                    (originalIds.has(e.id2) && !originalIds.has(e.id1))
+                );
+                const allNewVertices = [];
+                const allNewEdges = [];
+                const allNewFaces = [];
+                firstCopySelectionIds = { vertices: [], edges: [], faces: [] };
 
-            // Find edges connecting the selection to static geometry
-            const boundaryEdges = allEdges.filter(e =>
-                (originalIds.has(e.id1) && !originalIds.has(e.id2)) ||
-                (originalIds.has(e.id2) && !originalIds.has(e.id1))
-            );
+                for (let i = 1; i < copyCount; i++) {
+                    const newIdMapForThisCopy = new Map();
+                    const currentCopyVertices = [];
+                    const currentCopyEdges = [];
+                    const currentCopyFaces = [];
 
-            const allNewVertices = [];
-            const allNewEdges = [];
-            const allNewFaces = [];
-            lastCopySelectionIds = { vertices: [], edges: [], faces: [] };
-
-            for (let i = 1; i < copyCount; i++) {
-                const newIdMapForThisCopy = new Map();
-                const currentCopyVertices = [];
-                const currentCopyEdges = [];
-                const currentCopyFaces = [];
-
-                // 1. Create new vertices for this copy
-                verticesToCopy.forEach(p => {
-                    const newPos = { x: p.x + finalDelta.x * i, y: p.y + finalDelta.y * i };
-                    const newVertex = { ...p, ...newPos, id: U.generateUniqueId() };
-                    allNewVertices.push(newVertex);
-                    newIdMapForThisCopy.set(p.id, newVertex.id);
-                    currentCopyVertices.push(newVertex.id);
-                });
-
-                // 2. Create new internal edges for this copy
-                edgesToCopy.forEach(edge => {
-                    const newId1 = newIdMapForThisCopy.get(edge.id1);
-                    const newId2 = newIdMapForThisCopy.get(edge.id2);
-                    if (newId1 && newId2) {
-                        const newEdge = { ...edge, id1: newId1, id2: newId2 };
-                        allNewEdges.push(newEdge);
-                        currentCopyEdges.push(U.getEdgeId(newEdge));
-                    }
-                });
-
-                // 3. Create new boundary edges for this copy
-                boundaryEdges.forEach(edge => {
-                    const staticVertexId = originalIds.has(edge.id1) ? edge.id2 : edge.id1;
-                    const originalDraggedVertexId = originalIds.has(edge.id1) ? edge.id1 : edge.id2;
-                    const newDraggedVertexId = newIdMapForThisCopy.get(originalDraggedVertexId);
-                    
-                    if (newDraggedVertexId) {
-                        const newEdge = { ...edge, id1: newDraggedVertexId, id2: staticVertexId };
-                        allNewEdges.push(newEdge);
-                    }
-                });
-
-                // 4. Create new faces for this copy
-                facesToCopy.forEach(originalFace => {
-                    const initialSystemForCopy = initialCoordSystemStates.get(originalFace.id);
-                    const newVertexIds = originalFace.vertexIds.map(id => newIdMapForThisCopy.get(id));
-                    if (newVertexIds.every(Boolean)) {
-                        const newFace = JSON.parse(JSON.stringify(originalFace));
-                        newFace.id = U.getFaceId({ vertexIds: newVertexIds });
-                        newFace.vertexIds = newVertexIds;
-                        if (newFace.localCoordSystem && initialSystemForCopy) {
-                            const delta = { x: finalDelta.x * i, y: finalDelta.y * i };
-                            newFace.localCoordSystem.origin.x = initialSystemForCopy.origin.x + delta.x;
-                            newFace.localCoordSystem.origin.y = initialSystemForCopy.origin.y + delta.y;
+                    verticesToCopy.forEach(p => {
+                        const newPos = { x: p.x + finalDelta.x * i, y: p.y + finalDelta.y * i };
+                        const newVertex = { ...p, ...newPos, id: U.generateUniqueId() };
+                        allNewVertices.push(newVertex);
+                        newIdMapForThisCopy.set(p.id, newVertex.id);
+                        currentCopyVertices.push(newVertex.id);
+                    });
+                    edgesToCopy.forEach(edge => {
+                        const newId1 = newIdMapForThisCopy.get(edge.id1);
+                        const newId2 = newIdMapForThisCopy.get(edge.id2);
+                        if (newId1 && newId2) {
+                            const newEdge = { ...edge, id1: newId1, id2: newId2 };
+                            allNewEdges.push(newEdge);
+                            currentCopyEdges.push(U.getEdgeId(newEdge));
                         }
-                        allNewFaces.push(newFace);
-                        currentCopyFaces.push(newFace.id);
+                    });
+                    boundaryEdges.forEach(edge => {
+                        const staticVertexId = originalIds.has(edge.id1) ? edge.id2 : edge.id1;
+                        const originalDraggedVertexId = originalIds.has(edge.id1) ? edge.id1 : edge.id2;
+                        const newDraggedVertexId = newIdMapForThisCopy.get(originalDraggedVertexId);
+                        if (newDraggedVertexId) {
+                            const newEdge = { ...edge, id1: newDraggedVertexId, id2: staticVertexId };
+                            allNewEdges.push(newEdge);
+                        }
+                    });
+                    facesToCopy.forEach(originalFace => {
+                        const initialSystemForCopy = initialCoordSystemStates.get(originalFace.id);
+                        const newVertexIds = originalFace.vertexIds.map(id => newIdMapForThisCopy.get(id));
+                        if (newVertexIds.every(Boolean)) {
+                            const newFace = JSON.parse(JSON.stringify(originalFace));
+                            newFace.id = U.getFaceId({ vertexIds: newVertexIds });
+                            newFace.vertexIds = newVertexIds;
+                            if (newFace.localCoordSystem && initialSystemForCopy) {
+                                const delta = { x: finalDelta.x * i, y: finalDelta.y * i };
+                                newFace.localCoordSystem.origin.x = initialSystemForCopy.origin.x + delta.x;
+                                newFace.localCoordSystem.origin.y = initialSystemForCopy.origin.y + delta.y;
+                            }
+                            allNewFaces.push(newFace);
+                            currentCopyFaces.push(newFace.id);
+                        }
+                    });
+
+                    if (i === 1) {
+                        firstCopySelectionIds = { vertices: currentCopyVertices, edges: currentCopyEdges, faces: currentCopyFaces };
                     }
-                });
-
-                if (i === copyCount - 1) {
-                    lastCopySelectionIds = { vertices: currentCopyVertices, edges: currentCopyEdges, faces: currentCopyFaces };
                 }
-            }
-            allVertices.push(...allNewVertices);
-            allEdges.push(...allNewEdges);
-            allFaces.push(...allNewFaces);
-        }
+                allVertices.push(...allNewVertices);
+                allEdges.push(...allNewEdges);
+                allFaces.push(...allNewFaces);
 
-            if (copyCount === 1) {
+            } else if (copyCount === 1) {
                 initialDragVertexStates.forEach(originalVertexState => {
                     const vertexToUpdate = findVertexById(originalVertexState.id);
                     if (vertexToUpdate) {
@@ -4436,6 +4443,8 @@ function finalizeDragAction() {
         });
     }
 
+    updateAffectedEdgeProperties(Array.from(verticesThatMoved), transformIndicatorData);
+
     const { vertexMerges, edgeSplits } = calculateFinalMerges(allVertices, allEdges, viewTransform);
     const parent = new Map();
     allVertices.forEach(p => parent.set(p.id, p.id));
@@ -4454,7 +4463,9 @@ function finalizeDragAction() {
     const verticesToDelete = new Set();
     allVertices.forEach(p => {
         const rootId = findRoot(p.id);
-        if (p.id !== rootId) verticesToDelete.add(p.id);
+        if (p.id !== rootId) {
+            verticesToDelete.add(p.id);
+        }
     });
 
     if (verticesToDelete.size > 0 || edgeSplits.size > 0) {
@@ -4481,12 +4492,21 @@ function finalizeDragAction() {
         ensureFaceCoordinateSystems();
     }
 
-    if (copyCount > 1 && lastCopySelectionIds) {
-        selectedVertexIds = lastCopySelectionIds.vertices;
-        selectedEdgeIds = lastCopySelectionIds.edges;
-        selectedFaceIds = lastCopySelectionIds.faces;
+    // --- Restore selection AT THE END based on initial selection type ---
+    if (copyCount > 1 && firstCopySelectionIds) {
+        selectedVertexIds = initiallySelectedVertexIds.length > 0 ? firstCopySelectionIds.vertices.map(id => findRoot(id)) : [];
+        selectedEdgeIds = initiallySelectedEdgeIds.length > 0 ? firstCopySelectionIds.edges : [];
+        selectedFaceIds = initiallySelectedFaceIds.length > 0 ? firstCopySelectionIds.faces : [];
         selectedCenterIds = [];
+        activeCenterId = null;
+    } else if (copyCount === 1) {
+        selectedVertexIds = initiallySelectedVertexIds.map(id => findRoot(id));
+        selectedEdgeIds = initiallySelectedEdgeIds;
+        selectedFaceIds = initiallySelectedFaceIds;
+        selectedCenterIds = selectedCenterIds.map(id => findRoot(id));
+        activeCenterId = activeCenterId ? findRoot(activeCenterId) : null;
     }
+    // --- End selection logic ---
 
     updateFaceHierarchy();
     updateComponentDrawOrder();
@@ -5470,61 +5490,50 @@ function handleTranslationDragSnapVisualization(finalDelta, snapResult) {
     snappedVertexIds.clear();
     snappedEdgeIds.clear();
 
-    if (!snapResult.snapped) return;
+    if (!snapResult || !snapResult.snapped) return;
 
-    const getSnapType = (source, target) => {
-        if (target && target.transformIndex === -1) {
-            return 'external_to_original';
+    const addSnapIndicator = (map, originalId, transformIndex, type) => {
+        // transformIndex: 0..N-1 for copies, undefined for static, -1 for original selection ref target
+        if (originalId === undefined) return;
+
+        let visualizationCopyIndex;
+        if (transformIndex === undefined) {
+            visualizationCopyIndex = undefined; // Static element
+        } else if (transformIndex === -1) {
+            visualizationCopyIndex = 0; // Original element acts as target (drawn at index 0)
+        } else if (transformIndex >= 0) {
+            visualizationCopyIndex = transformIndex; // Direct mapping: 0 -> 0, 1 -> 1, etc.
+        } else {
+            return; // Invalid index
         }
-        if (target && target.transformIndex === undefined) {
-            return 'external_to_static';
+
+        // Add indicator only if it's for a valid drawing index (0 to N-1 or undefined for static)
+        if (visualizationCopyIndex === undefined || visualizationCopyIndex >= 0) {
+             if (!map.has(originalId)) {
+                 map.set(originalId, []);
+             }
+             if (!map.get(originalId).some(s => s.copyIndex === visualizationCopyIndex && s.type === type)) {
+                  map.get(originalId).push({ copyIndex: visualizationCopyIndex, type });
+             }
         }
-        return 'internal';
     };
 
-    const addSnappedVertex = (vertex, type) => {
-        if (!vertex || vertex.originalId === undefined) return;
-        
-        if (!snappedVertexIds.has(vertex.originalId)) {
-            snappedVertexIds.set(vertex.originalId, []);
-        }
-        
-        snappedVertexIds.get(vertex.originalId).push({ 
-            copyIndex: vertex.transformIndex, 
-            type: type 
-        });
-    };
-
+    // Iterate through ALL final merge pairs reported by snapResult
     snapResult.mergePairs.forEach(pair => {
-        const sourceType = getSnapType(pair.source, pair.target);
-        const targetType = getSnapType(pair.target, pair.source);
-        addSnappedVertex(pair.source, sourceType);
-        addSnappedVertex(pair.target, targetType);
+        addSnapIndicator(snappedVertexIds, pair.source.originalId, pair.source.transformIndex, 'vertex');
+        addSnapIndicator(snappedVertexIds, pair.target.originalId, pair.target.transformIndex, 'vertex');
     });
 
+    // Iterate through ALL final edge snaps reported by snapResult
     snapResult.edgeSnaps.forEach(({ sourceVertex, targetEdge }) => {
-        const snapType = getSnapType(sourceVertex, targetEdge);
-
-        if (sourceVertex) {
-            addSnappedVertex(sourceVertex, snapType);
-        }
-
-        if (targetEdge && targetEdge.originalEdgeId) {
-            const edgeId = targetEdge.originalEdgeId;
-            if (!snappedEdgeIds.has(edgeId)) {
-                snappedEdgeIds.set(edgeId, []);
-            }
-            snappedEdgeIds.get(edgeId).push({
-                copyIndex: targetEdge.transformIndex,
-                type: snapType
-            });
-        }
+        addSnapIndicator(snappedVertexIds, sourceVertex.originalId, sourceVertex.transformIndex, 'edge');
+        addSnapIndicator(snappedEdgeIds, targetEdge.originalEdgeId, targetEdge.transformIndex, 'vertex_on_edge');
     });
 }
 
 
 function calculateFinalMerges(allFinalVertices, allEdges, viewTransform) {
-    const mergeRadius = C.MERGE_RADIUS_SCREEN / viewTransform.scale;
+    const mergeRadius = 2 * C.VERTEX_RADIUS / viewTransform.scale;
     const vertexMerges = new Map();
     const edgeSplits = new Map();
     const parent = new Map();

@@ -63,30 +63,42 @@ export function getGeneralSnapResult(
     rawTransform,
     applyTransform
 ) {
-    const snapRadius = C.MERGE_RADIUS_SCREEN / viewTransform.scale;
-    const verticesToDrag = initialDragVertexStates.filter(p => p.type === 'regular');
-    if (verticesToDrag.length === 0) {
+    const vvSnapRadius = (C.VERTEX_RADIUS * 2) / viewTransform.scale;
+    const veSnapRadius = C.VERTEX_RADIUS / viewTransform.scale;
+
+    const regularTypeString = String(C.VERTEX_TYPE_REGULAR).trim();
+    const verticesToDrag = initialDragVertexStates.filter(p => {
+        const vertexTypeString = p && p.type ? String(p.type).trim() : 'undefined';
+        return vertexTypeString === regularTypeString;
+    });
+
+    if (verticesToDrag.length === 0 || copyCount <= 0) {
         return { snapped: false, finalTransform: rawTransform, mergePairs: [], edgeSnaps: [] };
     }
 
     const initialDraggedIds = new Set(initialDragVertexStates.map(p => p.id));
 
-    // --- THIS BLOCK IS THE PRIMARY FIX ---
-    // It now correctly generates moving instances for both single (copyCount=1)
-    // and multi-copy (copyCount > 1) drags.
     const rawMovingVertices = [];
-    const numMovingInstances = copyCount > 1 ? copyCount - 1 : 1;
-    for (let i = 0; i < numMovingInstances; i++) {
-        const positionMultiplier = copyCount > 1 ? i + 1 : 1;
-        const transformIndex = i; // 1x copy -> 0, 2x copy -> 1, etc.
+    // This loop effectively runs 1 to N-1 (or just 1 if N=1) due to the increment line
+    for (let i = 0; i < copyCount; i++) {
+        i += copyCount == 1; // Added line
+
+        // Check condition again after potential increment
+        if (i >= copyCount) break; // Break needed if increment makes 'i' invalid for this iteration
+
+        const positionMultiplier = i;
+        const transformIndex = i;
+
         verticesToDrag.forEach(p_orig => {
             rawMovingVertices.push({
-                ...applyTransform(p_orig, positionMultiplier),
+                ...applyTransform(p_orig, positionMultiplier, rawTransform),
                 originalId: p_orig.id,
-                transformIndex: transformIndex
+                transformIndex: transformIndex,
+                type: 'regular'
             });
         });
     }
+
 
     const staticVertices = allVertices
         .filter(p => p.type === 'regular' && !initialDraggedIds.has(p.id))
@@ -95,35 +107,41 @@ export function getGeneralSnapResult(
     const originalMovingEdges = allEdges.filter(e => initialDraggedIds.has(e.id1) && initialDraggedIds.has(e.id2));
 
     const rawMovingEdges = [];
-    for (let i = 0; i < numMovingInstances; i++) {
-        const currentCopyVertices = rawMovingVertices.filter(v => v.transformIndex === i);
-        originalMovingEdges.forEach(edge => {
-            const p1Copy = currentCopyVertices.find(v => v.originalId === edge.id1);
-            const p2Copy = currentCopyVertices.find(v => v.originalId === edge.id2);
-            if (p1Copy && p2Copy) {
-                rawMovingEdges.push({ p1: p1Copy, p2: p2Copy, originalEdge: edge, transformIndex: i });
-            }
-        });
+     // This loop effectively runs 1 to N-1 (or just 1 if N=1)
+     for (let i = 0; i < copyCount; i++) {
+        i += copyCount == 1; // Added line
+        if (i >= copyCount) break; // Break needed
+
+        const transformIndex = i;
+
+        const currentCopyVertices = rawMovingVertices.filter(v => v.transformIndex === transformIndex);
+        // Add check if currentCopyVertices is empty (can happen if loop was skipped/broken early)
+        if (currentCopyVertices.length > 0) {
+            originalMovingEdges.forEach(edge => {
+                const p1Copy = currentCopyVertices.find(v => v.originalId === edge.id1);
+                const p2Copy = currentCopyVertices.find(v => v.originalId === edge.id2);
+                if (p1Copy && p2Copy) {
+                    rawMovingEdges.push({ p1: p1Copy, p2: p2Copy, originalEdge: edge, transformIndex: transformIndex, originalEdgeId: U.getEdgeId(edge) });
+                }
+            });
+        }
     }
 
     const staticEdges = allEdges
         .filter(e => !initialDraggedIds.has(e.id1) || !initialDraggedIds.has(e.id2))
-        .map(edge => ({ p1: findVertexById(edge.id1), p2: findVertexById(edge.id2), originalEdge: edge, transformIndex: undefined }))
+        .map(edge => ({ p1: findVertexById(edge.id1), p2: findVertexById(edge.id2), originalEdge: edge, transformIndex: undefined, originalEdgeId: U.getEdgeId(edge) }))
         .filter(e => e.p1 && e.p2);
 
-    let allTargetVertices = staticVertices;
-    let allTargetEdges = staticEdges;
+    // Targets now only include static (undefined) and copies (1..N-1 or just 1)
+    const allTargetVertices = [...staticVertices, ...rawMovingVertices];
+    const allTargetEdges = [...staticEdges, ...rawMovingEdges];
 
-    if (copyCount > 1) {
-        const originalSelectionAsTargets = verticesToDrag.map(v => ({...v, originalId: v.id, transformIndex: -1 }));
-        allTargetVertices = [...staticVertices, ...originalSelectionAsTargets];
-        const originalEdgesAsTargets = originalMovingEdges.map(e=>({p1:findVertexById(e.id1), p2:findVertexById(e.id2), originalEdge: e, transformIndex: -1}));
-        allTargetEdges = [...staticEdges, ...originalEdgesAsTargets];
-    }
+    // Check moving copies (1..N-1 or just 1) against all targets
+    const vvCandidates = findAllVertexMerges(rawMovingVertices, allTargetVertices, vvSnapRadius);
+    const veCandidates = findVertexToEdgeSnaps(rawMovingVertices, allTargetEdges, veSnapRadius);
+    // Check static vertices (undefined) against moving edges (1..N-1 or just 1)
+    const inverseEVCandidates = findVertexToEdgeSnaps(staticVertices, rawMovingEdges, veSnapRadius);
 
-    const vvCandidates = findAllVertexMerges(rawMovingVertices, allTargetVertices, snapRadius);
-    const veCandidates = findVertexToEdgeSnaps(rawMovingVertices, allTargetEdges, snapRadius);
-    const inverseEVCandidates = findVertexToEdgeSnaps(allTargetVertices, rawMovingEdges, snapRadius);
     const evCandidates = inverseEVCandidates.map(c => ({
         dist: c.dist,
         sourceEdge: c.targetEdge,
@@ -131,7 +149,6 @@ export function getGeneralSnapResult(
         correctionVector: { x: c.sourceVertex.x - c.snapPoint.x, y: c.sourceVertex.y - c.snapPoint.y },
         type: 'edge-to-vertex'
     }));
-
     const allCandidates = [...vvCandidates, ...veCandidates, ...evCandidates];
 
     if (allCandidates.length === 0) {
@@ -140,69 +157,84 @@ export function getGeneralSnapResult(
 
     const priorities = { 'vertex-vertex': 1, 'vertex-to-edge': 2, 'edge-to-vertex': 2 };
     allCandidates.sort((a, b) => {
-        if (priorities[a.type] !== priorities[b.type]) return priorities[a.type] - priorities[b.type];
+        const priorityA = priorities[a.type] ?? 99;
+        const priorityB = priorities[b.type] ?? 99;
+        if (priorityA !== priorityB) return priorityA - priorityB;
         return a.dist - b.dist;
     });
-
     const bestSnap = allCandidates[0];
-    let correction = bestSnap.correctionVector;
 
-    const sourceIndex = bestSnap.sourceVertex ? bestSnap.sourceVertex.transformIndex : bestSnap.sourceEdge.transformIndex;
-    const targetIndex = bestSnap.targetVertex ? bestSnap.targetVertex.transformIndex : bestSnap.targetEdge.transformIndex;
+    let correction = { ...bestSnap.correctionVector };
+    const sourceIndex = bestSnap.sourceVertex ? bestSnap.sourceVertex.transformIndex : bestSnap.sourceEdge.transformIndex; // Index >= 1
+    const targetIndex = bestSnap.targetVertex ? bestSnap.targetVertex.transformIndex : (bestSnap.targetEdge ? bestSnap.targetEdge.transformIndex : undefined); // Index >= 1 or undefined
 
     let denominator;
-    if (copyCount === 1) {
-        denominator = 1;
+    if (targetIndex === undefined) {
+        denominator = sourceIndex;
     } else {
-        if (targetIndex === undefined) { 
-            denominator = sourceIndex + 1;
-        } else {
-            denominator = sourceIndex - targetIndex;
+        denominator = sourceIndex - targetIndex;
+    }
+
+    let correction_step = { x: 0, y: 0 };
+    if (Math.abs(denominator) > 1e-9) {
+        correction_step.x = correction.x / denominator;
+        correction_step.y = correction.y / denominator;
+    } else {
+        correction_step = { x: 0, y: 0 }; // k snaps to k
+    }
+
+    const finalTransform = { ...rawTransform, delta: { x: rawTransform.delta.x + correction_step.x, y: rawTransform.delta.y + correction_step.y } };
+
+    // Recalculate Final Positions using the corrected finalTransform for indices 1 to N-1 (or just 1)
+    const finalMovingVertices = [];
+     for (let i = 0; i < copyCount; i++) {
+        i += copyCount == 1; // Added line
+        if (i >= copyCount) break; // Break needed
+
+        const positionMultiplier = i;
+        const transformIndex = i;
+
+         verticesToDrag.forEach(p_orig => {
+             finalMovingVertices.push({
+                 ...applyTransform(p_orig, positionMultiplier, finalTransform),
+                 id: `final_${p_orig.id}_${i}`,
+                 originalId: p_orig.id,
+                 transformIndex: transformIndex,
+                 type: 'regular'
+             });
+         });
+    }
+
+
+    // Final Merge/Split Checks (using indices >= 1 and undefined)
+    const finalStaticVerticesForCheck = staticVertices.map(v => ({...v}));
+    const finalAllVerticesForCheck = [...finalStaticVerticesForCheck, ...finalMovingVertices];
+    const finalMergeCandidates = findAllVertexMerges(finalMovingVertices, finalAllVerticesForCheck, C.GEOMETRY_CALCULATION_EPSILON);
+
+    const finalStaticEdgesForSplitCheck = staticEdges.map(e => ({...e}));
+    const finalMovingEdgesForSplitCheck = [];
+    for (let i = 0; i < copyCount; i++) {
+         i += copyCount == 1; // Added line
+         if (i >= copyCount) break; // Break needed
+
+        const transformIndex = i;
+
+        const currentCopyVertices = finalMovingVertices.filter(v => v.transformIndex === transformIndex);
+        if (currentCopyVertices.length > 0) {
+            originalMovingEdges.forEach(edge => {
+                const p1Copy = currentCopyVertices.find(v => v.originalId === edge.id1);
+                const p2Copy = currentCopyVertices.find(v => v.originalId === edge.id2);
+                if (p1Copy && p2Copy) {
+                    finalMovingEdgesForSplitCheck.push({ p1: p1Copy, p2: p2Copy, originalEdge: edge, transformIndex: transformIndex, originalEdgeId: U.getEdgeId(edge) });
+                }
+            });
         }
     }
+    const finalAllTargetEdgesForSplitCheck = [...finalStaticEdgesForSplitCheck, ...finalMovingEdgesForSplitCheck];
 
-    if (Math.abs(denominator) > 1e-9) {
-        correction.x /= denominator;
-        correction.y /= denominator;
-    } else {
-        correction = { x: 0, y: 0 };
-    }
+    const finalVeSnaps = findVertexToEdgeSnaps(finalMovingVertices, finalAllTargetEdgesForSplitCheck, C.GEOMETRY_CALCULATION_EPSILON);
+    const finalEvSnaps = findVertexToEdgeSnaps(finalStaticVerticesForCheck, finalMovingEdgesForSplitCheck, C.GEOMETRY_CALCULATION_EPSILON);
 
-    const finalTransform = { ...rawTransform, delta: { x: rawTransform.delta.x + correction.x, y: rawTransform.delta.y + correction.y } };
-
-    const finalMovingVertices = [];
-    for (let i = 0; i < numMovingInstances; i++) {
-        const positionMultiplier = copyCount > 1 ? i + 1 : 1;
-        const transformIndex = i;
-        verticesToDrag.forEach(p_orig => {
-            finalMovingVertices.push({
-                id: `temp_${p_orig.id}_${i}`,
-                ...applyTransform(p_orig, positionMultiplier, finalTransform),
-                originalId: p_orig.id,
-                transformIndex: transformIndex,
-                type: 'regular'
-            });
-        });
-    }
-
-    const finalAllVertices = [...allTargetVertices, ...finalMovingVertices];
-
-    const finalMergeCandidates = findAllVertexMerges(finalMovingVertices, finalAllVertices, C.GEOMETRY_CALCULATION_EPSILON);
-
-    const finalMovingEdges = [];
-    for (let i = 0; i < numMovingInstances; i++) {
-        const currentCopyVertices = finalMovingVertices.filter(v => v.transformIndex === i);
-        originalMovingEdges.forEach(edge => {
-            const p1Copy = currentCopyVertices.find(v => v.originalId === edge.id1);
-            const p2Copy = currentCopyVertices.find(v => v.originalId === edge.id2);
-            if (p1Copy && p2Copy) {
-                finalMovingEdges.push({ p1: p1Copy, p2: p2Copy, originalEdge: edge, transformIndex: i });
-            }
-        });
-    }
-
-    const finalVeSnaps = findVertexToEdgeSnaps(finalMovingVertices, [...allTargetEdges, ...finalMovingEdges], C.GEOMETRY_CALCULATION_EPSILON);
-    const finalEvSnaps = findVertexToEdgeSnaps(allTargetVertices, finalMovingEdges, C.GEOMETRY_CALCULATION_EPSILON);
 
     return {
         snapped: true,
@@ -214,7 +246,7 @@ export function getGeneralSnapResult(
         })),
         edgeSnaps: [...finalVeSnaps, ...finalEvSnaps].map(c => ({
             sourceVertex: { originalId: c.sourceVertex.originalId, transformIndex: c.sourceVertex.transformIndex },
-            targetEdge: { originalEdgeId: U.getEdgeId(c.targetEdge.originalEdge), transformIndex: c.targetEdge.transformIndex }
+            targetEdge: { originalEdgeId: c.targetEdge.originalEdgeId, transformIndex: c.targetEdge.transformIndex }
         }))
     };
 }
