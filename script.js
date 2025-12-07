@@ -375,6 +375,7 @@ function cleanupHtmlLabels() {
 }
 
 function handleCenterSelection(centerId, shiftKey, ctrlKey) {
+    // Only ctrl-click can remove; normal clicks keep existing selection
     if (ctrlKey) {
         const index = selectedCenterIds.indexOf(centerId);
         if (index > -1) {
@@ -382,19 +383,19 @@ function handleCenterSelection(centerId, shiftKey, ctrlKey) {
             if (activeCenterId === centerId) {
                 activeCenterId = selectedCenterIds.length > 0 ? selectedCenterIds[selectedCenterIds.length - 1] : null;
             }
-        } else {
-            selectedCenterIds.push(centerId);
-            activeCenterId = centerId;
+            return;
         }
-    } else if (shiftKey) {
-        if (!selectedCenterIds.includes(centerId)) {
-            selectedCenterIds.push(centerId);
-            activeCenterId = centerId;
-        }
-    } else {
-        selectedCenterIds = [centerId];
+        // ctrl-click on unselected center toggles it on
+        selectedCenterIds.push(centerId);
         activeCenterId = centerId;
+        return;
     }
+
+    // Non-ctrl: never clear other selections; just ensure this one is selected/active
+    if (!selectedCenterIds.includes(centerId)) {
+        selectedCenterIds.push(centerId);
+    }
+    activeCenterId = centerId;
 }
 
 function getBestSnapPosition(mouseDataPos) {
@@ -1418,6 +1419,25 @@ function findVertexById(id) {
     return allVertices.find(p => p.id === id);
 }
 
+function findAllVerticesInSubgraph(startVertexId) {
+    if (!findVertexById(startVertexId)) return [];
+    const visited = new Set();
+    const queue = [startVertexId];
+    const subgraphVertexIds = [];
+    visited.add(startVertexId);
+    while (queue.length > 0) {
+        const currentVertexId = queue.shift();
+        subgraphVertexIds.push(currentVertexId);
+        U.findNeighbors(currentVertexId, allEdges).forEach(neighborId => {
+            if (!visited.has(neighborId)) {
+                visited.add(neighborId);
+                queue.push(neighborId);
+            }
+        });
+    }
+    return subgraphVertexIds;
+}
+
 function findClickedVertex(clickPos) {
     const dataPos = screenToData(clickPos);
     const selectRadiusDataRegular = (C.VERTEX_RADIUS * 2) / viewTransform.scale;
@@ -1514,18 +1534,6 @@ function findNeighborEdges(vertexId) {
     return allEdges.filter(e => e.id1 === vertexId || e.id2 === vertexId);
 }
 
-function findAllVerticesInSubgraph(startVertexId) {
-    if (!findVertexById(startVertexId)) return [];
-    const visited = new Set(); const queue = [startVertexId]; const subgraphVertexIds = [];
-    visited.add(startVertexId);
-    while (queue.length > 0) {
-        const currentVertexId = queue.shift(); subgraphVertexIds.push(currentVertexId);
-        U.findNeighbors(currentVertexId, allEdges).forEach(neighborId => {
-            if (!visited.has(neighborId)) { visited.add(neighborId); queue.push(neighborId); }
-        });
-    }
-    return subgraphVertexIds;
-}
 
 function handleCut() {
     if (selectedVertexIds.length === 0 && selectedEdgeIds.length === 0 && selectedCenterIds.length === 0) return;
@@ -2569,38 +2577,29 @@ function drawEnvironment(colors) {
 function drawMainGeometry(colors) {
     const isDeformingDrag = isDragConfirmed && initialDragVertexStates.length === 1 && !transformIndicatorData && initialDragVertexStates[0].type === 'regular';
 
-    // Draw ONLY static components (those NOT being dragged)
     componentDrawOrder.forEach(componentVertexIds => {
         const isDraggedComponent = isDragConfirmed && initialDragVertexStates.length > 0 &&
             [...componentVertexIds].some(id =>
                 initialDragVertexStates.some(v => v.id === id)
             );
 
-        // If the component IS NOT being dragged, draw it.
-        if (!isDraggedComponent) {
+        if (!isDraggedComponent || isDeformingDrag) {
              drawComponent(componentVertexIds, colors, false, [], 0);
         }
-        // If it IS being dragged, the preview function will handle drawing it entirely.
     });
 
-    // Draw non-regular vertices (centers) - potentially transformed
      allVertices.forEach(vertex => {
          if (vertex.type !== 'regular') {
              const isDraggedCenter = isDragConfirmed && initialDragVertexStates.some(v => v.id === vertex.id);
-             // Skip drawing static center if it's part of a rigid drag (previews handle it)
-             if (isDraggedCenter && !isDeformingDrag) {
-                 return;
-             }
 
              let vertexToDraw = vertex;
              let isSnapped = false;
-             let copyIndexForSnapCheck = isDraggedCenter ? 0 : undefined; // Index 0 for dragged center preview
+             let copyIndexForSnapCheck = isDraggedCenter ? 0 : undefined;
 
-             // Find the preview position ONLY for rigid drags (handled by drawRigidDragPreview)
              if (isDraggedCenter && !isDeformingDrag && dragPreviewVertices.length > 0) {
                  const preview = dragPreviewVertices.find(dp => dp && dp.originalId === vertex.id && dp.transformIndex === 0);
                   if (preview) {
-                      vertexToDraw = preview; // Use preview position for drawing
+                      vertexToDraw = preview;
                   }
              }
 
@@ -2626,12 +2625,14 @@ function drawMainGeometry(colors) {
      });
 
 
-    // --- Call the appropriate preview function ---
     if (isDragConfirmed) {
         const copyCount = parseInt(copyCountInput || '1', 10);
         const params = {
              copyCount, isDragConfirmed, initialDragVertexStates, dragPreviewVertices, transformIndicatorData,
-             allEdges, allFaces, findVertexById, findNeighbors: (id) => U.findNeighbors(id, allEdges), colors,
+             allEdges, allFaces, findVertexById,
+             findNeighbors: (id) => findNeighbors(id),
+             findAllVerticesInSubgraph: (id) => findAllVerticesInSubgraph(id), // Pass the function
+             colors,
              snappedEdgesInfo: snappedEdgeIds,
              snappedVertexIds
          };
@@ -4265,6 +4266,8 @@ function finalizeDragAction() {
     const initiallySelectedVertexIds = [...selectedVertexIds];
     const initiallySelectedEdgeIds = [...selectedEdgeIds];
     const initiallySelectedFaceIds = [...selectedFaceIds];
+    const initiallySelectedCenterIds = [...selectedCenterIds];
+    const initialActiveCenterId = activeCenterId;
     selectedVertexIds = [];
     selectedEdgeIds = [];
     selectedFaceIds = [];
@@ -4497,15 +4500,14 @@ function finalizeDragAction() {
         selectedVertexIds = initiallySelectedVertexIds.length > 0 ? firstCopySelectionIds.vertices.map(id => findRoot(id)) : [];
         selectedEdgeIds = initiallySelectedEdgeIds.length > 0 ? firstCopySelectionIds.edges : [];
         selectedFaceIds = initiallySelectedFaceIds.length > 0 ? firstCopySelectionIds.faces : [];
-        selectedCenterIds = [];
-        activeCenterId = null;
     } else if (copyCount === 1) {
         selectedVertexIds = initiallySelectedVertexIds.map(id => findRoot(id));
         selectedEdgeIds = initiallySelectedEdgeIds;
         selectedFaceIds = initiallySelectedFaceIds;
-        selectedCenterIds = selectedCenterIds.map(id => findRoot(id));
-        activeCenterId = activeCenterId ? findRoot(activeCenterId) : null;
     }
+    // Restore centers exactly as before the drag
+    selectedCenterIds = initiallySelectedCenterIds;
+    activeCenterId = initialActiveCenterId;
     // --- End selection logic ---
 
     updateFaceHierarchy();
@@ -5339,7 +5341,8 @@ function handleMouseMove(event) {
                 return;
             }
             actionTargetVertex = actionContext.dragHandle;
-            isEdgeTransformDrag = !!actionContext.isTransformDrag;
+            // Edge-only drags should not trigger transform handling even if a center is active
+            isEdgeTransformDrag = actionContext.target === 'edge';
 
             if (actionContext.target === 'ui_icon_click') {
                 isDraggingColorTarget = true;
@@ -5372,7 +5375,8 @@ function handleMouseMove(event) {
                 canvas.style.cursor = 'move';
             } else {
                 canvas.style.cursor = 'grabbing';
-                isDraggingCenter = actionContext.targetVertex && actionContext.targetVertex.type !== 'regular';
+                const targetIsCenter = actionContext.targetVertex && actionContext.targetVertex.type !== 'regular';
+                isDraggingCenter = targetIsCenter && !actionContext.isTransformDrag;
 
                 let verticesToDrag;
                 if (isDraggingCenter) {
@@ -5432,9 +5436,11 @@ function handleMouseMove(event) {
                 const isTransformingSelection = activeCenterId && (selectedVertexIds.length > 0 || selectedEdgeIds.length > 0 || selectedFaceIds.length > 0) && !isEdgeTransformDrag;
                 if (isTransformingSelection) {
                     const center = findVertexById(activeCenterId);
-                    let startReferenceVertex = actionTargetVertex;
+                    let startReferenceVertex = actionTargetVertex; // use the exact point the user grabbed
                     if (!startReferenceVertex && initialDragVertexStates.length > 0) {
-                        startReferenceVertex = initialDragVertexStates.find(p => U.distance(p, center) > 1e-6) || initialDragVertexStates[0];
+                        startReferenceVertex =
+                            initialDragVertexStates.find(p => p.type === 'regular' && U.distance(p, center) > 1e-6) ||
+                            initialDragVertexStates.find(p => p.type === 'regular');
                     }
                     if (center && startReferenceVertex) {
                         handleTransformDrag(screenToData(mousePos), startReferenceVertex, center, center.type);
@@ -5692,6 +5698,17 @@ function handleKeyDown(event) {
     }
 
     const isCtrlOrCmd = event.ctrlKey || event.metaKey;
+
+    if (isCtrlOrCmd && (event.key === 'a' || event.key === 'A')) {
+        event.preventDefault();
+        const allRegularVertexIds = allVertices.filter(v => v.type === 'regular').map(v => v.id);
+        const allEdgeIds = allEdges.map(e => U.getEdgeId(e));
+        const allFaceIds = allFaces.map(f => U.getFaceId(f));
+        applySelectionLogic(allRegularVertexIds, allEdgeIds, allFaceIds, false, false);
+        selectedCenterIds = allVertices.filter(v => v.type !== 'regular').map(v => v.id);
+        activeCenterId = selectedCenterIds.length > 0 ? selectedCenterIds[selectedCenterIds.length - 1] : null;
+        return;
+    }
 
     if (event.key === 'Shift' && !currentShiftPressed) {
         currentShiftPressed = true;
