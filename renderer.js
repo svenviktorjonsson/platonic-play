@@ -4340,11 +4340,16 @@ function drawColorPalette(ctx, htmlOverlay, state, updateHtmlLabel) {
     }
 
     if (canvasUI.colorTargetIcons) {
-        const getIconOptions = (target) => {
+        const resolveTargetIndex = (target) => {
             let targetColorIndex = colorAssignments[target];
             if (isDraggingColorTarget && draggedColorTargetInfo && draggedColorTargetInfo.target === target && draggedColorTargetInfo.previewColorIndex !== undefined) {
                 targetColorIndex = draggedColorTargetInfo.previewColorIndex;
             }
+            return targetColorIndex;
+        };
+
+        const getIconOptions = (target) => {
+            let targetColorIndex = resolveTargetIndex(target);
 
             const colorItem = (targetColorIndex === -1) ? null : allColors[targetColorIndex];
 
@@ -4376,11 +4381,30 @@ function drawColorPalette(ctx, htmlOverlay, state, updateHtmlLabel) {
                 } else if (colorItem && colorItem.type === 'colormap') {
                     options.faceColormapItem = colorItem;
                 }
+            } else if (target === C.COLOR_TARGET_TEXT) {
+                if (targetColorIndex === -1) {
+                    options.textColor = C.UI_COLOR_TARGET_UNASSIGNED;
+                } else if (colorItem && colorItem.type === 'color') {
+                    options.textColor = colorItem.value;
+                } else if (colorItem && colorItem.type === 'colormap') {
+                    options.textColor = U.sampleColormap(colorItem, 0.5);
+                }
+                const faceTargetIndex = resolveTargetIndex(C.COLOR_TARGET_FACE);
+                if (faceTargetIndex === targetColorIndex) {
+                    const faceItem = faceTargetIndex === -1 ? null : allColors[faceTargetIndex];
+                    if (!faceItem) {
+                        options.faceColorForContrast = C.UI_COLOR_TARGET_UNASSIGNED;
+                    } else if (faceItem.type === 'color') {
+                        options.faceColorForContrast = faceItem.value;
+                    } else if (faceItem.type === 'colormap') {
+                        options.faceColorForContrast = U.sampleColormap(faceItem, 0.5);
+                    }
+                }
             }
             return options;
         };
 
-        const drawOrder = [C.COLOR_TARGET_FACE, C.COLOR_TARGET_EDGE, C.COLOR_TARGET_VERTEX];
+        const drawOrder = [C.COLOR_TARGET_FACE, C.COLOR_TARGET_EDGE, C.COLOR_TARGET_VERTEX, C.COLOR_TARGET_TEXT];
         drawOrder.forEach(targetToDraw => {
             const icon = canvasUI.colorTargetIcons.find(i => i.target === targetToDraw);
             if (icon) {
@@ -4400,7 +4424,11 @@ function drawColorPalette(ctx, htmlOverlay, state, updateHtmlLabel) {
                     }
                 }
 
-                drawTriangleIcon(ctx, icon, iconOptions, colors, isActive);
+                if (targetToDraw === C.COLOR_TARGET_TEXT) {
+                    drawTextTargetIcon(ctx, icon, iconOptions, colors, isActive);
+                } else {
+                    drawTriangleIcon(ctx, icon, iconOptions, colors, isActive);
+                }
             }
         });
     }
@@ -4615,6 +4643,30 @@ function drawTriangleIcon(ctx, rect, options, colors, isActive = false) {
     ctx.restore();
 }
 
+function drawTextTargetIcon(ctx, rect, options, colors, isActive = false) {
+    ctx.save();
+
+    const center = { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+    ctx.translate(center.x, center.y);
+    const scale = rect.width / C.UI_ICON_BASE_SIZE;
+    ctx.scale(scale, scale);
+    ctx.translate(-16, -16);
+
+    let textFill = options.textColor || colors.uiTextDefault;
+    if (options.faceColorForContrast) {
+        const faceColor = U.parseColor(options.faceColorForContrast);
+        const brightness = (0.2126 * faceColor.r + 0.7152 * faceColor.g + 0.0722 * faceColor.b) / 255;
+        textFill = brightness > 0.5 ? '#000000' : '#ffffff';
+    }
+    ctx.fillStyle = textFill;
+    ctx.font = `bold 14px KaTeX_Main, Times New Roman, serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('A', 16, 16);
+
+    ctx.restore();
+}
+
 export function drawFace(ctx, screenVertices, face, colors, dataToScreen, findVertexById, allFaces, getLiveVertex, drawHoles) {
     if (!screenVertices || screenVertices.length < 3) return;
 
@@ -4771,6 +4823,91 @@ function drawVisibilityPanel(ctx, htmlOverlay, state, updateHtmlLabel) {
     });
 }
 
+function drawInterpolationToolIcon(ctx, rect, colors, useLinear = false) {
+    const p1 = { x: rect.x + rect.width * 0.2, y: rect.y + rect.height * 0.7 };
+    const control = { x: rect.x + rect.width * 0.5, y: rect.y + rect.height * 0.2 };
+    const p2 = { x: rect.x + rect.width * 0.8, y: rect.y + rect.height * 0.6 };
+    const linearMid = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+
+    ctx.save();
+    ctx.strokeStyle = colors.uiDefault;
+    ctx.lineWidth = C.UI_ICON_LINE_WIDTH_SMALL;
+    ctx.setLineDash(C.UI_ICON_DASH_PATTERN);
+    ctx.beginPath();
+    ctx.moveTo(p1.x, p1.y);
+    if (useLinear) {
+        ctx.lineTo(p2.x, p2.y);
+    } else {
+        ctx.lineTo(control.x, control.y);
+        ctx.lineTo(p2.x, p2.y);
+    }
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    ctx.strokeStyle = colors.uiIcon;
+    ctx.lineWidth = C.UI_ICON_LINE_WIDTH;
+    ctx.beginPath();
+    ctx.moveTo(p1.x, p1.y);
+    if (useLinear) {
+        ctx.lineTo(p2.x, p2.y);
+    } else {
+        ctx.quadraticCurveTo(control.x, control.y, p2.x, p2.y);
+    }
+    ctx.stroke();
+
+    ctx.fillStyle = colors.uiIcon;
+    const points = useLinear ? [p1, linearMid, p2] : [p1, control, p2];
+    points.forEach(point => {
+        ctx.beginPath();
+        ctx.arc(point.x, point.y, C.UI_ICON_VERTEX_RADIUS + 0.5, 0, Math.PI * 2);
+        ctx.fill();
+    });
+    ctx.restore();
+}
+
+function drawInterpolationPanel(ctx, htmlOverlay, state, updateHtmlLabel) {
+    const { canvasUI, colors, activeInterpolationStyleId, interpolationStyles } = state;
+
+    canvasUI.interpolationIcons.forEach(icon => {
+        const rect = { x: icon.x, y: icon.y, width: icon.width, height: icon.height };
+        if (icon.type === 'interpolationStyle') {
+            const isActive = icon.styleId === activeInterpolationStyleId;
+            ctx.strokeStyle = isActive ? colors.uiIconSelected : colors.uiDefault;
+            ctx.lineWidth = isActive ? 2 : 1;
+            ctx.strokeRect(rect.x, rect.y, rect.width, rect.height);
+            const style = interpolationStyles.find(item => item.id === icon.styleId);
+            const isLinearStyle = Boolean(
+                style?.type === 'linear' ||
+                (style?.type === 'cubic_spline' && Number(style?.tension) === 0) ||
+                (style?.name || '').toLowerCase().includes('linear')
+            );
+            drawInterpolationToolIcon(ctx, rect, colors, isLinearStyle);
+
+            if (style?.name) {
+                updateHtmlLabel({
+                    id: `interpolation-label-${icon.styleId}`,
+                    content: style.name.length > 6 ? `${style.name.slice(0, 6)}...` : style.name,
+                    x: rect.x + rect.width / 2,
+                    y: rect.y + rect.height + 10,
+                    color: colors.uiTextDefault,
+                    fontSize: C.UI_ICON_LABEL_FONT_SIZE,
+                    options: { textAlign: 'center', textBaseline: 'top' }
+                }, htmlOverlay);
+            }
+        } else if (icon.type === 'interpolationAdd') {
+            ctx.strokeStyle = colors.uiDefault;
+            ctx.lineWidth = 2;
+            ctx.strokeRect(rect.x, rect.y, rect.width, rect.height);
+            ctx.beginPath();
+            ctx.moveTo(rect.x + rect.width / 2, rect.y + rect.height * 0.25);
+            ctx.lineTo(rect.x + rect.width / 2, rect.y + rect.height * 0.75);
+            ctx.moveTo(rect.x + rect.width * 0.25, rect.y + rect.height / 2);
+            ctx.lineTo(rect.x + rect.width * 0.75, rect.y + rect.height / 2);
+            ctx.stroke();
+        }
+    });
+}
+
 function drawMainToolbar(ctx, htmlOverlay, state, updateHtmlLabel) {
    const { canvasUI, colors, activeThemeName, colorAssignments, allColors, verticesVisible, edgesVisible, facesVisible } = state;
 
@@ -4799,6 +4936,11 @@ function drawMainToolbar(ctx, htmlOverlay, state, updateHtmlLabel) {
    const ttb = canvasUI.transformToolButton;
    if (ttb) {
        updateHtmlLabel({ id: 'transform-tool-label', content: C.UI_TRANSFORM_TOOL_LABEL_TEXT, x: ttb.x + ttb.width / 2, y: ttb.y + ttb.height / 2, color: colors.uiIcon, fontSize: C.UI_TRANSFORM_TOOL_LABEL_FONT_SIZE, options: { textAlign: 'center', textBaseline: 'middle' } }, htmlOverlay);
+   }
+
+   const itb = canvasUI.interpolationToolButton;
+   if (itb) {
+       drawInterpolationToolIcon(ctx, itb, colors);
    }
 
    const dtb = canvasUI.displayToolButton;
@@ -4863,7 +5005,7 @@ function drawDisplayPanel(ctx, htmlOverlay, state, updateHtmlLabel) {
 }
 
 export function drawCanvasUI(ctx, htmlOverlay, state, updateHtmlLabel) {
-    const { dpr, isToolbarExpanded, isColorPaletteExpanded, isTransformPanelExpanded, isDisplayPanelExpanded, isVisibilityPanelExpanded,
+    const { dpr, isToolbarExpanded, isColorPaletteExpanded, isInterpolationPanelExpanded, isTransformPanelExpanded, isDisplayPanelExpanded, isVisibilityPanelExpanded,
         isPlacingTransform, placingTransformType, placingSnapPos, mousePos, colors } = state;
 
     ctx.save();
@@ -4887,6 +5029,9 @@ export function drawCanvasUI(ctx, htmlOverlay, state, updateHtmlLabel) {
 
     if (isColorPaletteExpanded) {
         drawColorPalette(ctx, htmlOverlay, state, updateHtmlLabel);
+    }
+    if (isInterpolationPanelExpanded) {
+        drawInterpolationPanel(ctx, htmlOverlay, state, updateHtmlLabel);
     }
     if (isTransformPanelExpanded) {
         drawTransformPanel(ctx, state);

@@ -523,7 +523,7 @@ export function clampPointToPolygon(point, vertices) {
     return closestPoint;
 }
 
-export function getClickedUIElement(screenPos, canvasUI, { isToolbarExpanded, isColorPaletteExpanded, isTransformPanelExpanded, isDisplayPanelExpanded, isVisibilityPanelExpanded }) {
+export function getClickedUIElement(screenPos, canvasUI, { isToolbarExpanded, isColorPaletteExpanded, isInterpolationPanelExpanded, isTransformPanelExpanded, isDisplayPanelExpanded, isVisibilityPanelExpanded }) {
     const isInside = (pos, rect) => {
         if (!rect) return false;
         return pos.x >= rect.x && pos.x <= rect.x + rect.width &&
@@ -548,6 +548,12 @@ export function getClickedUIElement(screenPos, canvasUI, { isToolbarExpanded, is
             if (isInside(screenPos, icon)) return { ...icon, type: 'transformIcon' };
         }
     }
+
+    if (isInterpolationPanelExpanded) {
+        for (const icon of (canvasUI.interpolationIcons || [])) {
+            if (isInside(screenPos, icon)) return { ...icon, type: 'interpolationIcon' };
+        }
+    }
     
     if (isDisplayPanelExpanded) {
         for (const icon of (canvasUI.displayIcons || [])) {
@@ -563,6 +569,7 @@ export function getClickedUIElement(screenPos, canvasUI, { isToolbarExpanded, is
 
     if (isToolbarExpanded) {
         if (isInside(screenPos, canvasUI.colorToolButton)) return { ...canvasUI.colorToolButton, type: 'toolButton' };
+        if (isInside(screenPos, canvasUI.interpolationToolButton)) return { ...canvasUI.interpolationToolButton, type: 'toolButton' };
         if (isInside(screenPos, canvasUI.transformToolButton)) return { ...canvasUI.transformToolButton, type: 'toolButton' };
         if (isInside(screenPos, canvasUI.displayToolButton)) return { ...canvasUI.displayToolButton, type: 'toolButton' };
         if (isInside(screenPos, canvasUI.visibilityToolButton)) return { ...canvasUI.visibilityToolButton, type: 'toolButton' };

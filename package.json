@@ -6,7 +6,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build"
+    "build": "vite build",
+    "preview": "vite preview --open"
   },
   "keywords": [],
   "author": "",
@@ -15,6 +16,8 @@
     "vite": "^7.0.6"
   },
   "dependencies": {
-    "colormap-selector": "github:svenviktorjonsson/colormap-selector"
+    "colormap-selector": "github:svenviktorjonsson/colormap-selector",
+    "interpolation-editor": "github:svenviktorjonsson/interpolation-editor",
+    "katex-renderer": "github:cellmaxtechnologies/packages.katex-renderer"
   }
 }

@@ -340,3 +340,4 @@ export const KEY_SELECT_ALL = 'a';
 export const COLOR_TARGET_VERTEX = 'vertex';
 export const COLOR_TARGET_EDGE = 'edge';
 export const COLOR_TARGET_FACE = 'face';
+export const COLOR_TARGET_TEXT = 'text';

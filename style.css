@@ -55,6 +55,28 @@ html, body {
     height: 100%;
 }
 
+#html-overlay .katex {
+    line-height: 1;
+}
+
+#html-overlay .katex * {
+    line-height: 1;
+}
+
+#html-overlay .katex .strut,
+#html-overlay .katex .vlist-t {
+    height: 0 !important;
+}
+
+
+#interpolation-editor-wrapper {
+    z-index: 5000 !important;
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+}
+
 .context-menu {
     display: none;
     position: absolute;

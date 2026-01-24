@@ -1,5 +1,8 @@
 import ColormapSelector from './node_modules/colormap-selector/ColormapSelector.js';
 import './node_modules/colormap-selector/styles.css';
+import InterpolationEditor from './node_modules/interpolation-editor/interpolation-editor.js';
+import './node_modules/interpolation-editor/style.css';
+import { renderStringToElement, formatStringToMathDisplay } from 'katex-renderer';
 
 import * as S from './snap.js';
 import * as C from './constants.js';
@@ -11,13 +14,36 @@ const ctx = canvas.getContext('2d', { willReadFrequently: true });
 const htmlOverlay = document.getElementById('html-overlay');
 const dpr = window.devicePixelRatio || 1;
 const activeHtmlLabels = new Map();
+const DEFAULT_TEXT_FONT_SIZE = 18;
+const TEXT_EDGE_MARGIN_PX = 8;
+const TEXT_VERTEX_OFFSET_PX = { x: 12, y: -12 };
+const TEXT_BACKGROUND_OFFSET_PX = { x: 8, y: -8 };
+let textEditorState = { activeId: null, inputEl: null };
+const DEFAULT_INTERPOLATION_STYLE = {
+    id: 'linear',
+    name: 'Linear',
+    type: 'linear',
+    cornerHandling: 'pass_through',
+    tension: 0
+};
+const STORAGE_PREFIX = 'platonic-play';
+const STORAGE_VERSION = 1;
+const STORAGE_USER_ID_KEY = `${STORAGE_PREFIX}.user-id`;
+let activeUserId = null;
+let persistTimeoutId = null;
+let didRestoreFromStorage = false;
 let colorEditor;
+let interpolationEditor;
+let interpolationStyles = [JSON.parse(JSON.stringify(DEFAULT_INTERPOLATION_STYLE))];
+let activeInterpolationStyleId = DEFAULT_INTERPOLATION_STYLE.id;
 const canvasUI = {
     toolbarButton: null,
     mainToolbar: null,
     colorToolButton: null,
     colorSwatches: [],
     addColorButton: null,
+    interpolationToolButton: null,
+    interpolationIcons: [],
     transformToolButton: null,
     transformIcons: [],
     displayToolButton: null,
@@ -55,6 +81,7 @@ let isMouseOverCanvas = false;
 let placingSnapPos = null;
 let isDisplayPanelExpanded = false;
 let isVisibilityPanelExpanded = false;
+let isInterpolationPanelExpanded = false;
 let coordsDisplayMode = 'regular';
 let gridDisplayMode = 'lines';
 let angleDisplayMode = 'degrees';
@@ -66,16 +93,19 @@ let facesVisible = true;
 let hoveredVertexId = null;
 let hoveredEdgeId = null;
 let hoveredFaceId = null;
+let hoveredTextId = null;
 let isEdgeTransformDrag = false;
 let isDraggingCenter = false;
 let allVertices = [];
 let allEdges = [];
 let allFaces = [];
+let allTextElements = [];
 let snappedEdgeIds = new Map();
 let snappedVertexIds = new Map();
 let selectedVertexIds = [];
 let selectedEdgeIds = [];
 let selectedFaceIds = [];
+let selectedTextIds = [];
 let activeCenterId = null;
 let mousePos = { x: 0, y: 0 };
 
@@ -111,9 +141,12 @@ let isDrawingMode = false;
 let previewLineStartVertexId = null;
 let actionTargetVertex = null;
 let dragPreviewVertices = [];
+let initialDragTextStates = [];
+let dragPreviewTextStates = [];
 let currentShiftPressed = false;
-let clipboard = { vertices: [], edges: [], faces: [], referenceVertex: null };
+let clipboard = { vertices: [], edges: [], faces: [], texts: [], referenceVertex: null };
 let clickData = { targetId: null, type: null, count: 0, timestamp: 0 };
+let interpolationClickData = { id: null, timestamp: 0 };
 let undoStack = [];
 let currentAltPressed = false;
 let ghostVertexSnapType = null;
@@ -183,6 +216,7 @@ let colorAssignments = {
     [C.COLOR_TARGET_VERTEX]: 0,
     [C.COLOR_TARGET_EDGE]: 1,
     [C.COLOR_TARGET_FACE]: 2,
+    [C.COLOR_TARGET_TEXT]: 0,
 };
 
 let isDraggingCoordSystem = false;
@@ -223,6 +257,7 @@ function getColorForTarget(targetType, index = 0, total = 1) {
     if (targetType === C.COLOR_TARGET_VERTEX) return colors.vertex;
     if (targetType === C.COLOR_TARGET_EDGE) return colors.edge;
     if (targetType === C.COLOR_TARGET_FACE) return colors.face;
+    if (targetType === C.COLOR_TARGET_TEXT) return colors.uiTextDefault || colors.geometryInfoText;
     
     return colors.vertex;
 }
@@ -306,6 +341,24 @@ function applyColorsToSelection() {
                     });
                 }
             }
+        } else if (target === C.COLOR_TARGET_TEXT) {
+            const colorItem = allColors[colorIndex];
+            if (colorItem && colorItem.type === 'colormap') {
+                selectedTextIds.forEach((id, index) => {
+                    const textElement = getTextElementById(id);
+                    if (!textElement) return;
+                    const t = selectedTextIds.length > 1 ? index / (selectedTextIds.length - 1) : 0.5;
+                    textElement.color = U.sampleColormap(colorItem, t);
+                });
+            } else {
+                const color = getColorForTarget(C.COLOR_TARGET_TEXT);
+                selectedTextIds.forEach(id => {
+                    const textElement = getTextElementById(id);
+                    if (textElement) {
+                        textElement.color = color;
+                    }
+                });
+            }
         }
     });
 }
@@ -319,8 +372,46 @@ function updateHtmlLabel({ id, content, x, y, color, fontSize, options = {} }) {
         el.style.position = 'absolute';
         el.style.fontFamily = 'KaTeX_Main, Times New Roman, serif';
         el.style.whiteSpace = 'nowrap';
+        el.style.lineHeight = '1';
+        el.style.display = 'inline-block';
+        el.style.padding = '0';
+        el.style.pointerEvents = 'none';
+
+        const contentEl = document.createElement('div');
+        contentEl.style.display = 'inline-block';
+        contentEl.style.position = 'relative';
+        contentEl.style.overflow = 'visible';
+
+        const katexEl = document.createElement('div');
+        katexEl.style.display = 'inline-block';
+        katexEl.style.whiteSpace = 'nowrap';
+        katexEl.style.lineHeight = '1';
+
+        contentEl.appendChild(katexEl);
+
+        el.appendChild(contentEl);
+        el.contentEl = contentEl;
+        el.katexEl = katexEl;
         htmlOverlay.appendChild(el);
         activeHtmlLabels.set(id, el);
+    } else if (!el.contentEl || !el.katexEl) {
+        const contentEl = document.createElement('div');
+        contentEl.style.display = 'inline-block';
+        contentEl.style.position = 'relative';
+        contentEl.style.overflow = 'visible';
+
+        const katexEl = document.createElement('div');
+        katexEl.style.display = 'inline-block';
+        katexEl.style.whiteSpace = 'nowrap';
+        katexEl.style.lineHeight = '1';
+
+        contentEl.appendChild(katexEl);
+        el.textContent = '';
+        el.appendChild(contentEl);
+        el.contentEl = contentEl;
+        el.katexEl = katexEl;
+        el.katexContent = null;
+        el.style.pointerEvents = 'none';
     }
 
     let translateX = '-50%';
@@ -352,17 +443,25 @@ function updateHtmlLabel({ id, content, x, y, color, fontSize, options = {} }) {
     el.style.color = color;
     el.style.fontSize = `${fontSize}px`;
 
-    if (el.katexContent !== content) {
-        if (typeof window.katex !== 'undefined') {
-            katex.render(content, el, {
-                throwOnError: false,
-                displayMode: false
-            });
-        } else {
-            el.textContent = content.replace(/\\frac\{([^}]+)\}\{([^}]+)\}/g, "$1/$2").replace(/[\\{}]/g, "");
-        }
-        el.katexContent = content;
+    const safeContent = (content === null || content === undefined) ? '' : String(content);
+    const normalizedContent = formatStringToMathDisplay(safeContent);
+    if (el.katexContent !== normalizedContent) {
+        const target = el.katexEl || el.contentEl || el;
+        renderStringToElement(target, normalizedContent);
+        el.katexContent = normalizedContent;
     }
+
+}
+
+function getTintedTextColor(baseColor, overlayColor, alpha) {
+    const base = U.parseColor(baseColor);
+    const overlay = U.parseColor(overlayColor);
+    const a = Math.max(0, Math.min(1, alpha));
+    const r = Math.round(base.r * (1 - a) + overlay.r * a);
+    const g = Math.round(base.g * (1 - a) + overlay.g * a);
+    const b = Math.round(base.b * (1 - a) + overlay.b * a);
+    const outA = base.a;
+    return `rgba(${r}, ${g}, ${b}, ${outA})`;
 }
 
 function cleanupHtmlLabels() {
@@ -372,6 +471,514 @@ function cleanupHtmlLabels() {
             activeHtmlLabels.delete(id);
         }
     }
+}
+
+function screenVectorToData(vector) {
+    return {
+        x: (vector.x * dpr) / viewTransform.scale,
+        y: (-vector.y * dpr) / viewTransform.scale
+    };
+}
+
+function getTextElementById(id) {
+    return allTextElements.find(el => el.id === id);
+}
+
+function getEdgeNormalData(edge, p1, p2, faceVerticesForEdge = null) {
+    if (!edge || !p1 || !p2) return null;
+    const edgeVector = { x: p2.x - p1.x, y: p2.y - p1.y };
+    const edgeLen = Math.hypot(edgeVector.x, edgeVector.y);
+    if (edgeLen < 1e-6) return null;
+    let normalData = { x: -edgeVector.y / edgeLen, y: edgeVector.x / edgeLen };
+
+    if (faceVerticesForEdge && faceVerticesForEdge.length >= 3) {
+        const anchor = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+        const center = faceVerticesForEdge.reduce((sum, v) => ({ x: sum.x + v.x, y: sum.y + v.y }), { x: 0, y: 0 });
+        center.x /= faceVerticesForEdge.length;
+        center.y /= faceVerticesForEdge.length;
+        const toCenter = { x: center.x - anchor.x, y: center.y - anchor.y };
+        const dot = normalData.x * toCenter.x + normalData.y * toCenter.y;
+        if (dot > 0) {
+            normalData = { x: -normalData.x, y: -normalData.y };
+        }
+    }
+
+    return { normalData, edgeLen };
+}
+
+function computeEdgeLabelOffsetData(edgeId) {
+    const edge = allEdges.find(e => U.getEdgeId(e) === edgeId);
+    if (!edge) return screenVectorToData(TEXT_EDGE_MARGIN_PX);
+    const p1 = findVertexById(edge.id1);
+    const p2 = findVertexById(edge.id2);
+    if (!p1 || !p2) return screenVectorToData(TEXT_EDGE_MARGIN_PX);
+
+    const adjacentFaces = allFaces.filter(face => {
+        const ids = face.vertexIds || [];
+        for (let i = 0; i < ids.length; i++) {
+            const id1 = ids[i];
+            const id2 = ids[(i + 1) % ids.length];
+            if ((id1 === edge.id1 && id2 === edge.id2) || (id1 === edge.id2 && id2 === edge.id1)) {
+                return true;
+            }
+        }
+        return false;
+    });
+
+    let faceVerticesForEdge = null;
+    if (adjacentFaces.length === 1) {
+        const face = adjacentFaces[0];
+        faceVerticesForEdge = (face.vertexIds || []).map(id => findVertexById(id)).filter(Boolean);
+    }
+
+    const normalInfo = getEdgeNormalData(edge, p1, p2, faceVerticesForEdge);
+    if (!normalInfo) return screenVectorToData(TEXT_EDGE_MARGIN_PX);
+    const normalData = normalInfo.normalData;
+    const marginData = (TEXT_EDGE_MARGIN_PX * dpr) / viewTransform.scale;
+    return {
+        x: normalData.x * marginData,
+        y: normalData.y * marginData
+    };
+}
+
+function computeEdgeOffsetFactor(edgeId, offsetVector) {
+    const edge = allEdges.find(e => U.getEdgeId(e) === edgeId);
+    if (!edge || !offsetVector) return null;
+    const p1 = findVertexById(edge.id1);
+    const p2 = findVertexById(edge.id2);
+    if (!p1 || !p2) return null;
+    const normalInfo = getEdgeNormalData(edge, p1, p2);
+    if (!normalInfo) return null;
+    const { normalData, edgeLen } = normalInfo;
+    if (edgeLen < 1e-6) return null;
+    const projection = offsetVector.x * normalData.x + offsetVector.y * normalData.y;
+    return projection / edgeLen;
+}
+
+function computeVertexLabelPlacement(vertexId) {
+    const vertex = findVertexById(vertexId);
+    if (!vertex) {
+        return {
+            offset: screenVectorToData(TEXT_VERTEX_OFFSET_PX),
+            align: 'left',
+            baseline: 'middle'
+        };
+    }
+
+    const neighborIds = U.findNeighbors(vertexId, allEdges);
+    const neighbors = neighborIds.map(id => findVertexById(id)).filter(Boolean);
+    let dirData = { x: 1, y: 0 };
+
+    if (neighbors.length === 2) {
+        const v1 = { x: neighbors[0].x - vertex.x, y: neighbors[0].y - vertex.y };
+        const v2 = { x: neighbors[1].x - vertex.x, y: neighbors[1].y - vertex.y };
+        const v1Len = Math.hypot(v1.x, v1.y);
+        const v2Len = Math.hypot(v2.x, v2.y);
+        if (v1Len > 1e-6 && v2Len > 1e-6) {
+            const v1Unit = { x: v1.x / v1Len, y: v1.y / v1Len };
+            const v2Unit = { x: v2.x / v2Len, y: v2.y / v2Len };
+            const sum = { x: v1Unit.x + v2Unit.x, y: v1Unit.y + v2Unit.y };
+            const sumLen = Math.hypot(sum.x, sum.y);
+            if (sumLen > 1e-6) {
+                // Reflex side is opposite the small-angle bisector
+                dirData = { x: -sum.x / sumLen, y: -sum.y / sumLen };
+            } else {
+                // Nearly straight: use a perpendicular direction
+                dirData = { x: -v1Unit.y, y: v1Unit.x };
+            }
+        }
+    }
+
+    const screenPos = dataToScreen(vertex);
+    const screenPos2 = dataToScreen({ x: vertex.x + dirData.x, y: vertex.y + dirData.y });
+    let screenDir = { x: screenPos2.x - screenPos.x, y: screenPos2.y - screenPos.y };
+    const screenDirLen = Math.hypot(screenDir.x, screenDir.y);
+    if (screenDirLen > 1e-6) {
+        screenDir.x /= screenDirLen;
+        screenDir.y /= screenDirLen;
+    } else {
+        screenDir = { x: 1, y: 0 };
+    }
+
+    const radius = Math.hypot(TEXT_VERTEX_OFFSET_PX.x, TEXT_VERTEX_OFFSET_PX.y);
+    const offsetScreen = { x: screenDir.x * radius, y: screenDir.y * radius };
+    const align = screenDir.x >= 0 ? 'left' : 'right';
+
+    return {
+        offset: screenVectorToData(offsetScreen),
+        align,
+        baseline: 'middle'
+    };
+}
+
+function getInterpolationStyleById(id) {
+    return interpolationStyles.find(style => style.id === id) || null;
+}
+
+function getActiveInterpolationStyle() {
+    return getInterpolationStyleById(activeInterpolationStyleId) || interpolationStyles[0] || DEFAULT_INTERPOLATION_STYLE;
+}
+
+function setActiveInterpolationStyle(styleId) {
+    if (!styleId) return;
+    activeInterpolationStyleId = styleId;
+    schedulePersistState();
+}
+
+function getTextElementAnchorData(textElement) {
+    if (!textElement) return null;
+
+    const previewVertexMap = new Map();
+    if (isDragConfirmed && Array.isArray(dragPreviewVertices) && dragPreviewVertices.length > 0) {
+        dragPreviewVertices.forEach(v => {
+            if (!v || !v.id) return;
+            const originalId = v.originalId || v.id;
+            previewVertexMap.set(originalId, v);
+        });
+    }
+
+    const getLiveVertexById = (id) => {
+        if (previewVertexMap.has(id)) return previewVertexMap.get(id);
+        return findVertexById(id);
+    };
+
+    if (textElement.anchorType === 'canvas') {
+        if (!textElement.position) return null;
+        return { anchor: textElement.position };
+    }
+
+    if (textElement.anchorType === 'vertex') {
+        const vertex = getLiveVertexById(textElement.anchorId);
+        if (!vertex) return null;
+        return { anchor: { x: vertex.x, y: vertex.y } };
+    }
+
+    if (textElement.anchorType === 'edge') {
+        const edge = allEdges.find(e => U.getEdgeId(e) === textElement.anchorId);
+        if (!edge) return null;
+        const p1 = getLiveVertexById(edge.id1);
+        const p2 = getLiveVertexById(edge.id2);
+        if (!p1 || !p2) return null;
+        const anchor = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+        const edgeAngleRad = Math.atan2(p2.y - p1.y, p2.x - p1.x);
+        const p1Screen = dataToScreen(p1);
+        const p2Screen = dataToScreen(p2);
+        const edgeAngleRadScreen = Math.atan2(p2Screen.y - p1Screen.y, p2Screen.x - p1Screen.x);
+        // If the edge is a boundary with a single adjacent face, push the label away from that face.
+        const adjacentFaces = allFaces.filter(face => {
+            const ids = face.vertexIds || [];
+            for (let i = 0; i < ids.length; i++) {
+                const id1 = ids[i];
+                const id2 = ids[(i + 1) % ids.length];
+                if ((id1 === edge.id1 && id2 === edge.id2) || (id1 === edge.id2 && id2 === edge.id1)) {
+                    return true;
+                }
+            }
+            return false;
+        });
+        let faceVerticesForEdge = null;
+        if (adjacentFaces.length === 1) {
+            const face = adjacentFaces[0];
+            faceVerticesForEdge = (face.vertexIds || []).map(id => getLiveVertexById(id)).filter(Boolean);
+        }
+
+        const normalInfo = getEdgeNormalData(edge, p1, p2, faceVerticesForEdge);
+        const normalData = normalInfo ? normalInfo.normalData : null;
+
+        return {
+            anchor,
+            edgeAngleRad,
+            edgeAngleRadScreen,
+            edgeNormalData: normalData,
+            edgeLength: normalInfo ? normalInfo.edgeLen : null
+        };
+    }
+
+    if (textElement.anchorType === 'face') {
+        const face = allFaces.find(f => U.getFaceId(f) === textElement.anchorId);
+        if (!face) return null;
+        const vertices = face.vertexIds.map(id => getLiveVertexById(id)).filter(p => p && p.type === 'regular');
+        if (vertices.length < 3) return null;
+        const anchor = {
+            x: vertices.reduce((sum, v) => sum + v.x, 0) / vertices.length,
+            y: vertices.reduce((sum, v) => sum + v.y, 0) / vertices.length
+        };
+        return { anchor };
+    }
+
+    return null;
+}
+
+function getActiveTextTranslationDelta() {
+    if (actionContext?.finalSnapResult?.finalDelta) return actionContext.finalSnapResult.finalDelta;
+    if (actionContext?.textFinalDelta) return actionContext.textFinalDelta;
+    if (dragPreviewVertices.length > 0 && initialDragVertexStates.length > 0) {
+        return {
+            x: dragPreviewVertices[0].x - initialDragVertexStates[0].x,
+            y: dragPreviewVertices[0].y - initialDragVertexStates[0].y
+        };
+    }
+    return null;
+}
+
+function getTextElementRenderState(textElement) {
+    const anchorData = getTextElementAnchorData(textElement);
+    if (!anchorData) return null;
+
+    let offset = textElement.offset || { x: 0, y: 0 };
+    if (textElement.anchorType === 'edge') {
+        if (typeof textElement.edgeOffsetFactor === 'number' && anchorData.edgeNormalData && anchorData.edgeLength) {
+            offset = {
+                x: anchorData.edgeNormalData.x * anchorData.edgeLength * textElement.edgeOffsetFactor,
+                y: anchorData.edgeNormalData.y * anchorData.edgeLength * textElement.edgeOffsetFactor
+            };
+        } else if (!textElement.offset || !('x' in textElement.offset) || !('y' in textElement.offset)) {
+            offset = computeEdgeLabelOffsetData(textElement.anchorId);
+            const factor = computeEdgeOffsetFactor(textElement.anchorId, offset);
+            if (typeof factor === 'number') {
+                textElement.edgeOffsetFactor = factor;
+            }
+        }
+    }
+    let position = { x: anchorData.anchor.x + offset.x, y: anchorData.anchor.y + offset.y };
+    let rotationDeg = textElement.rotationDeg || 0;
+    let scale = textElement.scale || 1;
+    let textAlign = 'center';
+    let textBaseline = 'middle';
+
+    if (textElement.anchorType === 'vertex') {
+        const placement = computeVertexLabelPlacement(textElement.anchorId);
+        textAlign = textElement.vertexAlign || placement.align || 'left';
+        textBaseline = textElement.vertexBaseline || placement.baseline || 'middle';
+    } else if (textElement.anchorType === 'edge') {
+        textAlign = 'center';
+        textBaseline = 'middle';
+        if (typeof anchorData.edgeAngleRadScreen === 'number') {
+            rotationDeg += anchorData.edgeAngleRadScreen * (180 / Math.PI);
+        } else if (typeof anchorData.edgeAngleRad === 'number') {
+            rotationDeg += anchorData.edgeAngleRad * (180 / Math.PI);
+        }
+    } else if (textElement.anchorType === 'canvas') {
+        textAlign = 'left';
+        textBaseline = 'top';
+    }
+
+    if (textElement.anchorType === 'edge') {
+        if (rotationDeg > 90 || rotationDeg < -90) {
+            rotationDeg += 180;
+            if (rotationDeg > 180) rotationDeg -= 360;
+            textBaseline = 'top';
+        }
+    }
+
+    const isSelected = selectedTextIds.includes(textElement.id);
+    if (isDragConfirmed && isSelected) {
+        if (transformIndicatorData) {
+            const { center, rotation, scale: transformScale, directionalScale, startVector } = transformIndicatorData;
+            position = U.applyTransformToVertex(position, center, rotation, transformScale, directionalScale, startVector);
+            rotationDeg -= rotation * (180 / Math.PI);
+            scale *= transformScale;
+        } else {
+            const delta = getActiveTextTranslationDelta();
+            if (delta) {
+                position = { x: position.x + delta.x, y: position.y + delta.y };
+            }
+        }
+    }
+
+    return {
+        id: textElement.id,
+        content: textElement.content || '',
+        position,
+        rotationDeg,
+        scale,
+        textAlign,
+        textBaseline
+    };
+}
+
+function drawTextElements(colors) {
+    const overlayRect = htmlOverlay.getBoundingClientRect();
+    const elementsToRemove = [];
+
+    allTextElements.forEach(textElement => {
+        const renderState = getTextElementRenderState(textElement);
+        if (!renderState) {
+            elementsToRemove.push(textElement.id);
+            return;
+        }
+
+        const screenPos = dataToScreen(renderState.position);
+        const domId = `text-${renderState.id}`;
+        const isSelected = selectedTextIds.includes(textElement.id);
+
+        const baseTextColor = textElement.color || getColorForTarget(C.COLOR_TARGET_TEXT) || colors.uiTextDefault || colors.geometryInfoText;
+        const selectionTint = colors.selectionGlow || 'rgba(120, 170, 255, 1)';
+        const selectedTextColor = getTintedTextColor(baseTextColor, selectionTint, 0.35);
+        updateHtmlLabel({
+            id: domId,
+            content: renderState.content,
+            x: screenPos.x,
+            y: screenPos.y,
+            color: isSelected ? selectedTextColor : baseTextColor,
+            fontSize: (textElement.fontSize || DEFAULT_TEXT_FONT_SIZE) * renderState.scale,
+            options: {
+                textAlign: renderState.textAlign,
+                textBaseline: renderState.textBaseline,
+                rotation: renderState.rotationDeg
+            }
+        });
+
+        const el = activeHtmlLabels.get(domId);
+        if (el) {
+            const outlineTarget = el.contentEl || el;
+            outlineTarget.style.outline = 'none';
+            outlineTarget.style.textShadow = 'none';
+            outlineTarget.style.color = isSelected ? selectedTextColor : baseTextColor;
+            const boundsTarget = el.katexEl || outlineTarget;
+            const rect = boundsTarget.getBoundingClientRect();
+            textElement.screenBounds = {
+                left: rect.left - overlayRect.left,
+                top: rect.top - overlayRect.top,
+                right: rect.right - overlayRect.left,
+                bottom: rect.bottom - overlayRect.top
+            };
+        }
+    });
+
+    if (elementsToRemove.length > 0) {
+        allTextElements = allTextElements.filter(el => !elementsToRemove.includes(el.id));
+        selectedTextIds = selectedTextIds.filter(id => !elementsToRemove.includes(id));
+    }
+}
+
+function findClickedTextElement(screenPos) {
+    for (let i = allTextElements.length - 1; i >= 0; i--) {
+        const textElement = allTextElements[i];
+        const bounds = textElement.screenBounds;
+        if (!bounds) continue;
+        if (screenPos.x >= bounds.left && screenPos.x <= bounds.right &&
+            screenPos.y >= bounds.top && screenPos.y <= bounds.bottom) {
+            return textElement;
+        }
+    }
+    return null;
+}
+
+function startTextEditing(textElement, initialText = '') {
+    if (!textEditorState.inputEl) {
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.style.position = 'absolute';
+        input.style.zIndex = '5';
+        input.style.pointerEvents = 'auto';
+        input.style.fontFamily = 'KaTeX_Main, Times New Roman, serif';
+        input.style.fontSize = `${textElement.fontSize || DEFAULT_TEXT_FONT_SIZE}px`;
+        input.style.border = '1px solid rgba(255, 255, 255, 0.4)';
+        input.style.borderRadius = '4px';
+        input.style.padding = '2px 4px';
+        input.style.background = 'rgba(0, 0, 0, 0.6)';
+        input.style.color = '#ffffff';
+        input.style.outline = 'none';
+        input.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                finalizeTextEditing(true);
+            } else if (event.key === 'Escape') {
+                event.preventDefault();
+                finalizeTextEditing(false);
+            }
+        });
+        input.addEventListener('mouseleave', () => finalizeTextEditing(true));
+        input.addEventListener('blur', () => finalizeTextEditing(true));
+        htmlOverlay.appendChild(input);
+        textEditorState.inputEl = input;
+    }
+
+    const renderState = getTextElementRenderState(textElement);
+    if (!renderState) return;
+
+    const screenPos = dataToScreen(renderState.position);
+    const input = textEditorState.inputEl;
+    input.value = initialText || textElement.content || '';
+    input.style.left = `${screenPos.x}px`;
+    input.style.top = `${screenPos.y}px`;
+    input.style.transform = `translate(-10%, -10%)`;
+    input.style.display = 'block';
+
+    textEditorState.activeId = textElement.id;
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+}
+
+function finalizeTextEditing(commitChanges) {
+    const input = textEditorState.inputEl;
+    if (!input) return;
+    const targetId = textEditorState.activeId;
+    if (targetId && commitChanges) {
+        const textElement = getTextElementById(targetId);
+        if (textElement) {
+            saveStateForUndo();
+            const nextContent = input.value.trim();
+            if (!nextContent && textElement.isDraft) {
+                allTextElements = allTextElements.filter(el => el.id !== textElement.id);
+                selectedTextIds = selectedTextIds.filter(id => id !== textElement.id);
+            } else {
+                textElement.content = nextContent || textElement.content || '';
+                delete textElement.isDraft;
+            }
+        }
+    }
+    input.style.display = 'none';
+    textEditorState.activeId = null;
+}
+
+function createTextElementFromHover(initialContent = '') {
+    let anchorType = 'canvas';
+    let anchorId = null;
+    let offset = { x: 0, y: 0 };
+    let position = screenToData(mousePos);
+
+    if (hoveredVertexId) {
+        anchorType = 'vertex';
+        anchorId = hoveredVertexId;
+        const placement = computeVertexLabelPlacement(anchorId);
+        offset = placement.offset;
+    } else if (hoveredEdgeId) {
+        anchorType = 'edge';
+        anchorId = hoveredEdgeId;
+        offset = computeEdgeLabelOffsetData(anchorId);
+    } else if (hoveredFaceId) {
+        anchorType = 'face';
+        anchorId = hoveredFaceId;
+    } else {
+        const backgroundOffset = screenVectorToData(TEXT_BACKGROUND_OFFSET_PX);
+        position = { x: position.x + backgroundOffset.x, y: position.y + backgroundOffset.y };
+    }
+
+    const textElement = {
+        id: U.generateUniqueId(),
+        content: initialContent,
+        anchorType,
+        anchorId,
+        position: anchorType === 'canvas' ? position : null,
+        offset: anchorType === 'canvas' ? { x: 0, y: 0 } : offset,
+        rotationDeg: 0,
+        scale: 1,
+        fontSize: DEFAULT_TEXT_FONT_SIZE,
+        color: getColorForTarget(C.COLOR_TARGET_TEXT),
+        isDraft: true
+    };
+
+    if (anchorType === 'vertex') {
+        const placement = computeVertexLabelPlacement(anchorId);
+        textElement.vertexAlign = placement.align;
+        textElement.vertexBaseline = placement.baseline;
+    }
+
+    allTextElements.push(textElement);
+    selectedTextIds = [textElement.id];
+    startTextEditing(textElement, initialContent);
 }
 
 function handleCenterSelection(centerId, shiftKey, ctrlKey) {
@@ -899,6 +1506,17 @@ function buildMainToolbarUI() {
 
     currentY += C.TOOL_BUTTON_HEIGHT + verticalRowGap;
 
+    canvasUI.interpolationToolButton = {
+        id: "interpolation-tool-button",
+        type: "toolButton",
+        x: C.UI_BUTTON_PADDING,
+        y: currentY,
+        width: C.UI_TOOLBAR_WIDTH - (2 * C.UI_BUTTON_PADDING),
+        height: C.TOOL_BUTTON_HEIGHT,
+    };
+
+    currentY += C.TOOL_BUTTON_HEIGHT + verticalRowGap;
+
     canvasUI.transformToolButton = {
         id: "transform-tool-button",
         type: "toolButton",
@@ -1000,6 +1618,57 @@ function buildColorPaletteUI() {
         };
     } else {
         canvasUI.colorPaletteBounds = null;
+    }
+}
+
+function buildInterpolationPanelUI() {
+    canvasUI.interpolationIcons = [];
+    if (!canvasUI.interpolationToolButton) return;
+
+    const panelStartX = C.UI_TOOLBAR_WIDTH + C.UI_BUTTON_PADDING;
+    const buttonCenterY = canvasUI.interpolationToolButton.y + (C.TOOL_BUTTON_HEIGHT / 2);
+    const iconSize = C.TRANSFORM_ICON_SIZE;
+    const verticalOffset = -2;
+    const iconY = buttonCenterY - (iconSize / 2) + verticalOffset;
+    const spacing = C.TRANSFORM_ICON_SIZE + C.TRANSFORM_ICON_PADDING;
+    let currentX = panelStartX;
+
+    interpolationStyles.forEach(style => {
+        canvasUI.interpolationIcons.push({
+            id: `interpolation-${style.id}`,
+            type: 'interpolationStyle',
+            styleId: style.id,
+            x: currentX + (spacing - iconSize) / 2,
+            y: iconY,
+            width: iconSize,
+            height: iconSize,
+        });
+        currentX += spacing;
+    });
+
+    canvasUI.interpolationIcons.push({
+        id: 'interpolation-add',
+        type: 'interpolationAdd',
+        x: currentX + (spacing - iconSize) / 2,
+        y: iconY,
+        width: iconSize,
+        height: iconSize,
+    });
+
+    const allPanelElements = canvasUI.interpolationIcons.filter(Boolean);
+    if (allPanelElements.length > 0) {
+        const minY = Math.min(...allPanelElements.map(el => el.y));
+        const maxX = Math.max(...allPanelElements.map(el => el.x + el.width));
+        const maxY = Math.max(...allPanelElements.map(el => el.y + el.height));
+        const padding = 5;
+        canvasUI.interpolationPanelBounds = {
+            x: C.UI_TOOLBAR_WIDTH,
+            y: minY - padding,
+            width: (maxX - C.UI_TOOLBAR_WIDTH) + padding,
+            height: (maxY - minY) + (padding * 2)
+        };
+    } else {
+        canvasUI.interpolationPanelBounds = null;
     }
 }
 
@@ -1125,6 +1794,9 @@ function drawDebugBounds(ctx) {
     if (isColorPaletteExpanded && canvasUI.colorPaletteBounds) {
         drawBox(canvasUI.colorPaletteBounds);
     }
+    if (isInterpolationPanelExpanded && canvasUI.interpolationPanelBounds) {
+        drawBox(canvasUI.interpolationPanelBounds);
+    }
     if (isTransformPanelExpanded && canvasUI.transformPanelBounds) {
         drawBox(canvasUI.transformPanelBounds);
     }
@@ -1196,6 +1868,7 @@ function saveStateForUndo() {
     undoStack.push(state);
     if (undoStack.length > C.MAX_HISTORY_SIZE) undoStack.shift();
     redoStack = [];
+    schedulePersistState();
     
 }
 
@@ -1215,6 +1888,7 @@ function isMouseInUIPanel(pos) {
     const activePanels = [];
     if (canvasUI.mainToolbar) activePanels.push(canvasUI.mainToolbar);
     if (isColorPaletteExpanded && canvasUI.colorPaletteBounds) activePanels.push(canvasUI.colorPaletteBounds);
+    if (isInterpolationPanelExpanded && canvasUI.interpolationPanelBounds) activePanels.push(canvasUI.interpolationPanelBounds);
     if (isTransformPanelExpanded && canvasUI.transformPanelBounds) activePanels.push(canvasUI.transformPanelBounds);
     if (isDisplayPanelExpanded && canvasUI.displayPanelBounds) activePanels.push(canvasUI.displayPanelBounds);
 
@@ -1228,6 +1902,7 @@ function isMouseInUIPanel(pos) {
     // --- Step 2: Check for hits within the vertical gaps between submenus ---
     const activeSubPanels = [];
     if (isColorPaletteExpanded && canvasUI.colorPaletteBounds) activeSubPanels.push(canvasUI.colorPaletteBounds);
+    if (isInterpolationPanelExpanded && canvasUI.interpolationPanelBounds) activeSubPanels.push(canvasUI.interpolationPanelBounds);
     if (isTransformPanelExpanded && canvasUI.transformPanelBounds) activeSubPanels.push(canvasUI.transformPanelBounds);
     if (isDisplayPanelExpanded && canvasUI.displayPanelBounds) activeSubPanels.push(canvasUI.displayPanelBounds);
     
@@ -1266,11 +1941,17 @@ function restoreState(state) {
     allVertices = JSON.parse(JSON.stringify(state.vertices));
     allEdges = JSON.parse(JSON.stringify(state.edges));
     allFaces = JSON.parse(JSON.stringify(state.faces || []));
+    allTextElements = JSON.parse(JSON.stringify(state.textElements || []));
     selectedVertexIds = JSON.parse(JSON.stringify(state.selectedVertexIds || []));
     selectedEdgeIds = JSON.parse(JSON.stringify(state.selectedEdgeIds || []));
     selectedFaceIds = JSON.parse(JSON.stringify(state.selectedFaceIds || []));
+    selectedTextIds = JSON.parse(JSON.stringify(state.selectedTextIds || []));
     selectedCenterIds = JSON.parse(JSON.stringify(state.selectedCenterIds || []));
     activeColorTargets = JSON.parse(JSON.stringify(state.activeColorTargets || []));
+    interpolationStyles = state.interpolationStyles && state.interpolationStyles.length > 0
+        ? JSON.parse(JSON.stringify(state.interpolationStyles))
+        : [JSON.parse(JSON.stringify(DEFAULT_INTERPOLATION_STYLE))];
+    activeInterpolationStyleId = state.activeInterpolationStyleId || interpolationStyles[0]?.id || DEFAULT_INTERPOLATION_STYLE.id;
     allColors = state.allColors ? JSON.parse(JSON.stringify(state.allColors)) : C.DEFAULT_RECENT_COLORS.map(color => {
         if (typeof color === 'string') {
             return { type: 'color', value: color };
@@ -1281,7 +1962,11 @@ function restoreState(state) {
         [C.COLOR_TARGET_VERTEX]: 0,
         [C.COLOR_TARGET_EDGE]: 1,
         [C.COLOR_TARGET_FACE]: 2,
+        [C.COLOR_TARGET_TEXT]: 0,
     };
+    if (colorAssignments[C.COLOR_TARGET_TEXT] === undefined) {
+        colorAssignments[C.COLOR_TARGET_TEXT] = 0;
+    }
     activeCenterId = state.activeCenterId !== undefined ? state.activeCenterId : null;
     isDrawingMode = state.isDrawingMode !== undefined ? state.isDrawingMode : false;
     previewLineStartVertexId = state.previewLineStartVertexId !== undefined ? state.previewLineStartVertexId : null;
@@ -1303,6 +1988,7 @@ function restoreState(state) {
     if (undoStack.length === 0) {
         undoStack.push(restoredState);
     }
+    schedulePersistState();
     // REMOVE THE LINE BELOW:
     // saveStateForUndo();  <-- REMOVE THIS
 }
@@ -1312,11 +1998,15 @@ function getCurrentState() {
         vertices: JSON.parse(JSON.stringify(allVertices)),
         edges: JSON.parse(JSON.stringify(allEdges)),
         faces: JSON.parse(JSON.stringify(allFaces)),
+        textElements: JSON.parse(JSON.stringify(allTextElements)),
         selectedVertexIds: JSON.parse(JSON.stringify(selectedVertexIds)),
         selectedEdgeIds: JSON.parse(JSON.stringify(selectedEdgeIds)),
         selectedFaceIds: JSON.parse(JSON.stringify(selectedFaceIds)),
+        selectedTextIds: JSON.parse(JSON.stringify(selectedTextIds)),
         selectedCenterIds: JSON.parse(JSON.stringify(selectedCenterIds)),
         activeColorTargets: JSON.parse(JSON.stringify(activeColorTargets)),
+        interpolationStyles: JSON.parse(JSON.stringify(interpolationStyles)),
+        activeInterpolationStyleId: activeInterpolationStyleId,
         colorAssignments: JSON.parse(JSON.stringify(colorAssignments)),
         allColors: JSON.parse(JSON.stringify(allColors)),
         activeCenterId: activeCenterId,
@@ -1326,6 +2016,118 @@ function getCurrentState() {
         frozenReference_D_g2g,
         deletedFaceIds: new Set(deletedFaceIds)
     };
+}
+
+function normalizeUserId(value) {
+    if (!value) return '';
+    return value.toLowerCase().trim().replace(/[^a-z0-9_-]/g, '').slice(0, 40);
+}
+
+function getUserIdFromUrl() {
+    try {
+        const params = new URLSearchParams(window.location.search);
+        return normalizeUserId(params.get('user'));
+    } catch (err) {
+        return '';
+    }
+}
+
+function ensureActiveUserId() {
+    if (activeUserId) return activeUserId;
+
+    const urlUserId = getUserIdFromUrl();
+    if (urlUserId) {
+        activeUserId = urlUserId;
+        try {
+            localStorage.setItem(STORAGE_USER_ID_KEY, activeUserId);
+        } catch (err) {
+            console.warn('Could not persist user id to localStorage.', err);
+        }
+        return activeUserId;
+    }
+
+    try {
+        activeUserId = localStorage.getItem(STORAGE_USER_ID_KEY);
+    } catch (err) {
+        activeUserId = null;
+    }
+
+    if (!activeUserId) {
+        let promptValue = '';
+        try {
+            promptValue = window.prompt('Enter a name to keep your drawings on this device:', '') || '';
+        } catch (err) {
+            promptValue = '';
+        }
+        const normalized = normalizeUserId(promptValue);
+        activeUserId = normalized || `user-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+
+        try {
+            localStorage.setItem(STORAGE_USER_ID_KEY, activeUserId);
+        } catch (err) {
+            console.warn('Could not persist user id to localStorage.', err);
+        }
+    }
+
+    return activeUserId;
+}
+
+function getStateStorageKey() {
+    const userId = ensureActiveUserId();
+    return `${STORAGE_PREFIX}.state.v${STORAGE_VERSION}.${userId}`;
+}
+
+function getSerializableState() {
+    const state = getCurrentState();
+    return {
+        ...state,
+        deletedFaceIds: Array.from(state.deletedFaceIds || [])
+    };
+}
+
+function persistStateNow() {
+    if (!window.localStorage) return;
+    const storageKey = getStateStorageKey();
+    const payload = {
+        version: STORAGE_VERSION,
+        savedAt: Date.now(),
+        state: getSerializableState()
+    };
+
+    try {
+        localStorage.setItem(storageKey, JSON.stringify(payload));
+    } catch (err) {
+        console.warn('Could not persist state to localStorage.', err);
+    }
+}
+
+function schedulePersistState() {
+    if (!window.localStorage) return;
+    if (persistTimeoutId) {
+        clearTimeout(persistTimeoutId);
+    }
+    persistTimeoutId = setTimeout(() => {
+        persistTimeoutId = null;
+        persistStateNow();
+    }, 300);
+}
+
+function loadStateFromStorage() {
+    if (!window.localStorage) return false;
+    const storageKey = getStateStorageKey();
+    try {
+        const raw = localStorage.getItem(storageKey);
+        if (!raw) return false;
+        const payload = JSON.parse(raw);
+        if (!payload || !payload.state) return false;
+        restoreState(payload.state);
+        updateComponentDrawOrder();
+        didRestoreFromStorage = true;
+        return true;
+    } catch (err) {
+        console.warn('Could not load state from localStorage.', err);
+        return false;
+    }
 }
 
 function updateFaceHierarchy() {
@@ -1578,6 +2380,24 @@ function handleCopy() {
     });
 
     clipboard.faces = facesToCopy.map(f => JSON.parse(JSON.stringify(f)));
+    const selectedTextIdSet = new Set(selectedTextIds);
+    const faceIdSet = new Set(selectedFaceIds);
+    const edgeIdSet = new Set(selectedEdgeIds);
+    clipboard.texts = allTextElements.filter(text => {
+        if (selectedTextIdSet.has(text.id)) return true;
+        if (text.anchorType === 'vertex') return verticesToCopyIds.has(text.anchorId);
+        if (text.anchorType === 'edge') {
+            if (edgeIdSet.has(text.anchorId)) return true;
+            const edge = allEdges.find(e => U.getEdgeId(e) === text.anchorId);
+            return edge ? (verticesToCopyIds.has(edge.id1) && verticesToCopyIds.has(edge.id2)) : false;
+        }
+        if (text.anchorType === 'face') {
+            if (faceIdSet.has(text.anchorId)) return true;
+            const face = allFaces.find(f => U.getFaceId(f) === text.anchorId);
+            return face ? face.vertexIds.every(id => verticesToCopyIds.has(id)) : false;
+        }
+        return false;
+    }).map(text => JSON.parse(JSON.stringify(text)));
     clipboard.referenceVertex = screenToData(mousePos);
 }
 
@@ -1654,10 +2474,44 @@ function handlePaste() {
     });
     ensureFaceCoordinateSystems();
 
+    const newPastedTextIds = [];
+    clipboard.texts.forEach(cbText => {
+        const newText = JSON.parse(JSON.stringify(cbText));
+        newText.id = U.generateUniqueId();
+        if (newText.anchorType === 'canvas') {
+            if (!newText.position) return;
+            newText.position = {
+                x: newText.position.x + deltaX,
+                y: newText.position.y + deltaY
+            };
+        } else if (newText.anchorType === 'vertex') {
+            const newAnchorId = oldToNewIdMap.get(newText.anchorId);
+            if (!newAnchorId) return;
+            newText.anchorId = newAnchorId;
+        } else if (newText.anchorType === 'edge') {
+            const edge = allEdges.find(e => U.getEdgeId(e) === newText.anchorId);
+            if (!edge) return;
+            const newId1 = oldToNewIdMap.get(edge.id1);
+            const newId2 = oldToNewIdMap.get(edge.id2);
+            if (!newId1 || !newId2) return;
+            newText.anchorId = U.getEdgeId({ id1: newId1, id2: newId2 });
+        } else if (newText.anchorType === 'face') {
+            const face = allFaces.find(f => U.getFaceId(f) === newText.anchorId);
+            if (!face) return;
+            const newVertexIds = face.vertexIds.map(id => oldToNewIdMap.get(id));
+            if (!newVertexIds.every(Boolean)) return;
+            newText.anchorId = U.getFaceId({ vertexIds: newVertexIds });
+        }
+
+        allTextElements.push(newText);
+        newPastedTextIds.push(newText.id);
+    });
+
     // Select the newly pasted geometry
     selectedVertexIds = newPastedRegularVertexIds;
     selectedEdgeIds = clipboard.edges.map(e => U.getEdgeId({ id1: oldToNewIdMap.get(e.id1), id2: oldToNewIdMap.get(e.id2) }));
     selectedFaceIds = newPastedFaceIds;
+    selectedTextIds = newPastedTextIds;
     activeCenterId = newPastedActiveCenterId;
 
     updateComponentDrawOrder()
@@ -1668,8 +2522,9 @@ function deleteSelectedItems() {
     const centerIdsToDelete = new Set(selectedCenterIds);
     const edgeIdsToDelete = new Set(selectedEdgeIds);
     const faceIdsToExplicitlyDelete = new Set(selectedFaceIds);
+    const textIdsToDelete = new Set(selectedTextIds);
 
-    if (vertexIdsToDelete.size === 0 && centerIdsToDelete.size === 0 && edgeIdsToDelete.size === 0 && faceIdsToExplicitlyDelete.size === 0) {
+    if (vertexIdsToDelete.size === 0 && centerIdsToDelete.size === 0 && edgeIdsToDelete.size === 0 && faceIdsToExplicitlyDelete.size === 0 && textIdsToDelete.size === 0) {
         return;
     }
     saveStateForUndo();
@@ -1771,6 +2626,21 @@ function deleteSelectedItems() {
     if (centerIdsToDelete.size > 0) {
         allVertices = allVertices.filter(p => !centerIdsToDelete.has(p.id));
     }
+
+    if (textIdsToDelete.size > 0) {
+        allTextElements = allTextElements.filter(el => !textIdsToDelete.has(el.id));
+    }
+
+    const existingVertexIds = new Set(allVertices.map(v => v.id));
+    const existingEdgeIds = new Set(allEdges.map(e => U.getEdgeId(e)));
+    const existingFaceIds = new Set(allFaces.map(f => U.getFaceId(f)));
+    allTextElements = allTextElements.filter(el => {
+        if (el.anchorType === 'vertex') return existingVertexIds.has(el.anchorId);
+        if (el.anchorType === 'edge') return existingEdgeIds.has(el.anchorId);
+        if (el.anchorType === 'face') return existingFaceIds.has(el.anchorId);
+        return true;
+    });
+    selectedTextIds = selectedTextIds.filter(id => allTextElements.some(el => el.id === id));
 
     performEscapeAction();
     updateComponentDrawOrder()
@@ -1985,7 +2855,7 @@ function completeGraphOnSelectedVertices() {
     updateComponentDrawOrder()
 }
 
-function applySelectionLogic(vertexIdsToSelect = [], edgeIdsToSelect = [], faceIdsToSelect = [], wantsShift, wantsCtrl, targetIsCenter = false) {
+function applySelectionLogic(vertexIdsToSelect = [], edgeIdsToSelect = [], faceIdsToSelect = [], wantsShift, wantsCtrl, targetIsCenter = false, textIdsToSelect = []) {
     if (targetIsCenter) {
         handleCenterSelection(vertexIdsToSelect[0], wantsShift, wantsCtrl);
     } else {
@@ -1993,6 +2863,7 @@ function applySelectionLogic(vertexIdsToSelect = [], edgeIdsToSelect = [], faceI
             selectedVertexIds = [...new Set([...selectedVertexIds, ...vertexIdsToSelect])];
             selectedEdgeIds = [...new Set([...selectedEdgeIds, ...edgeIdsToSelect])];
             selectedFaceIds = [...new Set([...selectedFaceIds, ...faceIdsToSelect])];
+            selectedTextIds = [...new Set([...selectedTextIds, ...textIdsToSelect])];
         } else if (wantsCtrl) {
             vertexIdsToSelect.forEach(id => {
                 const index = selectedVertexIds.indexOf(id);
@@ -2009,10 +2880,16 @@ function applySelectionLogic(vertexIdsToSelect = [], edgeIdsToSelect = [], faceI
                 if (index > -1) selectedFaceIds.splice(index, 1);
                 else selectedFaceIds.push(id);
             });
+            textIdsToSelect.forEach(id => {
+                const index = selectedTextIds.indexOf(id);
+                if (index > -1) selectedTextIds.splice(index, 1);
+                else selectedTextIds.push(id);
+            });
         } else {
             selectedVertexIds = [...vertexIdsToSelect];
             selectedEdgeIds = [...edgeIdsToSelect];
             selectedFaceIds = [...faceIdsToSelect];
+            selectedTextIds = [...textIdsToSelect];
         }
     }
 }
@@ -2649,10 +3526,11 @@ function drawUIElements(colors, axisFormatInfo) {
     R.updateMouseCoordinates(htmlOverlay, { coordsDisplayMode, isMouseOverCanvas, currentShiftPressed, ghostVertexPosition, gridDisplayMode, lastGridState, angleDisplayMode, canvas, dpr, mousePos, colors, useScientific: axisFormatInfo.useScientific }, screenToData, updateHtmlLabel);
     
     const stateForUI = {
-        dpr, canvasUI, isToolbarExpanded, isColorPaletteExpanded, isTransformPanelExpanded, isDisplayPanelExpanded, isVisibilityPanelExpanded,
+        dpr, canvasUI, isToolbarExpanded, isColorPaletteExpanded, isInterpolationPanelExpanded, isTransformPanelExpanded, isDisplayPanelExpanded, isVisibilityPanelExpanded,
         isPlacingTransform, placingTransformType, placingSnapPos, mousePos,
         allColors, activeThemeName, colors, verticesVisible, edgesVisible, facesVisible, coordsDisplayMode, gridDisplayMode, angleDisplayMode, distanceDisplayMode,
         namedColors: colorEditor.namedColors, colorAssignments, activeColorTargets,
+        interpolationStyles, activeInterpolationStyleId,
         isDraggingColorTarget, draggedColorTargetInfo
     };
     R.drawCanvasUI(ctx, htmlOverlay, stateForUI, updateHtmlLabel);
@@ -2673,6 +3551,7 @@ function redrawAll() {
     }
 
     drawFeedbackAndIndicators(colors);
+    drawTextElements(colors);
     R.drawAltHoverIndicator(ctx, { altHoverInfo, colors }, dataToScreen, findVertexById, updateHtmlLabel);
     drawUIElements(colors, axisFormatInfo);
     cleanupHtmlLabels();
@@ -2807,6 +3686,7 @@ function performEscapeAction() {
     selectedEdgeIds = [];
     selectedFaceIds = [];
     selectedCenterIds = [];
+    selectedTextIds = [];
     activeCenterId = null;
     activeColorTargets = [];
     if (isColorPaletteExpanded) {
@@ -3264,6 +4144,7 @@ function showContextMenu(event) {
             selectedEdgeIds = [];
             selectedFaceIds = [];
             selectedCenterIds = [];
+            selectedTextIds = [];
             if (clickedVertex) selectedVertexIds = [clickedVertex.id];
             else if (clickedEdge) selectedEdgeIds = [U.getEdgeId(clickedEdge)];
             else if (clickedFace) selectedFaceIds = [U.getFaceId(clickedFace)];
@@ -3375,6 +4256,36 @@ function handleDisplayPanelClick(screenPos) {
     return false;
 }
 
+function handleInterpolationPanelClick(screenPos) {
+    if (!isInterpolationPanelExpanded) return false;
+    for (const icon of canvasUI.interpolationIcons) {
+        if (screenPos.x >= icon.x && screenPos.x <= icon.x + icon.width &&
+            screenPos.y >= icon.y && screenPos.y <= icon.y + icon.height) {
+            if (icon.type === 'interpolationAdd') {
+                interpolationEditor?.initialize?.();
+                interpolationEditor?.show();
+                return true;
+            }
+            if (icon.type === 'interpolationStyle') {
+                const now = Date.now();
+                if (interpolationClickData.id === icon.styleId && (now - interpolationClickData.timestamp) < C.DOUBLE_CLICK_MS) {
+                    const style = getInterpolationStyleById(icon.styleId);
+                    if (style) {
+                        interpolationEditor?.initialize?.();
+                        interpolationEditor?.show(style);
+                    }
+                    interpolationClickData = { id: null, timestamp: 0 };
+                    return true;
+                }
+                interpolationClickData = { id: icon.styleId, timestamp: now };
+                setActiveInterpolationStyle(icon.styleId);
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 function handleCanvasUIClick(screenPos, shiftKey = false, ctrlKey = false) {
     const btn = canvasUI.toolbarButton;
     if (screenPos.x >= btn.x && screenPos.x <= btn.x + btn.width &&
@@ -3384,6 +4295,7 @@ function handleCanvasUIClick(screenPos, shiftKey = false, ctrlKey = false) {
             buildMainToolbarUI();
         } else {
             isColorPaletteExpanded = false;
+            isInterpolationPanelExpanded = false;
             isTransformPanelExpanded = false;
             isDisplayPanelExpanded = false;
             isVisibilityPanelExpanded = false;
@@ -3397,6 +4309,14 @@ function handleCanvasUIClick(screenPos, shiftKey = false, ctrlKey = false) {
         if (ctb && screenPos.x >= ctb.x && screenPos.x <= ctb.x + ctb.width &&
             screenPos.y >= ctb.y && screenPos.y <= ctb.y + ctb.height) {
             handleColorToolButtonClick();
+            return true;
+        }
+
+        const itb = canvasUI.interpolationToolButton;
+        if (itb && screenPos.x >= itb.x && screenPos.x <= itb.x + itb.width &&
+            screenPos.y >= itb.y && screenPos.y <= itb.y + itb.height) {
+            isInterpolationPanelExpanded = !isInterpolationPanelExpanded;
+            if (isInterpolationPanelExpanded) buildInterpolationPanelUI();
             return true;
         }
 
@@ -3419,6 +4339,12 @@ function handleCanvasUIClick(screenPos, shiftKey = false, ctrlKey = false) {
 
     if (isColorPaletteExpanded) {
         if (handleColorPaletteClick(screenPos, shiftKey, ctrlKey)) {
+            return true;
+        }
+    }
+
+    if (isInterpolationPanelExpanded) {
+        if (handleInterpolationPanelClick(screenPos)) {
             return true;
         }
     }
@@ -3965,6 +4891,7 @@ function handleRemoveVertexFromMenu() {
             selectedEdgeIds = [];
             selectedFaceIds = [];
             selectedCenterIds = [];
+            selectedTextIds = [];
             selectedVertexIds = [contextMenuVertexId];
         }
 
@@ -3986,6 +4913,7 @@ function handleRemoveEdgeFromMenu() {
             selectedVertexIds = [];
             selectedFaceIds = [];
             selectedCenterIds = [];
+            selectedTextIds = [];
             selectedEdgeIds = [contextMenuEdgeId];
         }
         // If it was already selected, do nothing to preserve the multi-selection.
@@ -4008,6 +4936,7 @@ function handleRemoveFaceFromMenu() {
             selectedVertexIds = [];
             selectedEdgeIds = [];
             selectedCenterIds = [];
+            selectedTextIds = [];
             selectedFaceIds = [contextMenuFaceId];
         }
         // If it was already selected, do nothing to preserve the multi-selection.
@@ -4019,7 +4948,7 @@ function handleRemoveFaceFromMenu() {
 }
 
 function handleLeftMouseButtonDown(event) {
-    const clickedUIElement = U.getClickedUIElement(mousePos, canvasUI, { isToolbarExpanded, isColorPaletteExpanded, isTransformPanelExpanded, isDisplayPanelExpanded, isVisibilityPanelExpanded });
+    const clickedUIElement = U.getClickedUIElement(mousePos, canvasUI, { isToolbarExpanded, isColorPaletteExpanded, isInterpolationPanelExpanded, isTransformPanelExpanded, isDisplayPanelExpanded, isVisibilityPanelExpanded });
     if (isPlacingTransform && (!clickedUIElement || clickedUIElement.type !== 'transformIcon')) {
         saveStateForUndo();
         const mouseDataPos = screenToData(mousePos);
@@ -4038,6 +4967,7 @@ function handleLeftMouseButtonDown(event) {
         selectedVertexIds = [];
         selectedEdgeIds = [];
         selectedFaceIds = [];
+        selectedTextIds = [];
 
         isPlacingTransform = false;
         placingTransformType = null;
@@ -4069,6 +4999,7 @@ function handleLeftMouseButtonDown(event) {
             selectedEdgeIds = [];
             selectedFaceIds = [];
             selectedCenterIds = [];
+            selectedTextIds = [];
             activeCenterId = null;
             activeColorTargets = [];
             if (isColorPaletteExpanded) {
@@ -4179,25 +5110,30 @@ function handleLeftMouseButtonDown(event) {
         return;
     }
 
-    let clickedVertex = findClickedVertex(mousePos);
-    let clickedEdge = !clickedVertex ? findClickedEdge(mousePos) : null;
-    let clickedFace = !clickedVertex && !clickedEdge ? findClickedFace(mousePos) : null;
+    const clickedText = findClickedTextElement(mousePos);
+    let clickedVertex = clickedText ? null : findClickedVertex(mousePos);
+    let clickedEdge = !clickedText && !clickedVertex ? findClickedEdge(mousePos) : null;
+    let clickedFace = !clickedText && !clickedVertex && !clickedEdge ? findClickedFace(mousePos) : null;
 
     const shiftOrCtrl = event.shiftKey || event.ctrlKey || event.metaKey;
-    const clickedItem = clickedVertex || clickedEdge || clickedFace;
+    const clickedItem = clickedText || clickedVertex || clickedEdge || clickedFace;
     let isClickOnSelection = false;
-    if (clickedVertex) isClickOnSelection = selectedVertexIds.includes(clickedVertex.id) || selectedCenterIds.includes(clickedVertex.id);
+    if (clickedText) isClickOnSelection = selectedTextIds.includes(clickedText.id);
+    else if (clickedVertex) isClickOnSelection = selectedVertexIds.includes(clickedVertex.id) || selectedCenterIds.includes(clickedVertex.id);
     else if (clickedEdge) isClickOnSelection = selectedEdgeIds.includes(U.getEdgeId(clickedEdge));
     else if (clickedFace) isClickOnSelection = selectedFaceIds.includes(U.getFaceId(clickedFace));
     
     if (!isDrawingMode && !shiftOrCtrl && clickedItem && !isClickOnSelection) {
-        if (clickedVertex) applySelectionLogic([clickedVertex.id], [], [], false, false, clickedVertex.type !== 'regular');
+        if (clickedText) applySelectionLogic([], [], [], false, false, false, [clickedText.id]);
+        else if (clickedVertex) applySelectionLogic([clickedVertex.id], [], [], false, false, clickedVertex.type !== 'regular');
         else if (clickedEdge) applySelectionLogic([], [U.getEdgeId(clickedEdge)], [], false, false);
         else if (clickedFace) applySelectionLogic([], [], [U.getFaceId(clickedFace)], false, false);
     }
     
     let dragHandle = null;
-    if (clickedVertex) {
+    if (clickedText) {
+        dragHandle = screenToData(mousePos);
+    } else if (clickedVertex) {
         dragHandle = clickedVertex;
     } else if (clickedEdge) {
         const p1 = findVertexById(clickedEdge.id1);
@@ -4207,7 +5143,7 @@ function handleLeftMouseButtonDown(event) {
         dragHandle = screenToData(mousePos);
     }
 
-    const isTransformDrag = activeCenterId && (selectedVertexIds.length > 0 || selectedEdgeIds.length > 0 || selectedFaceIds.length > 0);
+    const isTransformDrag = activeCenterId && (selectedVertexIds.length > 0 || selectedEdgeIds.length > 0 || selectedFaceIds.length > 0 || selectedTextIds.length > 0);
 
     initialDragVertexStates = [];
     dragPreviewVertices = [];
@@ -4217,6 +5153,7 @@ function handleLeftMouseButtonDown(event) {
         dragHandle: dragHandle,
         targetEdge: clickedEdge,
         targetFace: clickedFace,
+        targetText: clickedText,
         target: clickedItem || 'canvas',
         shiftKey: event.shiftKey,
         ctrlKey: event.ctrlKey || event.metaKey,
@@ -4272,6 +5209,7 @@ function finalizeDragAction() {
     selectedEdgeIds = [];
     selectedFaceIds = [];
     selectedCenterIds = [];
+    selectedTextIds = [];
     activeCenterId = null;
 
     const copyCount = parseInt(copyCountInput, 10) || 1;
@@ -4280,6 +5218,113 @@ function finalizeDragAction() {
     const isDeformingEdgeSnap = isDragConfirmed &&
         initialDragVertexStates.length === 1 &&
         actionContext?.finalSnapResult?.snapType === 'edge';
+
+    const textIdsToUpdate = new Set(initialDragTextStates.map(el => el.id));
+    if (textIdsToUpdate.size > 0) {
+        const textStatesById = new Map(initialDragTextStates.map(el => [el.id, el]));
+        const movingVertexIds = new Set(initiallySelectedVertexIds);
+        initiallySelectedEdgeIds.forEach(edgeId => {
+            const [id1, id2] = edgeId.split(C.EDGE_ID_DELIMITER);
+            if (id1) movingVertexIds.add(id1);
+            if (id2) movingVertexIds.add(id2);
+        });
+        initiallySelectedFaceIds.forEach(faceId => {
+            const face = allFaces.find(f => U.getFaceId(f) === faceId);
+            if (face) {
+                const faceVertexIds = getDescendantVertices(face.id, allFaces);
+                faceVertexIds.forEach(id => movingVertexIds.add(id));
+            }
+        });
+
+        const translationDelta = !transformIndicatorData ? getActiveTextTranslationDelta() : null;
+        const {
+            center,
+            rotation = 0,
+            scale = 1,
+            directionalScale = false,
+            startVector
+        } = transformIndicatorData || {};
+        const rotationDegDelta = -rotation * (180 / Math.PI);
+
+        allTextElements.forEach(textElement => {
+            if (!textIdsToUpdate.has(textElement.id)) return;
+            const baseElement = textStatesById.get(textElement.id) || textElement;
+            const anchorData = getTextElementAnchorData(baseElement);
+            if (baseElement.anchorType !== 'canvas' && !anchorData) return;
+
+            const anchor = baseElement.anchorType === 'canvas'
+                ? (baseElement.position || textElement.position)
+                : anchorData.anchor;
+            const baseOffset = baseElement.anchorType === 'canvas'
+                ? { x: 0, y: 0 }
+                : (baseElement.offset || { x: 0, y: 0 });
+            const basePosition = baseElement.anchorType === 'canvas'
+                ? (baseElement.position || textElement.position || { x: 0, y: 0 })
+                : { x: anchor.x + baseOffset.x, y: anchor.y + baseOffset.y };
+
+            const anchorMoves = (() => {
+                if (baseElement.anchorType === 'vertex') {
+                    return movingVertexIds.has(baseElement.anchorId);
+                }
+                if (baseElement.anchorType === 'edge') {
+                    if (initiallySelectedEdgeIds.includes(baseElement.anchorId)) return true;
+                    const edge = allEdges.find(e => U.getEdgeId(e) === baseElement.anchorId);
+                    return edge ? (movingVertexIds.has(edge.id1) && movingVertexIds.has(edge.id2)) : false;
+                }
+                if (baseElement.anchorType === 'face') {
+                    if (initiallySelectedFaceIds.includes(baseElement.anchorId)) return true;
+                    const face = allFaces.find(f => U.getFaceId(f) === baseElement.anchorId);
+                    return face ? face.vertexIds.every(id => movingVertexIds.has(id)) : false;
+                }
+                return false;
+            })();
+
+            if (transformIndicatorData) {
+                const newPosition = U.applyTransformToVertex(basePosition, center, rotation, scale, directionalScale, startVector);
+                textElement.rotationDeg = (baseElement.rotationDeg || 0) + rotationDegDelta;
+                textElement.scale = (baseElement.scale || 1) * scale;
+                if (baseElement.anchorType === 'canvas') {
+                    textElement.position = newPosition;
+                } else {
+                    const anchorAfter = anchorMoves
+                        ? U.applyTransformToVertex(anchor, center, rotation, scale, directionalScale, startVector)
+                        : anchor;
+                    const newOffset = {
+                        x: newPosition.x - anchorAfter.x,
+                        y: newPosition.y - anchorAfter.y
+                    };
+                    textElement.offset = newOffset;
+                    if (textElement.anchorType === 'edge') {
+                        const factor = computeEdgeOffsetFactor(textElement.anchorId, newOffset);
+                        if (typeof factor === 'number') {
+                            textElement.edgeOffsetFactor = factor;
+                        }
+                    }
+                }
+            } else if (translationDelta) {
+                if (baseElement.anchorType === 'canvas') {
+                    const pos = baseElement.position || textElement.position || { x: 0, y: 0 };
+                    textElement.position = {
+                        x: pos.x + translationDelta.x,
+                        y: pos.y + translationDelta.y
+                    };
+                } else if (!anchorMoves) {
+                    const offset = baseElement.offset || { x: 0, y: 0 };
+                    const newOffset = {
+                        x: offset.x + translationDelta.x,
+                        y: offset.y + translationDelta.y
+                    };
+                    textElement.offset = newOffset;
+                    if (textElement.anchorType === 'edge') {
+                        const factor = computeEdgeOffsetFactor(textElement.anchorId, newOffset);
+                        if (typeof factor === 'number') {
+                            textElement.edgeOffsetFactor = factor;
+                        }
+                    }
+                }
+            }
+        });
+    }
 
     if (isDeformingEdgeSnap) {
         const snapResult = actionContext.finalSnapResult;
@@ -4326,8 +5371,37 @@ function finalizeDragAction() {
             const verticesToCopy = initialDragVertexStates.filter(p => p.type === 'regular');
             if (copyCount > 1 && verticesToCopy.length > 0) {
                 const originalIds = new Set(verticesToCopy.map(p => p.id));
-                const edgesToCopy = allEdges.filter(e => originalIds.has(e.id1) && originalIds.has(e.id2));
-                const facesToCopy = allFaces.filter(f => f.vertexIds.every(id => originalIds.has(id)));
+                const selectedFaceIdSet = new Set(selectedFaceIds);
+                const selectedEdgeIdSet = new Set(selectedEdgeIds);
+
+                selectedFaceIds.forEach(faceId => {
+                    const face = allFaces.find(f => U.getFaceId(f) === faceId);
+                    if (!face) return;
+                    face.vertexIds.forEach(id => originalIds.add(id));
+                });
+
+                const faceEdgeIds = new Set();
+                selectedFaceIds.forEach(faceId => {
+                    const face = allFaces.find(f => U.getFaceId(f) === faceId);
+                    if (!face) return;
+                    for (let i = 0; i < face.vertexIds.length; i++) {
+                        const id1 = face.vertexIds[i];
+                        const id2 = face.vertexIds[(i + 1) % face.vertexIds.length];
+                        faceEdgeIds.add(U.getEdgeId({ id1, id2 }));
+                    }
+                });
+
+                const edgesToCopy = allEdges.filter(e => {
+                    const edgeId = U.getEdgeId(e);
+                    if (selectedEdgeIdSet.has(edgeId)) return true;
+                    if (faceEdgeIds.has(edgeId)) return true;
+                    return originalIds.has(e.id1) && originalIds.has(e.id2);
+                });
+
+                const facesToCopy = selectedFaceIds.length > 0
+                    ? allFaces.filter(f => selectedFaceIdSet.has(U.getFaceId(f)))
+                    : allFaces.filter(f => f.vertexIds.every(id => originalIds.has(id)));
+
                 const boundaryEdges = allEdges.filter(e =>
                     (originalIds.has(e.id1) && !originalIds.has(e.id2)) ||
                     (originalIds.has(e.id2) && !originalIds.has(e.id1))
@@ -4335,13 +5409,30 @@ function finalizeDragAction() {
                 const allNewVertices = [];
                 const allNewEdges = [];
                 const allNewFaces = [];
-                firstCopySelectionIds = { vertices: [], edges: [], faces: [] };
+                firstCopySelectionIds = { vertices: [], edges: [], faces: [], texts: [] };
+
+                const selectedTextIdSet = new Set(selectedTextIds);
+                const textsToCopy = allTextElements.filter(text => {
+                    if (selectedTextIdSet.has(text.id)) return true;
+                    if (text.anchorType === 'vertex') return originalIds.has(text.anchorId);
+                    if (text.anchorType === 'edge') {
+                        const edge = allEdges.find(e => U.getEdgeId(e) === text.anchorId);
+                        return edge ? (originalIds.has(edge.id1) && originalIds.has(edge.id2)) : false;
+                    }
+                    if (text.anchorType === 'face') {
+                        if (selectedFaceIdSet.has(text.anchorId)) return true;
+                        const face = allFaces.find(f => U.getFaceId(f) === text.anchorId);
+                        return face ? face.vertexIds.every(id => originalIds.has(id)) : false;
+                    }
+                    return false;
+                });
 
                 for (let i = 1; i < copyCount; i++) {
                     const newIdMapForThisCopy = new Map();
                     const currentCopyVertices = [];
                     const currentCopyEdges = [];
                     const currentCopyFaces = [];
+                    const currentCopyTexts = [];
 
                     verticesToCopy.forEach(p => {
                         const newPos = { x: p.x + finalDelta.x * i, y: p.y + finalDelta.y * i };
@@ -4385,8 +5476,42 @@ function finalizeDragAction() {
                         }
                     });
 
+                    textsToCopy.forEach(text => {
+                        const newText = JSON.parse(JSON.stringify(text));
+                        newText.id = U.generateUniqueId();
+                        if (text.anchorType === 'canvas') {
+                            if (!newText.position) return;
+                            newText.position = {
+                                x: newText.position.x + finalDelta.x * i,
+                                y: newText.position.y + finalDelta.y * i
+                            };
+                        } else if (text.anchorType === 'vertex') {
+                            const newAnchorId = newIdMapForThisCopy.get(text.anchorId);
+                            if (!newAnchorId) return;
+                            newText.anchorId = newAnchorId;
+                        } else if (text.anchorType === 'edge') {
+                            const edge = allEdges.find(e => U.getEdgeId(e) === text.anchorId);
+                            if (!edge) return;
+                            const newId1 = newIdMapForThisCopy.get(edge.id1);
+                            const newId2 = newIdMapForThisCopy.get(edge.id2);
+                            if (!newId1 || !newId2) return;
+                            newText.anchorId = U.getEdgeId({ id1: newId1, id2: newId2 });
+                        } else if (text.anchorType === 'face') {
+                            const face = allFaces.find(f => U.getFaceId(f) === text.anchorId);
+                            if (!face) return;
+                            const newVertexIds = face.vertexIds.map(id => newIdMapForThisCopy.get(id));
+                            if (!newVertexIds.every(Boolean)) return;
+                            newText.anchorId = U.getFaceId({ vertexIds: newVertexIds });
+                        }
+
+                        allTextElements.push(newText);
+                        if (selectedTextIdSet.has(text.id)) {
+                            currentCopyTexts.push(newText.id);
+                        }
+                    });
+
                     if (i === 1) {
-                        firstCopySelectionIds = { vertices: currentCopyVertices, edges: currentCopyEdges, faces: currentCopyFaces };
+                        firstCopySelectionIds = { vertices: currentCopyVertices, edges: currentCopyEdges, faces: currentCopyFaces, texts: currentCopyTexts };
                     }
                 }
                 allVertices.push(...allNewVertices);
@@ -4500,10 +5625,12 @@ function finalizeDragAction() {
         selectedVertexIds = initiallySelectedVertexIds.length > 0 ? firstCopySelectionIds.vertices.map(id => findRoot(id)) : [];
         selectedEdgeIds = initiallySelectedEdgeIds.length > 0 ? firstCopySelectionIds.edges : [];
         selectedFaceIds = initiallySelectedFaceIds.length > 0 ? firstCopySelectionIds.faces : [];
+        selectedTextIds = initialDragTextStates.length > 0 ? firstCopySelectionIds.texts : [];
     } else if (copyCount === 1) {
         selectedVertexIds = initiallySelectedVertexIds.map(id => findRoot(id));
         selectedEdgeIds = initiallySelectedEdgeIds;
         selectedFaceIds = initiallySelectedFaceIds;
+        selectedTextIds = initialDragTextStates.map(text => text.id).filter(id => allTextElements.some(el => el.id === id));
     }
     // Restore centers exactly as before the drag
     selectedCenterIds = initiallySelectedCenterIds;
@@ -4515,7 +5642,7 @@ function finalizeDragAction() {
 }
 
 function handleCanvasClick(actionContext) {
-    const { shiftKey, ctrlKey, targetVertex, targetEdge, targetFace } = actionContext;
+    const { shiftKey, ctrlKey, targetVertex, targetEdge, targetFace, targetText } = actionContext;
     const startVertex = findVertexById(previewLineStartVertexId);
 
     if (isDrawingMode && startVertex) {
@@ -4614,11 +5741,12 @@ function handleCanvasClick(actionContext) {
         if (actionContext && actionContext.altKey) {
         } else {
             const wasCenterClick = actionContext && actionContext.targetVertex && actionContext.targetVertex.type !== 'regular';
-            if (!wasCenterClick && (targetVertex || targetEdge || targetFace)) {
+            if (!wasCenterClick && (targetText || targetVertex || targetEdge || targetFace)) {
                 saveStateForUndo(); 
-                const targetId = targetFace ? U.getFaceId(targetFace) : (targetEdge ? U.getEdgeId(targetEdge) : targetVertex.id);
+                const targetId = targetText ? targetText.id : (targetFace ? U.getFaceId(targetFace) : (targetEdge ? U.getEdgeId(targetEdge) : targetVertex.id));
                 let targetType;
-                if (targetFace) targetType = 'face';
+                if (targetText) targetType = 'text';
+                else if (targetFace) targetType = 'face';
                 else if (targetVertex && targetVertex.type !== 'regular') targetType = 'center';
                 else if (targetVertex) targetType = 'vertex';
                 else if (targetEdge) targetType = 'edge';
@@ -4634,13 +5762,19 @@ function handleCanvasClick(actionContext) {
 
                 switch (clickData.count) {
                     case 1:
-                        if (clickData.type === 'face') applySelectionLogic([], [], [clickData.targetId], shiftKey, ctrlKey);
+                        if (clickData.type === 'text') applySelectionLogic([], [], [], shiftKey, ctrlKey, false, [clickData.targetId]);
+                        else if (clickData.type === 'face') applySelectionLogic([], [], [clickData.targetId], shiftKey, ctrlKey);
                         else if (clickData.type === 'edge') applySelectionLogic([], [clickData.targetId], [], shiftKey, ctrlKey);
                         else if (clickData.type === 'vertex') applySelectionLogic([clickData.targetId], [], [], shiftKey, ctrlKey);
                         else if (clickData.type === 'center') handleCenterSelection(clickData.targetId, shiftKey, ctrlKey);
                         break;
                     case 2:
-                        if (clickData.type === 'vertex') {
+                        if (clickData.type === 'text') {
+                            const textElement = getTextElementById(clickData.targetId);
+                            if (textElement) {
+                                startTextEditing(textElement, textElement.content || '');
+                            }
+                        } else if (clickData.type === 'vertex') {
                             const neighbors = U.findNeighbors(clickData.targetId, allEdges);
                             applySelectionLogic([clickData.targetId, ...neighbors], [], [], shiftKey, ctrlKey);
                         } else if (clickData.type === 'edge') {
@@ -4703,6 +5837,7 @@ function handleCanvasClick(actionContext) {
                 if (selectedFaceIds.length > 0) newActiveTargets.push(C.COLOR_TARGET_FACE);
                 if (selectedEdgeIds.length > 0) newActiveTargets.push(C.COLOR_TARGET_EDGE);
                 if (selectedVertexIds.length > 0) newActiveTargets.push(C.COLOR_TARGET_VERTEX);
+                if (selectedTextIds.length > 0) newActiveTargets.push(C.COLOR_TARGET_TEXT);
 
                 if (newActiveTargets.length > 0) {
                     activeColorTargets = newActiveTargets;
@@ -4878,6 +6013,7 @@ function handleRightMouseButtonUp(event) {
         if (selectedFaceIds.length > 0) newActiveTargets.push(C.COLOR_TARGET_FACE);
         if (selectedEdgeIds.length > 0) newActiveTargets.push(C.COLOR_TARGET_EDGE);
         if (selectedVertexIds.length > 0) newActiveTargets.push(C.COLOR_TARGET_VERTEX);
+        if (selectedTextIds.length > 0) newActiveTargets.push(C.COLOR_TARGET_TEXT);
 
         if (newActiveTargets.length > 0) {
             activeColorTargets = newActiveTargets;
@@ -5072,10 +6208,19 @@ function handleIdleMouseMove(mousePos) {
     hoveredVertexId = null;
     hoveredEdgeId = null;
     hoveredFaceId = null;
+    hoveredTextId = null;
     ghostVertexPosition = null; // Reset ghost position by default
     ghostVertexSnapType = null; // Reset ghost snap type
 
     if (!isActionInProgress) {
+        if (!currentAltPressed) {
+            const hoveredText = findClickedTextElement(mousePos);
+            if (hoveredText) {
+                hoveredTextId = hoveredText.id;
+                return;
+            }
+        }
+
         const p = findClickedVertex(mousePos);
         const e = !p ? findClickedEdge(mousePos) : null;
         const f = !p && !e ? findClickedFace(mousePos) : null;
@@ -5408,9 +6553,13 @@ function handleMouseMove(event) {
                     }
                 }
 
-                if (verticesToDrag.length > 0) {
+                const textElementsToDrag = selectedTextIds.map(id => getTextElementById(id)).filter(Boolean);
+
+                if (verticesToDrag.length > 0 || textElementsToDrag.length > 0) {
                     initialDragVertexStates = JSON.parse(JSON.stringify(verticesToDrag));
                     dragPreviewVertices = JSON.parse(JSON.stringify(verticesToDrag));
+                    initialDragTextStates = JSON.parse(JSON.stringify(textElementsToDrag));
+                    dragPreviewTextStates = JSON.parse(JSON.stringify(textElementsToDrag));
                     initialCoordSystemStates.clear();
                     const verticesThatMoved = new Set(initialDragVertexStates.map(v => v.id));
                     allFaces.forEach(face => {
@@ -5433,7 +6582,7 @@ function handleMouseMove(event) {
             } else if (!isRectangleSelecting) {
                 if (handleUIDrag(mousePos)) return;
                 if (handleCoordinateSystemMouseMove(event)) return;
-                const isTransformingSelection = activeCenterId && (selectedVertexIds.length > 0 || selectedEdgeIds.length > 0 || selectedFaceIds.length > 0) && !isEdgeTransformDrag;
+                const isTransformingSelection = activeCenterId && (selectedVertexIds.length > 0 || selectedEdgeIds.length > 0 || selectedFaceIds.length > 0 || selectedTextIds.length > 0) && !isEdgeTransformDrag;
                 if (isTransformingSelection) {
                     const center = findVertexById(activeCenterId);
                     let startReferenceVertex = actionTargetVertex; // use the exact point the user grabbed
@@ -5480,6 +6629,11 @@ function handleMouseMove(event) {
                         const rawDelta = { x: mouseData.x - startMouseData.x, y: mouseData.y - startMouseData.y };
                         handleTranslationDrag(rawDelta, mouseData);
                     }
+                } else if (dragPreviewTextStates.length > 0) {
+                    const startMouseData = screenToData(actionStartPos);
+                    const mouseData = screenToData(mousePos);
+                    const rawDelta = { x: mouseData.x - startMouseData.x, y: mouseData.y - startMouseData.y };
+                    actionContext.textFinalDelta = rawDelta;
                 }
             }
         }
@@ -5625,6 +6779,8 @@ function handleMouseUpDispatcher(event) {
     } else if (!isPlacingTransform) {
         canvas.style.cursor = 'crosshair';
     }
+
+    schedulePersistState();
 }
 
 function cleanupAfterDrag() {
@@ -5643,6 +6799,8 @@ function cleanupAfterDrag() {
     // Reset drag previews and states
     dragPreviewVertices = [];
     initialDragVertexStates = [];
+    dragPreviewTextStates = [];
+    initialDragTextStates = [];
     actionContext = null;
     transformIndicatorData = null;
     ghostVertices = [];
@@ -5697,6 +6855,13 @@ function handleKeyDown(event) {
         updateHoverStates();
     }
 
+    const isTypingKey = event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey;
+    if (isTypingKey && !isDrawingMode && !isPlacingTransform && !isActionInProgress) {
+        event.preventDefault();
+        createTextElementFromHover(event.key);
+        return;
+    }
+
     const isCtrlOrCmd = event.ctrlKey || event.metaKey;
 
     if (isCtrlOrCmd && (event.key === 'a' || event.key === 'A')) {
@@ -5704,7 +6869,8 @@ function handleKeyDown(event) {
         const allRegularVertexIds = allVertices.filter(v => v.type === 'regular').map(v => v.id);
         const allEdgeIds = allEdges.map(e => U.getEdgeId(e));
         const allFaceIds = allFaces.map(f => U.getFaceId(f));
-        applySelectionLogic(allRegularVertexIds, allEdgeIds, allFaceIds, false, false);
+        const allTextIds = allTextElements.map(el => el.id);
+        applySelectionLogic(allRegularVertexIds, allEdgeIds, allFaceIds, false, false, false, allTextIds);
         selectedCenterIds = allVertices.filter(v => v.type !== 'regular').map(v => v.id);
         activeCenterId = selectedCenterIds.length > 0 ? selectedCenterIds[selectedCenterIds.length - 1] : null;
         return;
@@ -5876,6 +7042,7 @@ function handleKeyDown(event) {
         if (selectedFaceIds.length > 0) newActiveTargets.push(C.COLOR_TARGET_FACE);
         if (selectedEdgeIds.length > 0) newActiveTargets.push(C.COLOR_TARGET_EDGE);
         if (selectedVertexIds.length > 0) newActiveTargets.push(C.COLOR_TARGET_VERTEX);
+        if (selectedTextIds.length > 0) newActiveTargets.push(C.COLOR_TARGET_TEXT);
         if (newActiveTargets.length > 0) {
             activeColorTargets = newActiveTargets;
             if (isColorPaletteExpanded) {
@@ -5907,6 +7074,8 @@ function handleKeyUp(event) {
         currentAltPressed = false;
         updateHoverStates();
     }
+
+    schedulePersistState();
 }
 
 function handleResize() {
@@ -5982,6 +7151,27 @@ function handleLoad() {
         buildColorPaletteUI();
     });
 
+    interpolationEditor = new InterpolationEditor({
+        container: document.body,
+        onSelect: (style) => {
+            if (!style) return;
+            const normalized = { ...style };
+            if (!normalized.id) {
+                normalized.id = U.generateUniqueId();
+            }
+            const existingIndex = interpolationStyles.findIndex(item => item.id === normalized.id);
+            if (existingIndex >= 0) {
+                interpolationStyles[existingIndex] = normalized;
+            } else {
+                interpolationStyles.push(normalized);
+            }
+            setActiveInterpolationStyle(normalized.id);
+            if (isInterpolationPanelExpanded) buildInterpolationPanelUI();
+            schedulePersistState();
+        }
+    });
+    interpolationEditor.initialize();
+
     viewTransform.scale = 70;
     viewTransform.offsetX = canvas.width / 2;
     viewTransform.offsetY = canvas.height / 2;
@@ -5997,7 +7187,10 @@ function handleLoad() {
         contextMenu.style.display = 'none';
     });
 
-    saveStateForUndo();
+    const restored = loadStateFromStorage();
+    if (!restored) {
+        saveStateForUndo();
+    }
     gameLoop();
     updateComponentDrawOrder();
 }
@@ -6021,5 +7214,9 @@ window.addEventListener('keyup', handleKeyUp);
 window.addEventListener('keydown', handleKeyDown);
 
 window.addEventListener('resize', handleResize);
+
+window.addEventListener('beforeunload', () => {
+    persistStateNow();
+});
 
 window.addEventListener('load', handleLoad);
