@@ -69,13 +69,7 @@ html, body {
 }
 
 
-#interpolation-editor-wrapper {
-    z-index: 5000 !important;
-    position: fixed;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-}
+/* Interpolation editor positioning is handled by its own styles. */
 
 .context-menu {
     display: none;

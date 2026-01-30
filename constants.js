@@ -199,6 +199,7 @@ export const UI_DISPLAY_ICON_Y_SPACING = 10;
 export const UI_DISPLAY_ICON_KNOB_RADIUS = 3;
 export const UI_SWATCH_SELECTED_BORDER_WIDTH = 3;
 export const UI_BUTTON_BORDER_WIDTH = 2;
+export const UI_MENU_ICON_BORDER_WIDTH = 2;
 export const UI_BUTTON_ICON_PADDING = 7;
 export const UI_GHOST_ICON_SIZE = 30;
 export const COLOR_PALETTE_Y_OFFSET = 5;

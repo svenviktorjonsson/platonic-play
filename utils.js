@@ -1,5 +1,506 @@
 import * as C from './constants.js';
 
+const DEFAULT_SEGMENTS = 16;
+
+const buildCatmullRomMatrix = (tau) => ([
+    [-tau, 2 - tau, -2 + tau, tau],
+    [2 * tau, -3 + tau, 3 - 2 * tau, -tau],
+    [-tau, 0, tau, 0],
+    [0, 1, 0, 0]
+]);
+
+const getSplineSegmentPoints = (points, closed) => {
+    if (points.length < 2) return [];
+    const count = points.length;
+    const wrap = (idx) => (idx + count) % count;
+    const extrapolateStart = () => ({
+        x: points[0].x + (points[0].x - points[1].x),
+        y: points[0].y + (points[0].y - points[1].y)
+    });
+    const extrapolateEnd = () => ({
+        x: points[count - 1].x + (points[count - 1].x - points[count - 2].x),
+        y: points[count - 1].y + (points[count - 1].y - points[count - 2].y)
+    });
+    const getPoint = (idx) => {
+        if (closed) return points[wrap(idx)];
+        if (idx < 0) return extrapolateStart();
+        if (idx >= count) return extrapolateEnd();
+        return points[idx];
+    };
+    const last = closed ? count : count - 1;
+    const segments = [];
+    for (let i = 0; i < last; i++) {
+        segments.push({
+            index: i,
+            p0: getPoint(i - 1),
+            p1: getPoint(i),
+            p2: getPoint(i + 1),
+            p3: getPoint(i + 2)
+        });
+    }
+    return segments;
+};
+
+export function calculateLinearSpline(points, closed = false, segments = DEFAULT_SEGMENTS) {
+    if (points.length < 2) return points;
+    const path = [];
+    const count = points.length;
+    const last = closed ? count : count - 1;
+    for (let i = 0; i < last; i++) {
+        const p1 = points[i];
+        const p2 = points[(i + 1) % count];
+        const startS = i === 0 ? 0 : 1;
+        for (let s = startS; s <= segments; s++) {
+            const t = s / segments;
+            path.push({
+                x: p1.x + (p2.x - p1.x) * t,
+                y: p1.y + (p2.y - p1.y) * t
+            });
+        }
+    }
+    return path;
+}
+
+export function calculateCubicSpline(points, tension = 0.5, closed = false, segments = DEFAULT_SEGMENTS) {
+    if (points.length < 2) return points;
+    const path = [];
+    const clampedTension = Math.max(0, Math.min(1, tension));
+    const tau = (1 - clampedTension) * 0.5;
+    const matrix = buildCatmullRomMatrix(tau);
+    const hermite = (p1, p2, m1, m2, t) => {
+        const t2 = t * t;
+        const t3 = t2 * t;
+        const h00 = 2 * t3 - 3 * t2 + 1;
+        const h10 = t3 - 2 * t2 + t;
+        const h01 = -2 * t3 + 3 * t2;
+        const h11 = t3 - t2;
+        return {
+            x: h00 * p1.x + h10 * m1.x + h01 * p2.x + h11 * m2.x,
+            y: h00 * p1.y + h10 * m1.y + h01 * p2.y + h11 * m2.y
+        };
+    };
+    const segmentsData = getSplineSegmentPoints(points, closed);
+    segmentsData.forEach(({ index, p0, p1, p2, p3 }) => {
+        const startS = index === 0 ? 0 : 1;
+        const m1 = { x: (p2.x - p0.x) * tau, y: (p2.y - p0.y) * tau };
+        const m2 = { x: (p3.x - p1.x) * tau, y: (p3.y - p1.y) * tau };
+        for (let s = startS; s <= segments; s++) {
+            const t = s / segments;
+            path.push(hermite(p1, p2, m1, m2, t));
+        }
+    });
+    return path;
+}
+
+const angleBetween = (a, b) => Math.acos(Math.max(-1, Math.min(1, a.x * b.x + a.y * b.y)));
+const normalizeVec = (v) => {
+    const len = Math.hypot(v.x, v.y);
+    return len === 0 ? { x: 0, y: 0 } : { x: v.x / len, y: v.y / len };
+};
+const add = (a, b) => ({ x: a.x + b.x, y: a.y + b.y });
+const sub = (a, b) => ({ x: a.x - b.x, y: a.y - b.y });
+const scale = (v, s) => ({ x: v.x * s, y: v.y * s });
+const shortestSweep = (startAngle, endAngle) => {
+    const tau = Math.PI * 2;
+    let delta = (endAngle - startAngle) % tau;
+    if (delta < 0) delta += tau;
+    if (delta > Math.PI) delta -= tau;
+    return delta;
+};
+const isAngleBetween = (start, mid, end, clockwise) => {
+    const wrap = (angle) => (angle + Math.PI * 2) % (Math.PI * 2);
+    const s = wrap(start);
+    const m = wrap(mid);
+    const e = wrap(end);
+    if (clockwise) {
+        if (s < e) return m <= s || m >= e;
+        return m <= s && m >= e;
+    }
+    if (s > e) return m >= s || m <= e;
+    return m >= s && m <= e;
+};
+const addArcPoints = (path, center, startAngle, endAngle, clockwise, segments, includeStart) => {
+    const totalAngle = clockwise
+        ? ((startAngle - endAngle + Math.PI * 2) % (Math.PI * 2))
+        : ((endAngle - startAngle + Math.PI * 2) % (Math.PI * 2));
+    const steps = Math.max(2, segments);
+    for (let i = includeStart ? 0 : 1; i <= steps; i++) {
+        const t = i / steps;
+        const angle = clockwise
+            ? startAngle - totalAngle * t
+            : startAngle + totalAngle * t;
+        path.push({
+            x: center.x + Math.cos(angle) * center.radius,
+            y: center.y + Math.sin(angle) * center.radius
+        });
+    }
+};
+const chooseArcDirection = (startAngle, endAngle, preferredClockwise) => {
+    const wrap = (angle) => (angle + Math.PI * 2) % (Math.PI * 2);
+    const start = wrap(startAngle);
+    const end = wrap(endAngle);
+    const cwSweep = (start - end + Math.PI * 2) % (Math.PI * 2);
+    const ccwSweep = (end - start + Math.PI * 2) % (Math.PI * 2);
+    const preferredSweep = preferredClockwise ? cwSweep : ccwSweep;
+    if (preferredSweep <= Math.PI + 1e-6) {
+        return preferredClockwise;
+    }
+    return !preferredClockwise;
+};
+const chooseArcDirectionByMid = (startAngle, endAngle, midAngle, preferredClockwise) => {
+    const midOnCcw = isAngleBetween(startAngle, midAngle, endAngle, false);
+    const midOnCw = isAngleBetween(startAngle, midAngle, endAngle, true);
+    if (midOnCcw && !midOnCw) return false;
+    if (midOnCw && !midOnCcw) return true;
+    return chooseArcDirection(startAngle, endAngle, preferredClockwise);
+};
+const chooseArcDirectionExcludeMid = (startAngle, endAngle, midAngle, preferredClockwise) => {
+    const midOnCcw = isAngleBetween(startAngle, midAngle, endAngle, false);
+    const midOnCw = isAngleBetween(startAngle, midAngle, endAngle, true);
+    if (midOnCcw && !midOnCw) return true;
+    if (midOnCw && !midOnCcw) return false;
+    return chooseArcDirection(startAngle, endAngle, preferredClockwise);
+};
+const circleFromThreePoints = (a, b, c) => {
+    const d = 2 * (a.x * (b.y - c.y) + b.x * (c.y - a.y) + c.x * (a.y - b.y));
+    if (Math.abs(d) < 1e-8) return null;
+    const ux = ((a.x * a.x + a.y * a.y) * (b.y - c.y) + (b.x * b.x + b.y * b.y) * (c.y - a.y)
+        + (c.x * c.x + c.y * c.y) * (a.y - b.y)) / d;
+    const uy = ((a.x * a.x + a.y * a.y) * (c.x - b.x) + (b.x * b.x + b.y * b.y) * (a.y - c.x)
+        + (c.x * c.x + c.y * c.y) * (b.x - a.x)) / d;
+    const radius = Math.hypot(a.x - ux, a.y - uy);
+    return { x: ux, y: uy, radius };
+};
+
+export function calculateCornerRadiusPath(points, closed = false, radiusMode = 'relative', radiusValue = 0, segments = DEFAULT_SEGMENTS, passThrough = false) {
+    if (points.length < 2) return points;
+    const count = points.length;
+    const path = [];
+    const corners = [];
+    const buildCorner = (i) => {
+        const prev = points[(i - 1 + count) % count];
+        const curr = points[i];
+        const next = points[(i + 1) % count];
+        const dirIn = normalizeVec(sub(curr, prev));
+        const dirOut = normalizeVec(sub(next, curr));
+        const lenA = Math.hypot(prev.x - curr.x, prev.y - curr.y);
+        const lenB = Math.hypot(next.x - curr.x, next.y - curr.y);
+        const angle = angleBetween(dirIn, dirOut);
+        if (!Number.isFinite(angle) || angle < 1e-4) {
+            return null;
+        }
+        const maxOffset = Math.min(lenA, lenB) * 0.5;
+        let offset;
+        let radius;
+        if (radiusMode === 'relative') {
+            offset = Math.max(0, Math.min(1, radiusValue)) * maxOffset;
+            radius = offset / Math.max(Math.tan(angle / 2), 1e-4);
+        } else {
+            radius = Math.max(0, radiusValue);
+            offset = Math.min(maxOffset, radius * Math.tan(angle / 2));
+            radius = offset / Math.max(Math.tan(angle / 2), 1e-4);
+        }
+        if (offset <= 1e-6 || radius <= 1e-6) {
+            return null;
+        }
+        const tangentA = add(curr, scale(dirIn, -offset));
+        const tangentB = add(curr, scale(dirOut, offset));
+        const turn = dirIn.x * dirOut.y - dirIn.y * dirOut.x;
+        const bisector = normalizeVec(add(dirIn, dirOut));
+        const isConcave = turn < 0;
+        if (passThrough) {
+            const circle = circleFromThreePoints(tangentA, curr, tangentB);
+            if (!circle) return null;
+            const startAngle = Math.atan2(tangentA.y - circle.y, tangentA.x - circle.x);
+            const endAngle = Math.atan2(tangentB.y - circle.y, tangentB.x - circle.x);
+            const midAngle = Math.atan2(curr.y - circle.y, curr.x - circle.x);
+            const preferredClockwise = !isAngleBetween(startAngle, midAngle, endAngle, false);
+            const clockwise = isConcave
+                ? chooseArcDirectionByMid(startAngle, endAngle, midAngle, preferredClockwise)
+                : chooseArcDirectionExcludeMid(startAngle, endAngle, midAngle, preferredClockwise);
+            return { tangentA, tangentB, circle, startAngle, endAngle, clockwise };
+        }
+        const sinHalf = Math.max(Math.sin(angle / 2), 1e-4);
+        const centerDistance = radius / sinHalf;
+        const center = add(curr, scale(bisector, centerDistance));
+        const circle = { x: center.x, y: center.y, radius };
+        const startAngle = Math.atan2(tangentA.y - circle.y, tangentA.x - circle.x);
+        const endAngle = Math.atan2(tangentB.y - circle.y, tangentB.x - circle.x);
+        const preferredClockwise = turn < 0;
+        const midAngle = Math.atan2(curr.y - circle.y, curr.x - circle.x);
+        const clockwise = isConcave
+            ? chooseArcDirectionByMid(startAngle, endAngle, midAngle, preferredClockwise)
+            : chooseArcDirectionExcludeMid(startAngle, endAngle, midAngle, preferredClockwise);
+        return { tangentA, tangentB, circle, startAngle, endAngle, clockwise };
+    };
+    if (closed) {
+        for (let i = 0; i < count; i++) {
+            const corner = buildCorner(i);
+            if (corner) corners.push(corner);
+        }
+        if (!corners.length) return [...points, points[0]];
+        path.push(corners[0].tangentA);
+        corners.forEach((corner, index) => {
+            addArcPoints(path, corner.circle, corner.startAngle, corner.endAngle, corner.clockwise, segments, false);
+            const nextCorner = corners[(index + 1) % corners.length];
+            if (nextCorner) {
+                path.push(nextCorner.tangentA);
+            }
+        });
+        path.push({ ...path[0] });
+        return path;
+    }
+    path.push(points[0]);
+    for (let i = 1; i < count - 1; i++) {
+        const corner = buildCorner(i);
+        if (!corner) {
+            path.push(points[i]);
+            continue;
+        }
+        path.push(corner.tangentA);
+        addArcPoints(path, corner.circle, corner.startAngle, corner.endAngle, corner.clockwise, segments, false);
+        path.push(corner.tangentB);
+    }
+    path.push(points[count - 1]);
+    return path;
+}
+
+const buildLinearSegments = (points, closed = false) => {
+    const segments = [];
+    const count = points.length;
+    const last = closed ? count : count - 1;
+    for (let i = 0; i < last; i++) {
+        segments.push({
+            type: 'line',
+            a: points[i],
+            b: points[(i + 1) % count]
+        });
+    }
+    return segments;
+};
+
+const buildCatmullRomSegments = (points, closed = false, tension = 0.5) => {
+    const clampedTension = Math.max(0, Math.min(1, tension));
+    const tau = (1 - clampedTension) * 0.5;
+    const matrix = buildCatmullRomMatrix(tau);
+    const segments = [];
+    const segmentData = getSplineSegmentPoints(points, closed);
+    segmentData.forEach(({ p0, p1, p2, p3 }) => {
+        const px = [p0.x, p1.x, p2.x, p3.x];
+        const py = [p0.y, p1.y, p2.y, p3.y];
+        const coeffX = matrix.map(row => row.reduce((sum, value, index) => sum + value * px[index], 0));
+        const coeffY = matrix.map(row => row.reduce((sum, value, index) => sum + value * py[index], 0));
+        segments.push({
+            type: 'cubic',
+            coeffX,
+            coeffY
+        });
+    });
+    return segments;
+};
+
+const buildAffineRadiusSegments = (points, closed, radiusMode, radiusValue) => {
+    if (points.length < 2 || radiusValue <= 1e-6) {
+        return buildLinearSegments(points, closed);
+    }
+    const count = points.length;
+    const normalizedMode = radiusMode === 'fixed' ? 'absolute' : radiusMode;
+    const segments = [];
+
+    const buildCorner = (i) => {
+        const prev = points[(i - 1 + count) % count];
+        const curr = points[i];
+        const next = points[(i + 1) % count];
+        const edgeIn = sub(prev, curr);
+        const edgeOut = sub(next, curr);
+        const lenIn = Math.hypot(edgeIn.x, edgeIn.y);
+        const lenOut = Math.hypot(edgeOut.x, edgeOut.y);
+        if (lenIn <= 1e-6 || lenOut <= 1e-6) return null;
+        const maxRadius = Math.min(lenIn, lenOut) * 0.5;
+        let baseScale;
+        let axisX;
+        let axisY;
+        if (normalizedMode === 'absolute') {
+            const clampedRadius = Math.max(0, Math.min(radiusValue, maxRadius));
+            baseScale = clampedRadius * 2;
+            axisX = normalizeVec(edgeOut);
+            axisY = normalizeVec(edgeIn);
+        } else {
+            baseScale = Math.max(0, Math.min(1, radiusValue));
+            axisX = edgeOut;
+            axisY = edgeIn;
+        }
+        if (baseScale <= 1e-6) return null;
+        const radius = baseScale * 0.5;
+        const midInDistance = normalizedMode === 'absolute' ? lenIn * 0.5 : 0.5;
+        const midOutDistance = normalizedMode === 'absolute' ? lenOut * 0.5 : 0.5;
+        const midIn = {
+            x: curr.x + axisY.x * midInDistance,
+            y: curr.y + axisY.y * midInDistance
+        };
+        const midOut = {
+            x: curr.x + axisX.x * midOutDistance,
+            y: curr.y + axisX.y * midOutDistance
+        };
+        const arcStart = {
+            x: curr.x + axisY.x * radius,
+            y: curr.y + axisY.y * radius
+        };
+        const arcEnd = {
+            x: curr.x + axisX.x * radius,
+            y: curr.y + axisX.y * radius
+        };
+        const startAngle = Math.PI;
+        const endAngle = -Math.PI / 2;
+        const sweep = shortestSweep(startAngle, endAngle);
+        return {
+            origin: curr,
+            axisX,
+            axisY,
+            baseScale,
+            midIn,
+            midOut,
+            arcStart,
+            arcEnd,
+            startAngle,
+            sweep
+        };
+    };
+
+    if (closed) {
+        const corners = [];
+        for (let i = 0; i < count; i++) {
+            const corner = buildCorner(i);
+            if (corner) corners.push(corner);
+        }
+        if (!corners.length) return buildLinearSegments(points, true);
+        segments.push({ type: 'line', a: corners[0].midIn, b: corners[0].arcStart });
+        corners.forEach((corner) => {
+            segments.push({
+                type: 'affineArc',
+                origin: corner.origin,
+                axisX: corner.axisX,
+                axisY: corner.axisY,
+                baseScale: corner.baseScale,
+                startAngle: corner.startAngle,
+                sweep: corner.sweep
+            });
+            segments.push({ type: 'line', a: corner.arcEnd, b: corner.midOut });
+        });
+        segments.push({ type: 'line', a: corners[corners.length - 1].midOut, b: corners[0].midIn });
+        return segments;
+    }
+
+    const corners = [];
+    for (let i = 1; i < count - 1; i++) {
+        const corner = buildCorner(i);
+        if (corner) corners.push(corner);
+    }
+    if (!corners.length) return buildLinearSegments(points, false);
+    segments.push({ type: 'line', a: points[0], b: corners[0].midIn });
+    corners.forEach((corner) => {
+        segments.push({ type: 'line', a: corner.midIn, b: corner.arcStart });
+        segments.push({
+            type: 'affineArc',
+            origin: corner.origin,
+            axisX: corner.axisX,
+            axisY: corner.axisY,
+            baseScale: corner.baseScale,
+            startAngle: corner.startAngle,
+            sweep: corner.sweep
+        });
+        segments.push({ type: 'line', a: corner.arcEnd, b: corner.midOut });
+    });
+    segments.push({ type: 'line', a: corners[corners.length - 1].midOut, b: points[count - 1] });
+    return segments;
+};
+
+export function buildAnalyticSegments(points, style, closed = false) {
+    if (!style || points.length < 2) return [];
+    if (style.type === 'linear') {
+        return buildLinearSegments(points, closed);
+    }
+    if (style.type === 'cubic_spline') {
+        return buildCatmullRomSegments(points, closed, style.tension ?? 0.5);
+    }
+    if (style.type === 'circular_arc') {
+        return buildAffineRadiusSegments(points, closed, style.radiusMode ?? 'relative', style.radiusValue ?? 0);
+    }
+    return buildLinearSegments(points, closed);
+}
+
+export function sampleAnalyticSegments(segments, dataToScreen) {
+    const samples = [];
+    segments.forEach((segment, index) => {
+        const pushPoint = (pt, start = false) => {
+            if (index > 0 || !start) {
+                samples.push(pt);
+            } else {
+                samples.push(pt);
+            }
+        };
+        if (segment.type === 'line') {
+            const a = segment.a;
+            const b = segment.b;
+            const aS = dataToScreen ? dataToScreen(a) : a;
+            const bS = dataToScreen ? dataToScreen(b) : b;
+            const screenLen = Math.hypot(bS.x - aS.x, bS.y - aS.y);
+            const steps = Math.max(2, Math.ceil(screenLen / 8));
+            for (let i = 0; i <= steps; i++) {
+                const t = i / steps;
+                pushPoint({
+                    x: a.x + (b.x - a.x) * t,
+                    y: a.y + (b.y - a.y) * t
+                }, i === 0);
+            }
+            return;
+        }
+        if (segment.type === 'cubic') {
+            const coeffX = segment.coeffX;
+            const coeffY = segment.coeffY;
+            const evalPoint = (t) => ({
+                x: ((coeffX[0] * t + coeffX[1]) * t + coeffX[2]) * t + coeffX[3],
+                y: ((coeffY[0] * t + coeffY[1]) * t + coeffY[2]) * t + coeffY[3]
+            });
+            const a = evalPoint(0);
+            const b = evalPoint(1);
+            const aS = dataToScreen ? dataToScreen(a) : a;
+            const bS = dataToScreen ? dataToScreen(b) : b;
+            const screenLen = Math.hypot(bS.x - aS.x, bS.y - aS.y);
+            const steps = Math.max(4, Math.ceil(screenLen / 6));
+            for (let i = 0; i <= steps; i++) {
+                const t = i / steps;
+                pushPoint(evalPoint(t), i === 0);
+            }
+            return;
+        }
+        if (segment.type === 'affineArc') {
+            const { origin, axisX, axisY, baseScale, startAngle, sweep } = segment;
+            const radius = baseScale * 0.5;
+            const baseCenter = { x: radius, y: radius };
+            const steps = 24;
+            for (let i = 0; i <= steps; i++) {
+                const t = i / steps;
+                const angle = startAngle + sweep * t;
+                const basePoint = {
+                    x: baseCenter.x + Math.cos(angle) * radius,
+                    y: baseCenter.y + Math.sin(angle) * radius
+                };
+                pushPoint({
+                    x: origin.x + axisX.x * basePoint.x + axisY.x * basePoint.y,
+                    y: origin.y + axisX.y * basePoint.x + axisY.y * basePoint.y
+                }, i === 0);
+            }
+        }
+    });
+    return samples;
+}
+
+export function buildInterpolatedPath(points, style, closed = false, dataToScreen = null) {
+    const segments = buildAnalyticSegments(points, style, closed);
+    if (!segments.length) return points;
+    return sampleAnalyticSegments(segments, dataToScreen);
+}
 
 export function formatNumber(value, sigFigs, forceScientific = false) {
     if (value === 0) return "0";
@@ -523,7 +1024,7 @@ export function clampPointToPolygon(point, vertices) {
     return closestPoint;
 }
 
-export function getClickedUIElement(screenPos, canvasUI, { isToolbarExpanded, isColorPaletteExpanded, isInterpolationPanelExpanded, isTransformPanelExpanded, isDisplayPanelExpanded, isVisibilityPanelExpanded }) {
+export function getClickedUIElement(screenPos, canvasUI, { isToolbarExpanded, isColorPaletteExpanded, isColorModePanelExpanded, isInterpolationPanelExpanded, isTransformPanelExpanded, isDisplayPanelExpanded, isVisibilityPanelExpanded, isSessionsPanelExpanded }) {
     const isInside = (pos, rect) => {
         if (!rect) return false;
         return pos.x >= rect.x && pos.x <= rect.x + rect.width &&
@@ -541,6 +1042,12 @@ export function getClickedUIElement(screenPos, canvasUI, { isToolbarExpanded, is
         if (isInside(screenPos, canvasUI.randomColorButton)) return { ...canvasUI.randomColorButton, type: 'button' };
         if (isInside(screenPos, canvasUI.removeColorButton)) return { ...canvasUI.removeColorButton, type: 'button' };
         if (isInside(screenPos, canvasUI.addColorButton)) return { ...canvasUI.addColorButton, type: 'button' };
+    }
+
+    if (isColorModePanelExpanded) {
+        for (const icon of (canvasUI.colorModeIcons || [])) {
+            if (isInside(screenPos, icon)) return { ...icon, type: 'colorModeIcon' };
+        }
     }
 
     if (isTransformPanelExpanded) {
@@ -567,6 +1074,14 @@ export function getClickedUIElement(screenPos, canvasUI, { isToolbarExpanded, is
         }
     }
 
+    if (isSessionsPanelExpanded) {
+        for (const icon of (canvasUI.sessionIcons || [])) {
+            if (isInside(screenPos, icon)) return { ...icon, type: 'sessionIcon' };
+        }
+        if (isInside(screenPos, canvasUI.removeSessionButton)) return { ...canvasUI.removeSessionButton, type: 'button' };
+        if (isInside(screenPos, canvasUI.addSessionButton)) return { ...canvasUI.addSessionButton, type: 'button' };
+    }
+
     if (isToolbarExpanded) {
         if (isInside(screenPos, canvasUI.colorToolButton)) return { ...canvasUI.colorToolButton, type: 'toolButton' };
         if (isInside(screenPos, canvasUI.interpolationToolButton)) return { ...canvasUI.interpolationToolButton, type: 'toolButton' };
@@ -574,6 +1089,8 @@ export function getClickedUIElement(screenPos, canvasUI, { isToolbarExpanded, is
         if (isInside(screenPos, canvasUI.displayToolButton)) return { ...canvasUI.displayToolButton, type: 'toolButton' };
         if (isInside(screenPos, canvasUI.visibilityToolButton)) return { ...canvasUI.visibilityToolButton, type: 'toolButton' };
         if (isInside(screenPos, canvasUI.themeToggleButton)) return { ...canvasUI.themeToggleButton, type: 'toolButton' };
+        if (isInside(screenPos, canvasUI.sessionsToolButton)) return { ...canvasUI.sessionsToolButton, type: 'toolButton' };
+        if (isInside(screenPos, canvasUI.colorModeToolButton)) return { ...canvasUI.colorModeToolButton, type: 'toolButton' };
     }
 
     if (isInside(screenPos, canvasUI.toolbarButton)) return { ...canvasUI.toolbarButton, type: 'menuButton' };
@@ -621,6 +1138,22 @@ export function getClosestPointOnLine(p, a, b) {
     const closestY = a.y + t * aby;
     const dist = distance(p, { x: closestX, y: closestY });
     return { x: closestX, y: closestY, distance: dist };
+}
+
+export function evaluateExpression(expression, variables = {}, fallback = 0) {
+    if (!expression || typeof expression !== 'string') return fallback;
+    const trimmed = expression.trim();
+    if (!trimmed) return fallback;
+    try {
+        const scope = { ...variables };
+        const keys = Object.keys(scope);
+        const values = keys.map(key => scope[key]);
+        const fn = new Function(...keys, `'use strict'; return (${trimmed});`);
+        const result = fn(...values);
+        return Number.isFinite(result) ? result : fallback;
+    } catch (err) {
+        return fallback;
+    }
 }
 
 export function findCircleFromPointsAndAngle(p1, p2, referenceAngle, referencePointForSide) {
