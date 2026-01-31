@@ -404,6 +404,14 @@ export function clearCanvas(ctx, { canvas, dpr, colors }) {
     ctx.fillRect(0, 0, actualCanvasWidth, actualCanvasHeight);
 }
 
+function getEdgeMode(edge, fallback) {
+    return edge?.colorMode || fallback;
+}
+
+function getFaceMode(face, fallback) {
+    return face?.colorMode || fallback;
+}
+
 export function drawFaces(ctx, { allFaces, allEdges, facesVisible, isDragConfirmed, dragPreviewVertices, transformIndicatorData, initialDragVertexStates, colors, initialCoordSystemStates, interpolationStyle, getInterpolationStyleById, faceColorMode = 'fixed', edgeColorMode = 'fixed', faceColorExpression = 'x', faceColorPolarExpression = 'r', edgeColorExpression = 'x' }, dataToScreen, findVertexById) {
     if (!facesVisible || !allFaces || !colors || !ctx) return;
 
@@ -449,7 +457,7 @@ export function drawFaces(ctx, { allFaces, allEdges, facesVisible, isDragConfirm
 
         if (screenVertices.every(v => v && typeof v.x === 'number' && typeof v.y === 'number')) {
             drawFace(ctx, screenVertices, faceToDraw, colors, dataToScreen, findVertexById, allEdges, allFaces, getLiveVertex, true, interpolationStyle, {
-                faceColorMode,
+                faceColorMode: getFaceMode(face, faceColorMode),
                 edgeColorMode,
                 faceColorExpression,
                 faceColorPolarExpression,
@@ -487,7 +495,7 @@ export function drawFaces(ctx, { allFaces, allEdges, facesVisible, isDragConfirm
 
         if (screenVertices.every(v => v && typeof v.x === 'number' && typeof v.y === 'number')) {
              drawFace(ctx, screenVertices, faceToDraw, colors, dataToScreen, findVertexById, allEdges, allFaces, getLiveVertex, false, interpolationStyle, {
-                 faceColorMode,
+                 faceColorMode: getFaceMode(face, faceColorMode),
                  edgeColorMode,
                  faceColorExpression,
                  faceColorPolarExpression,
@@ -681,7 +689,7 @@ export function drawRigidDragPreview(ctx, params, dataToScreen) {
             if(faceVertices.length === face.vertexIds.length) {
                 const faceVerticesScreen = faceVertices.map(v => dataToScreen(v));
                 drawFace(ctx, faceVerticesScreen, face, colors, dataToScreen, findVertexById, allEdges, [], id => currentIdMap.get(id), false, null, {
-                    faceColorMode,
+                    faceColorMode: getFaceMode(face, faceColorMode),
                     edgeColorMode,
                     faceColorExpression,
                     faceColorPolarExpression,
@@ -695,8 +703,10 @@ export function drawRigidDragPreview(ctx, params, dataToScreen) {
 
         const fallbackColor = toRgba(colors.edge, { r: 255, g: 255, b: 255, a: 1 });
         const getVertexColor = (vertex) => toRgba(vertex?.color || colors.vertex || colors.edge, fallbackColor);
+        const toRgbaString = (color) => `rgba(${Math.round(color.r)},${Math.round(color.g)},${Math.round(color.b)},${color.a})`;
         const getEdgeColorAtT = (edge, t, v1, v2) => {
-            if (edgeColorMode === 'inherit_vertices' && v1 && v2) {
+            const mode = getEdgeMode(edge, edgeColorMode);
+            if (mode === 'inherit_vertices' && v1 && v2) {
                 const c1 = getVertexColor(v1);
                 const c2 = getVertexColor(v2);
                 return {
@@ -706,7 +716,7 @@ export function drawRigidDragPreview(ctx, params, dataToScreen) {
                     a: lerp(c1.a, c2.a, t)
                 };
             }
-            if (edgeColorMode === 'colormap' && edge.colormapItem) {
+            if (mode === 'colormap' && edge.colormapItem) {
                 const value = U.evaluateExpression(edgeColorExpression, { x: t }, t);
                 const clamped = clamp01(value);
                 const sampled = U.sampleColormap(edge.colormapItem, clamped);
@@ -719,12 +729,24 @@ export function drawRigidDragPreview(ctx, params, dataToScreen) {
             const p1 = currentIdMap.get(edge.id1); const p2 = currentIdMap.get(edge.id2);
             if (p1 && p2) {
                 const p1Screen = dataToScreen(p1); const p2Screen = dataToScreen(p2);
-                if (edgeColorMode === 'colormap' || edgeColorMode === 'inherit_vertices') {
+                const mode = getEdgeMode(edge, edgeColorMode);
+                if (mode === 'inherit_vertices') {
+                    const c1 = getVertexColor(p1);
+                    const c2 = getVertexColor(p2);
+                    const gradient = ctx.createLinearGradient(p1Screen.x, p1Screen.y, p2Screen.x, p2Screen.y);
+                    gradient.addColorStop(0, toRgbaString(c1));
+                    gradient.addColorStop(1, toRgbaString(c2));
+                    ctx.beginPath();
+                    ctx.moveTo(p1Screen.x, p1Screen.y);
+                    ctx.lineTo(p2Screen.x, p2Screen.y);
+                    ctx.strokeStyle = gradient;
+                    ctx.stroke();
+                } else if (mode === 'colormap') {
                     const color = getEdgeColorAtT(edge, 0.5, p1, p2);
                     ctx.beginPath();
                     ctx.moveTo(p1Screen.x, p1Screen.y);
                     ctx.lineTo(p2Screen.x, p2Screen.y);
-                    ctx.strokeStyle = `rgba(${Math.round(color.r)},${Math.round(color.g)},${Math.round(color.b)},${color.a})`;
+                    ctx.strokeStyle = toRgbaString(color);
                     ctx.stroke();
                 } else if (edge.colormapItem) {
                     const gradient = ctx.createLinearGradient(p1Screen.x, p1Screen.y, p2Screen.x, p2Screen.y);
@@ -765,12 +787,24 @@ export function drawRigidDragPreview(ctx, params, dataToScreen) {
             const p2_static = findVertexById(staticVertexId);
             if (p1_moving && p2_static) {
                 const p1Screen = dataToScreen(p1_moving); const p2Screen = dataToScreen(p2_static);
-                if (edgeColorMode === 'colormap' || edgeColorMode === 'inherit_vertices') {
+                const mode = getEdgeMode(edge, edgeColorMode);
+                if (mode === 'inherit_vertices') {
+                    const c1 = getVertexColor(p1_moving);
+                    const c2 = getVertexColor(p2_static);
+                    const gradient = ctx.createLinearGradient(p1Screen.x, p1Screen.y, p2Screen.x, p2Screen.y);
+                    gradient.addColorStop(0, toRgbaString(c1));
+                    gradient.addColorStop(1, toRgbaString(c2));
+                    ctx.beginPath();
+                    ctx.moveTo(p1Screen.x, p1Screen.y);
+                    ctx.lineTo(p2Screen.x, p2Screen.y);
+                    ctx.strokeStyle = gradient;
+                    ctx.stroke();
+                } else if (mode === 'colormap') {
                     const color = getEdgeColorAtT(edge, 0.5, p1_moving, p2_static);
                     ctx.beginPath();
                     ctx.moveTo(p1Screen.x, p1Screen.y);
                     ctx.lineTo(p2Screen.x, p2Screen.y);
-                    ctx.strokeStyle = `rgba(${Math.round(color.r)},${Math.round(color.g)},${Math.round(color.b)},${color.a})`;
+                    ctx.strokeStyle = toRgbaString(color);
                     ctx.stroke();
                 } else if (edge.colormapItem) { /* Colormap logic */
                     const gradient = ctx.createLinearGradient(p1Screen.x, p1Screen.y, p2Screen.x, p2Screen.y);
@@ -981,7 +1015,7 @@ export function drawDeformingDragPreview(ctx, params, dataToScreen) {
             if (faceVerticesForPreview.length >= 3) {
                 const screenVertices = faceVerticesForPreview.map(v => dataToScreen(v));
                 drawFace(ctx, screenVertices, compFace, colors, dataToScreen, findVertexById, allEdges, allFaces, getLiveVertexForDeformCopy, true, null, {
-                    faceColorMode,
+                    faceColorMode: getFaceMode(compFace, faceColorMode),
                     edgeColorMode,
                     faceColorExpression,
                     faceColorPolarExpression,
@@ -996,7 +1030,8 @@ export function drawDeformingDragPreview(ctx, params, dataToScreen) {
         const fallbackColor = toRgba(colors.edge, { r: 255, g: 255, b: 255, a: 1 });
         const getVertexColor = (vertex) => toRgba(vertex?.color || colors.vertex || colors.edge, fallbackColor);
         const getEdgeColorAtT = (edge, t, v1, v2) => {
-            if (edgeColorMode === 'inherit_vertices' && v1 && v2) {
+            const mode = getEdgeMode(edge, edgeColorMode);
+            if (mode === 'inherit_vertices' && v1 && v2) {
                 const c1 = getVertexColor(v1);
                 const c2 = getVertexColor(v2);
                 return {
@@ -1006,7 +1041,7 @@ export function drawDeformingDragPreview(ctx, params, dataToScreen) {
                     a: lerp(c1.a, c2.a, t)
                 };
             }
-            if (edgeColorMode === 'colormap' && edge.colormapItem) {
+            if (mode === 'colormap' && edge.colormapItem) {
                 const value = U.evaluateExpression(edgeColorExpression, { x: t }, t);
                 const clamped = clamp01(value);
                 const sampled = U.sampleColormap(edge.colormapItem, clamped);
@@ -1025,9 +1060,18 @@ export function drawDeformingDragPreview(ctx, params, dataToScreen) {
                 ctx.moveTo(p1Screen.x, p1Screen.y);
                 ctx.lineTo(p2Screen.x, p2Screen.y);
 
-                if (edgeColorMode === 'colormap' || edgeColorMode === 'inherit_vertices') {
+                const mode = getEdgeMode(compEdge, edgeColorMode);
+                if (mode === 'inherit_vertices') {
+                    const c1 = getVertexColor(p1);
+                    const c2 = getVertexColor(p2);
+                    const gradient = ctx.createLinearGradient(p1Screen.x, p1Screen.y, p2Screen.x, p2Screen.y);
+                    gradient.addColorStop(0, toRgbaString(c1));
+                    gradient.addColorStop(1, toRgbaString(c2));
+                    ctx.strokeStyle = gradient;
+                    ctx.stroke();
+                } else if (mode === 'colormap') {
                     const color = getEdgeColorAtT(compEdge, 0.5, p1, p2);
-                    ctx.strokeStyle = `rgba(${Math.round(color.r)},${Math.round(color.g)},${Math.round(color.b)},${color.a})`;
+                    ctx.strokeStyle = toRgbaString(color);
                     ctx.stroke();
                 } else if (compEdge.colormapItem) {
                     const gradient = ctx.createLinearGradient(p1Screen.x, p1Screen.y, p2Screen.x, p2Screen.y);
@@ -2738,7 +2782,8 @@ export function drawAllEdges(ctx, { allEdges, selectedEdgeIds, hoveredEdgeId, is
     };
 
     const getEdgeColorAtT = (edge, t, v1, v2) => {
-        if (edgeColorMode === 'inherit_vertices' && v1 && v2) {
+        const mode = getEdgeMode(edge, edgeColorMode);
+        if (mode === 'inherit_vertices' && v1 && v2) {
             const c1 = getVertexColor(v1);
             const c2 = getVertexColor(v2);
             return {
@@ -2748,7 +2793,7 @@ export function drawAllEdges(ctx, { allEdges, selectedEdgeIds, hoveredEdgeId, is
                 a: lerp(c1.a, c2.a, t)
             };
         }
-        if (edgeColorMode === 'colormap' && edge.colormapItem) {
+        if (mode === 'colormap' && edge.colormapItem) {
             const value = U.evaluateExpression(edgeColorExpression, { x: t }, t);
             const clamped = clamp01(value);
             const sampled = U.sampleColormap(edge.colormapItem, clamped);
@@ -2795,7 +2840,8 @@ export function drawAllEdges(ctx, { allEdges, selectedEdgeIds, hoveredEdgeId, is
             ctx.lineTo(pathScreen[i].x, pathScreen[i].y);
         }
 
-        if (edgeColorMode === 'colormap' || edgeColorMode === 'inherit_vertices') {
+        const mode = getEdgeMode(edge, edgeColorMode);
+        if (mode === 'colormap' || mode === 'inherit_vertices') {
             let totalLength = 0;
             for (let i = 1; i < pathScreen.length; i++) {
                 totalLength += Math.hypot(pathScreen[i].x - pathScreen[i - 1].x, pathScreen[i].y - pathScreen[i - 1].y);
@@ -3968,24 +4014,24 @@ export function drawCoordsIcon(ctx, rect, mode, isSelected, htmlOverlay, updateH
     const scale = rect.width / C.UI_ICON_BASE_SIZE;
     ctx.scale(scale, scale);
     ctx.translate(-16, -16);
-    const x_offset = 1;
+    const x_offset = 0;
     ctx.strokeStyle = colorStrong;
     ctx.lineWidth = C.UI_ICON_LINE_WIDTH_SMALL;
     ctx.lineCap = 'round';
     ctx.beginPath();
-    ctx.moveTo(2 + x_offset, 30); ctx.lineTo(30 + x_offset, 30);
-    ctx.moveTo(2 + x_offset, 30); ctx.lineTo(2 + x_offset, 2);
+    ctx.moveTo(0 + x_offset, 32); ctx.lineTo(32 + x_offset, 32);
+    ctx.moveTo(0 + x_offset, 32); ctx.lineTo(0 + x_offset, 0);
     ctx.stroke();
     ctx.fillStyle = colorStrong;
     const vertex = { x: 16 + x_offset, y: 16 };
-    let labelPos = { x: 17 + x_offset, y: 8 };
+    let labelPos = { x: 16 + x_offset, y: 8 };
     let label = '';
     switch (mode) {
         case C.COORDS_DISPLAY_MODE_REGULAR:
             ctx.setLineDash(C.UI_ICON_DASH_PATTERN);
             ctx.beginPath();
-            ctx.moveTo(vertex.x, vertex.y); ctx.lineTo(vertex.x, 30);
-            ctx.moveTo(vertex.x, vertex.y); ctx.lineTo(2 + x_offset, vertex.y);
+            ctx.moveTo(vertex.x, vertex.y); ctx.lineTo(vertex.x, 32);
+            ctx.moveTo(vertex.x, vertex.y); ctx.lineTo(0 + x_offset, vertex.y);
             ctx.stroke();
             ctx.setLineDash([]);
             ctx.beginPath();
@@ -3996,7 +4042,7 @@ export function drawCoordsIcon(ctx, rect, mode, isSelected, htmlOverlay, updateH
         case C.COORDS_DISPLAY_MODE_COMPLEX:
             ctx.setLineDash(C.UI_ICON_DASH_PATTERN);
             ctx.beginPath();
-            ctx.moveTo(2 + x_offset, 30); ctx.lineTo(vertex.x, vertex.y);
+            ctx.moveTo(0 + x_offset, 32); ctx.lineTo(vertex.x, vertex.y);
             ctx.stroke();
             ctx.setLineDash([]);
             ctx.beginPath();
@@ -4007,10 +4053,10 @@ export function drawCoordsIcon(ctx, rect, mode, isSelected, htmlOverlay, updateH
         case C.COORDS_DISPLAY_MODE_POLAR:
             ctx.setLineDash(C.UI_ICON_DASH_PATTERN);
             ctx.beginPath();
-            ctx.moveTo(2 + x_offset, 30); ctx.lineTo(vertex.x, vertex.y);
+            ctx.moveTo(0 + x_offset, 32); ctx.lineTo(vertex.x, vertex.y);
             ctx.stroke();
             ctx.beginPath();
-            ctx.arc(2 + x_offset, 30, 8, -Math.atan2(30 - vertex.y, vertex.x - (2 + x_offset)), 0);
+            ctx.arc(0 + x_offset, 32, 8, -Math.atan2(32 - vertex.y, vertex.x - (0 + x_offset)), 0);
             ctx.stroke();
             ctx.setLineDash([]);
             ctx.beginPath();
@@ -4040,9 +4086,9 @@ export function drawAngleIcon(ctx, rect, mode, isSelected, htmlOverlay, updateHt
     ctx.translate(-16, -16);
     ctx.strokeStyle = colorStrong;
     ctx.lineWidth = C.UI_ICON_LINE_WIDTH_SMALL;
-    const p1 = { x: 28, y: 30 };
-    const p2 = { x: 4, y: 30 };
-    const p3 = { x: 16, y: 8 };
+    const p1 = { x: 32, y: 32 };
+    const p2 = { x: 0, y: 32 };
+    const p3 = { x: 16, y: 0 };
     ctx.beginPath();
     ctx.moveTo(p1.x, p1.y);
     ctx.lineTo(p2.x, p2.y);
@@ -4081,8 +4127,8 @@ export function drawDistanceIcon(ctx, rect, mode, isSelected, htmlOverlay, updat
     ctx.strokeStyle = colorStrong;
     ctx.lineWidth = C.UI_ICON_LINE_WIDTH_SMALL;
     ctx.beginPath();
-    ctx.moveTo(2, 30);
-    ctx.lineTo(30, 30);
+    ctx.moveTo(0, 32);
+    ctx.lineTo(32, 32);
     ctx.stroke();
     let label = '';
     let labelPos = { x: 16, y: 22 };
@@ -4110,14 +4156,14 @@ export function drawGridIcon(ctx, rect, mode, isSelected, colors) {
     ctx.lineWidth = C.UI_ICON_LINE_WIDTH_SMALL;
     switch (mode) {
         case C.GRID_DISPLAY_MODE_LINES:
-            ctx.strokeRect(2, 2, 28, 28);
+            ctx.strokeRect(0, 0, 32, 32);
             ctx.beginPath();
-            ctx.moveTo(2, 16); ctx.lineTo(30, 16);
-            ctx.moveTo(16, 2); ctx.lineTo(16, 30);
+            ctx.moveTo(0, 16); ctx.lineTo(32, 16);
+            ctx.moveTo(16, 0); ctx.lineTo(16, 32);
             ctx.stroke();
             break;
         case C.GRID_DISPLAY_MODE_POINTS:
-            ctx.strokeRect(2, 2, 28, 28);
+            ctx.strokeRect(0, 0, 32, 32);
             ctx.beginPath();
             [8, 16, 24].forEach(x => {
                 [8, 16, 24].forEach(y => {
@@ -4128,7 +4174,7 @@ export function drawGridIcon(ctx, rect, mode, isSelected, colors) {
             ctx.fill();
             break;
         case C.GRID_DISPLAY_MODE_TRIANGULAR:
-            ctx.strokeRect(2, 2, 28, 28);
+            ctx.strokeRect(0, 0, 32, 32);
             const triRadius = 8;
             const triCenterX = 16;
             const triCenterY = 16;
@@ -4424,7 +4470,7 @@ export function drawVisibilityIcon(ctx, rect, colors) {
 }
 
 function drawColorPalette(ctx, htmlOverlay, state, updateHtmlLabel) {
-    const { canvasUI, colors, allColors, namedColors, colorAssignments, activeColorTargets, verticesVisible, edgesVisible, facesVisible, isDraggingColorTarget, draggedColorTargetInfo, mousePos } = state;
+    const { canvasUI, colors, allColors, namedColors, colorAssignments, activeColorTargets, lastSelectedSwatchIndex, verticesVisible, edgesVisible, facesVisible, isDraggingColorTarget, draggedColorTargetInfo, mousePos } = state;
 
     const checkerboardColor1 = colors.checkerboardColor1;
     const checkerboardColor2 = colors.checkerboardColor2;
@@ -4615,6 +4661,26 @@ function drawColorPalette(ctx, htmlOverlay, state, updateHtmlLabel) {
     }
 
     const drawnBoxesForSwatches = new Set();
+    if (lastSelectedSwatchIndex !== null && lastSelectedSwatchIndex !== undefined) {
+        const swatch = canvasUI.colorSwatches.find(s => s.index === lastSelectedSwatchIndex);
+        if (swatch) {
+            const padding = 2;
+            const iconAbove = canvasUI.colorTargetIcons.find(icon =>
+                icon.x + icon.width / 2 >= swatch.x &&
+                icon.x + icon.width / 2 <= swatch.x + swatch.width
+            );
+            const boxY = iconAbove ? Math.min(iconAbove.y, swatch.y) : swatch.y;
+            ctx.strokeStyle = colors.selectionGlow;
+            ctx.lineWidth = C.UI_BUTTON_BORDER_WIDTH;
+            ctx.strokeRect(
+                swatch.x - padding,
+                boxY - padding,
+                swatch.width + padding * 2,
+                (swatch.y + swatch.height - boxY) + padding * 2
+            );
+            drawnBoxesForSwatches.add(lastSelectedSwatchIndex);
+        }
+    }
     activeColorTargets.forEach(target => {
         let targetColorIndex = colorAssignments[target];
         if (isDraggingColorTarget && draggedColorTargetInfo && draggedColorTargetInfo.target === target && draggedColorTargetInfo.previewColorIndex !== undefined) {
@@ -4653,10 +4719,12 @@ function drawColorPalette(ctx, htmlOverlay, state, updateHtmlLabel) {
 }
 
 function drawColorModePanel(ctx, htmlOverlay, state, updateHtmlLabel) {
-    const { canvasUI, colors, allColors, activeThemeName, edgeColorMode, faceColorMode } = state;
+    const { canvasUI, colors, allColors, activeThemeName, edgeColorMode, faceColorMode, selectedEdgeModes, selectedFaceModes } = state;
     const icons = canvasUI.colorModeIcons || [];
     if (!icons.length) return;
     const rgbVertexColors = ['rgb(255,0,0)', 'rgb(0,255,0)', 'rgb(0,0,255)'];
+    const edgeActiveModes = selectedEdgeModes && selectedEdgeModes.length > 0 ? selectedEdgeModes : [edgeColorMode];
+    const faceActiveModes = selectedFaceModes && selectedFaceModes.length > 0 ? selectedFaceModes : [faceColorMode];
 
     const getPreviewColormap = () => {
         if (!allColors) return null;
@@ -4665,10 +4733,6 @@ function drawColorModePanel(ctx, htmlOverlay, state, updateHtmlLabel) {
 
     icons.forEach(icon => {
         ctx.save();
-        ctx.strokeStyle = colors.uiDefault;
-        ctx.lineWidth = C.UI_MENU_ICON_BORDER_WIDTH;
-        ctx.strokeRect(icon.x, icon.y, icon.width, icon.height);
-
         ctx.strokeStyle = colors.uiIcon;
         ctx.fillStyle = colors.uiIcon;
         ctx.lineWidth = C.UI_ICON_LINE_WIDTH_SMALL;
@@ -4683,27 +4747,33 @@ function drawColorModePanel(ctx, htmlOverlay, state, updateHtmlLabel) {
         };
         if (icon.group === 'edge') {
             const opts = { ...baseOptions, edgeState: 'solid' };
-            if (edgeColorMode === 'inherit_vertices') {
+            if (icon.mode === 'inherit_vertices') {
                 opts.vertexState = 'filled';
                 opts.vertexColors = rgbVertexColors;
                 opts.edgeVertexColors = rgbVertexColors;
             }
-            if (edgeColorMode === 'colormap') {
+            if (icon.mode === 'colormap') {
                 opts.edgeColormapItem = getPreviewColormap();
             }
-            drawTriangleIcon(ctx, icon, opts, colors, false);
+            const isActive = edgeActiveModes.includes(icon.mode);
+            drawTriangleIcon(ctx, icon, opts, colors, isActive);
         } else if (icon.group === 'face') {
             const opts = { ...baseOptions, faceState: 'filled' };
-            if (faceColorMode === 'inherit_vertices') {
+            if (icon.mode === 'inherit_vertices') {
                 opts.vertexState = 'solid';
+                opts.faceVertexColors = rgbVertexColors;
+                opts.vertexColors = rgbVertexColors;
             }
-            if (faceColorMode === 'inherit_edges') {
+            if (icon.mode === 'inherit_edges') {
                 opts.edgeState = 'solid';
+                opts.edgeColors = rgbVertexColors;
+                opts.faceEdgeColors = rgbVertexColors;
             }
-            if (faceColorMode === 'colormap_xy' || faceColorMode === 'colormap_polar') {
+            if (icon.mode === 'colormap_xy' || icon.mode === 'colormap_polar') {
                 opts.faceColormapItem = getPreviewColormap();
             }
-            drawTriangleIcon(ctx, icon, opts, colors, false);
+            const isActive = faceActiveModes.includes(icon.mode);
+            drawTriangleIcon(ctx, icon, opts, colors, isActive);
         }
         ctx.restore();
     });
@@ -4915,12 +4985,81 @@ function getTriangleIconGeometry(rect) {
 }
 
 function drawTriangleIcon(ctx, rect, options, colors, isActive = false) {
-    const { vertexState = 'none', edgeState = 'none', faceState = 'none', faceColor, edgeColor, vertexColor: optionsVertexColor, vertexColors, edgeVertexColors, faceColormapItem, showAllDisabled = false } = options;
+    const { vertexState = 'none', edgeState = 'none', faceState = 'none', faceColor, edgeColor, vertexColor: optionsVertexColor, vertexColors, edgeVertexColors, edgeColors, faceColormapItem, faceVertexColors, faceEdgeColors, showAllDisabled = false } = options;
 
     ctx.save();
 
     const { vertices, facePath } = getTriangleIconGeometry(rect);
     
+    const resolveColor = (value) => {
+        if (!value) return { r: 0, g: 0, b: 0, a: 1 };
+        if (Array.isArray(value)) return { r: value[0], g: value[1], b: value[2], a: 1 };
+        return U.parseColor(value);
+    };
+
+    const drawTriangleGradient = (vertices, bounds, mode, colorList) => {
+        const width = Math.max(1, Math.ceil(bounds.w));
+        const height = Math.max(1, Math.ceil(bounds.h));
+        const temp = document.createElement('canvas');
+        temp.width = width;
+        temp.height = height;
+        const tctx = temp.getContext('2d');
+        const image = tctx.createImageData(width, height);
+        const data = image.data;
+
+        const v0 = vertices[0];
+        const v1 = vertices[1];
+        const v2 = vertices[2];
+        const denom = (v1.y - v2.y) * (v0.x - v2.x) + (v2.x - v1.x) * (v0.y - v2.y);
+        const colorsResolved = colorList.map(resolveColor);
+        const edgePairs = [
+            [v0, v1],
+            [v1, v2],
+            [v2, v0]
+        ];
+
+        for (let y = 0; y < height; y++) {
+            for (let x = 0; x < width; x++) {
+                const px = bounds.x + x + 0.5;
+                const py = bounds.y + y + 0.5;
+                const w0 = ((v1.y - v2.y) * (px - v2.x) + (v2.x - v1.x) * (py - v2.y)) / denom;
+                const w1 = ((v2.y - v0.y) * (px - v2.x) + (v0.x - v2.x) * (py - v2.y)) / denom;
+                const w2 = 1 - w0 - w1;
+                const idx = (y * width + x) * 4;
+                if (w0 >= -0.001 && w1 >= -0.001 && w2 >= -0.001) {
+                    let r = 0, g = 0, b = 0, a = 1;
+                    if (mode === 'vertices') {
+                        r = w0 * colorsResolved[0].r + w1 * colorsResolved[1].r + w2 * colorsResolved[2].r;
+                        g = w0 * colorsResolved[0].g + w1 * colorsResolved[1].g + w2 * colorsResolved[2].g;
+                        b = w0 * colorsResolved[0].b + w1 * colorsResolved[1].b + w2 * colorsResolved[2].b;
+                    } else {
+                        const weights = edgePairs.map((edge, edgeIndex) => {
+                            const closest = U.getClosestPointOnLineSegment({ x: px, y: py }, edge[0], edge[1]);
+                            return { weight: 1 / Math.max(closest.distance, 1e-4), edgeIndex };
+                        });
+                        const weightSum = weights.reduce((sum, entry) => sum + entry.weight, 0) || 1;
+                        weights.forEach(entry => {
+                            const color = colorsResolved[entry.edgeIndex];
+                            const factor = entry.weight / weightSum;
+                            r += factor * color.r;
+                            g += factor * color.g;
+                            b += factor * color.b;
+                        });
+                    }
+                    data[idx] = Math.round(r);
+                    data[idx + 1] = Math.round(g);
+                    data[idx + 2] = Math.round(b);
+                    data[idx + 3] = Math.round(a * 255);
+                } else {
+                    data[idx + 3] = 0;
+                }
+            }
+        }
+
+        tctx.putImageData(image, 0, 0);
+        ctx.drawImage(temp, bounds.x, bounds.y);
+    };
+
     if (faceState === 'filled') {
         if (faceColormapItem && faceColormapItem.type === 'colormap') {
             const gradient = ctx.createLinearGradient(vertices[1].x, 0, vertices[2].x, 0);
@@ -4931,10 +5070,18 @@ function drawTriangleIcon(ctx, rect, options, colors, isActive = false) {
                 gradient.addColorStop(vertex.pos, colorString);
             });
             ctx.fillStyle = gradient;
+        } else if (faceVertexColors && faceVertexColors.length >= 3) {
+            const { bounds } = getTriangleIconGeometry(rect);
+            drawTriangleGradient(vertices, bounds, 'vertices', faceVertexColors);
+        } else if (faceEdgeColors && faceEdgeColors.length >= 3) {
+            const { bounds } = getTriangleIconGeometry(rect);
+            drawTriangleGradient(vertices, bounds, 'edges', faceEdgeColors);
         } else {
             ctx.fillStyle = faceColor || colors.face;
         }
-        ctx.fill(facePath);
+        if (!faceVertexColors && !faceEdgeColors) {
+            ctx.fill(facePath);
+        }
     } else if (faceState === 'disabled') {
         ctx.fillStyle = C.UI_ICON_DISABLED_FILL;
         ctx.fill(facePath);
@@ -4954,7 +5101,9 @@ function drawTriangleIcon(ctx, rect, options, colors, isActive = false) {
             const [startIndex, endIndex] = edge;
             const start = vertices[startIndex];
             const end = vertices[endIndex];
-            if (options.edgeColormapItem && options.edgeColormapItem.type === 'colormap' && edgeState === 'solid') {
+            if (edgeColors && edgeColors.length >= 3) {
+                ctx.strokeStyle = edgeColors[edgeIndex];
+            } else if (options.edgeColormapItem && options.edgeColormapItem.type === 'colormap' && edgeState === 'solid') {
                 const gradient = ctx.createLinearGradient(start.x, start.y, end.x, end.y);
                 const edgeOffset = edges.length > 1 ? edgeIndex / (edges.length - 1) : 0.5;
                 const startT = Math.max(0, Math.min(1, edgeOffset));
@@ -5019,6 +5168,14 @@ function drawTriangleIcon(ctx, rect, options, colors, isActive = false) {
         ctx.moveTo(2, 2);
         ctx.lineTo(30, 30);
         ctx.stroke();
+    }
+
+    if (isActive) {
+        const padding = 2;
+        ctx.strokeStyle = colors.selectionGlow;
+        ctx.lineWidth = C.UI_BUTTON_BORDER_WIDTH;
+        ctx.setLineDash([]);
+        ctx.strokeRect(rect.x - padding, rect.y - padding, rect.width + padding * 2, rect.height + padding * 2);
     }
     
     ctx.restore();
@@ -5092,6 +5249,7 @@ export function drawFace(ctx, screenVertices, face, colors, dataToScreen, findVe
         faceColorPolarExpression = 'r',
         edgeColorExpression = 'x'
     } = colorModeConfig;
+    const faceMode = getFaceMode(face, faceColorMode);
 
     const faceVertices = face?.vertexIds ? face.vertexIds.map(id => getLiveVertex(id)).filter(Boolean) : [];
     const getVertexColorValue = (vertex) => vertex?.color || colors.face;
@@ -5146,6 +5304,7 @@ export function drawFace(ctx, screenVertices, face, colors, dataToScreen, findVe
                 if (v1 && v2) {
                     edges.push({
                         edge,
+                        mode: getEdgeMode(edge, edgeColorMode),
                         v1,
                         v2,
                         v1Local: U.globalToLocal(v1, coordSystem),
@@ -5156,8 +5315,8 @@ export function drawFace(ctx, screenVertices, face, colors, dataToScreen, findVe
         }
 
         const getEdgeColorAtT = (edgeEntry, t) => {
-            const { edge, v1, v2 } = edgeEntry;
-            if (edgeColorMode === 'inherit_vertices' && v1 && v2) {
+            const { edge, v1, v2, mode } = edgeEntry;
+            if (mode === 'inherit_vertices' && v1 && v2) {
                 const c1 = toRgba(getVertexColorValue(v1), fallbackColor);
                 const c2 = toRgba(getVertexColorValue(v2), fallbackColor);
                 return {
@@ -5167,7 +5326,7 @@ export function drawFace(ctx, screenVertices, face, colors, dataToScreen, findVe
                     a: lerp(c1.a, c2.a, t)
                 };
             }
-            if (edgeColorMode === 'colormap' && edge.colormapItem) {
+            if (mode === 'colormap' && edge.colormapItem) {
                 const value = U.evaluateExpression(edgeColorExpression, { x: t }, t);
                 const clamped = clamp01(value);
                 const sampled = U.sampleColormap(edge.colormapItem, clamped);
@@ -5229,11 +5388,11 @@ export function drawFace(ctx, screenVertices, face, colors, dataToScreen, findVe
         return canvas;
     };
 
-    if (faceColorMode === 'fixed') {
+    if (faceMode === 'fixed') {
         ctx.fillStyle = face?.color || colors.face;
         ctx.fill(drawHoles ? 'evenodd' : 'nonzero');
     } else if (face.localCoordSystem) {
-        const shaderCanvas = buildFaceShaderCanvas(faceColorMode, face.localCoordSystem);
+        const shaderCanvas = buildFaceShaderCanvas(faceMode, face.localCoordSystem);
         const pattern = makePatternFromCanvas(shaderCanvas, face.localCoordSystem);
         ctx.fillStyle = pattern || (face?.color || colors.face);
         ctx.fill(drawHoles ? 'evenodd' : 'nonzero');

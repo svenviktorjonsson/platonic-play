@@ -39,6 +39,38 @@ html, body {
     height: 100%;
 }
 
+.mobile-controls {
+    position: absolute;
+    right: 16px;
+    top: 16px;
+    display: none;
+    gap: 8px;
+    z-index: 1200;
+    pointer-events: auto;
+}
+
+.mobile-controls button {
+    background: rgba(30, 30, 30, 0.85);
+    color: #e2e8f0;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-size: 14px;
+}
+
+.mobile-controls button.active {
+    background: rgba(79, 140, 255, 0.9);
+    border-color: rgba(79, 140, 255, 1);
+    color: #ffffff;
+}
+
+@media (pointer: coarse) {
+    .mobile-controls {
+        display: flex;
+        flex-wrap: wrap;
+    }
+}
+
 /* This rule is now specific to the main drawing canvas */
 #drawingCanvas {
     display: block;

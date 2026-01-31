@@ -8,6 +8,10 @@ import * as S from './snap.js';
 import * as C from './constants.js';
 import * as U from './utils.js';
 import * as R from './renderer.js';
+import { setupMobileInput } from './mobile-input.js';
+import { State as FsmState } from './fsm/state.js';
+import { handleEvent as handleFsmEvent } from './fsm/transitions.js';
+import { ENTITY_TYPES as FSM_ENTITY_TYPES, MODES as FSM_MODES, DRAG_TYPES as FSM_DRAG_TYPES } from './fsm/constants.js';
 
 const canvas = document.getElementById('drawingCanvas');
 const ctx = canvas.getContext('2d', { willReadFrequently: true });
@@ -173,8 +177,15 @@ let faceColorExpression = 'x';
 let faceColorPolarExpression = 'r';
 let edgeExpressionField = null;
 let faceExpressionField = null;
+let edgeExpressionFieldWidth = null;
+let faceExpressionFieldWidth = null;
+let lastSelectedEdgeMode = null;
+let lastSelectedFaceMode = null;
 let currentAltPressed = false;
+let currentCtrlPressed = false;
 let ghostVertexSnapType = null;
+let mobileHoverMode = false;
+let lastSelectedSwatchIndex = null;
 
 function setupUndoStackDebugging() {
     const originalPop = Array.prototype.pop;
@@ -238,8 +249,6 @@ let isDraggingColorSwatch = false;
 let draggedSwatchInfo = null;
 let isDraggingSession = false;
 let draggedSessionInfo = null;
-let edgeExpressionField = null;
-let faceExpressionField = null;
 
 let colorAssignments = {
     [C.COLOR_TARGET_VERTEX]: 0,
@@ -254,6 +263,316 @@ let coordSystemSnapTargets = null;
 
 let deletedFaceIds = new Set(); // Track explicitly deleted faces
 let draggedSwatchTemporarilyRemoved = false;
+
+const fsmState = new FsmState();
+
+const fsmGraph = {
+    getEntitiesInRect: (rect) => {
+        const matches = [];
+        const isInRect = (screenPos) => (
+            screenPos.x >= rect.minX &&
+            screenPos.x <= rect.maxX &&
+            screenPos.y >= rect.minY &&
+            screenPos.y <= rect.maxY
+        );
+
+        allVertices.forEach(vertex => {
+            const screenPos = dataToScreen(vertex);
+            if (isInRect(screenPos)) {
+                matches.push({
+                    type: vertex.type === 'regular' ? FSM_ENTITY_TYPES.VERTEX : FSM_ENTITY_TYPES.TRANSFORMATION_OBJECT,
+                    id: vertex.id
+                });
+            }
+        });
+
+        allEdges.forEach(edge => {
+            const p1 = findVertexById(edge.id1);
+            const p2 = findVertexById(edge.id2);
+            if (!p1 || !p2) return;
+            const midpoint = dataToScreen({ x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 });
+            if (isInRect(midpoint)) {
+                matches.push({ type: FSM_ENTITY_TYPES.EDGE, id: U.getEdgeId(edge) });
+            }
+        });
+
+        allFaces.forEach(face => {
+            const vertices = face.vertexIds.map(id => findVertexById(id)).filter(Boolean);
+            if (vertices.length < 3) return;
+            const center = vertices.reduce((sum, v) => ({ x: sum.x + v.x, y: sum.y + v.y }), { x: 0, y: 0 });
+            const centroid = dataToScreen({ x: center.x / vertices.length, y: center.y / vertices.length });
+            if (isInRect(centroid)) {
+                matches.push({ type: FSM_ENTITY_TYPES.FACE, id: U.getFaceId(face) });
+            }
+        });
+
+        allTextElements.forEach(text => {
+            const bounds = text.screenBounds;
+            if (!bounds) return;
+            const boundsCenter = { x: (bounds.left + bounds.right) / 2, y: (bounds.top + bounds.bottom) / 2 };
+            if (isInRect(boundsCenter)) {
+                matches.push({ type: FSM_ENTITY_TYPES.TEXT, id: text.id });
+            }
+        });
+
+        return matches;
+    },
+    getNeighbors: (id) => {
+        const vertex = findVertexById(id);
+        if (vertex) {
+            return U.findNeighbors(id, allEdges);
+        }
+
+        const edge = allEdges.find(e => U.getEdgeId(e) === id);
+        if (edge) {
+            return [edge.id1, edge.id2];
+        }
+
+        const face = allFaces.find(f => U.getFaceId(f) === id);
+        if (face) {
+            return [...face.vertexIds];
+        }
+
+        const text = allTextElements.find(el => el.id === id);
+        if (text && text.anchorId) {
+            return [text.anchorId];
+        }
+
+        return [];
+    },
+    getAllConnected: (id) => {
+        const entityType = fsmGraph.getEntityType(id);
+        if (entityType === FSM_ENTITY_TYPES.VERTEX || entityType === FSM_ENTITY_TYPES.TRANSFORMATION_OBJECT) {
+            return findAllVerticesInSubgraph(id);
+        }
+
+        if (entityType === FSM_ENTITY_TYPES.EDGE) {
+            const edge = allEdges.find(e => U.getEdgeId(e) === id);
+            if (!edge) return [];
+            const componentVertices = new Set(findAllVerticesInSubgraph(edge.id1));
+            return allEdges
+                .filter(e => componentVertices.has(e.id1) && componentVertices.has(e.id2))
+                .map(e => U.getEdgeId(e));
+        }
+
+        if (entityType === FSM_ENTITY_TYPES.FACE) {
+            const startFace = allFaces.find(f => U.getFaceId(f) === id);
+            if (!startFace) return [];
+            const visited = new Set([U.getFaceId(startFace)]);
+            const queue = [startFace];
+            while (queue.length > 0) {
+                const current = queue.shift();
+                allFaces.forEach(face => {
+                    const faceId = U.getFaceId(face);
+                    if (visited.has(faceId)) return;
+                    if (face.vertexIds.some(vId => current.vertexIds.includes(vId))) {
+                        visited.add(faceId);
+                        queue.push(face);
+                    }
+                });
+            }
+            return Array.from(visited);
+        }
+
+        return [id];
+    },
+    getEntityType: (id) => {
+        const vertex = findVertexById(id);
+        if (vertex) {
+            return vertex.type === 'regular' ? FSM_ENTITY_TYPES.VERTEX : FSM_ENTITY_TYPES.TRANSFORMATION_OBJECT;
+        }
+
+        if (allEdges.some(edge => U.getEdgeId(edge) === id)) return FSM_ENTITY_TYPES.EDGE;
+        if (allFaces.some(face => U.getFaceId(face) === id)) return FSM_ENTITY_TYPES.FACE;
+        if (allTextElements.some(text => text.id === id)) return FSM_ENTITY_TYPES.TEXT;
+
+        return null;
+    },
+    getDragType: (state) => {
+        const hasSelection = state.selection.vertices.size > 0 ||
+            state.selection.edges.size > 0 ||
+            state.selection.faces.size > 0 ||
+            state.selection.text.size > 0 ||
+            state.selection.transformationObjects.size > 0;
+        return hasSelection ? FSM_DRAG_TYPES.RIGID_DRAG : null;
+    }
+};
+
+const fsmText = {
+    startTyping: () => {
+        if (!textEditorState.activeId) {
+            createTextElementFromHover('');
+        }
+    },
+    updateText: (state, char) => {
+        if (!textEditorState.activeId) {
+            createTextElementFromHover(char);
+            return;
+        }
+        const input = textEditorState.inputEl;
+        if (input) {
+            input.value += char;
+        } else {
+            const textElement = getTextElementById(textEditorState.activeId);
+            if (textElement) {
+                textElement.content = `${textElement.content || ''}${char}`;
+            }
+        }
+        state.textInput.value = textEditorState.inputEl ? textEditorState.inputEl.value : '';
+    },
+    backspace: (state) => {
+        const input = textEditorState.inputEl;
+        if (input) {
+            input.value = input.value.slice(0, -1);
+            state.textInput.value = input.value;
+        }
+    },
+    stopTyping: () => {
+        finalizeTextEditing(true);
+    }
+};
+
+function dispatchFsmEvent(eventName, payload) {
+    handleFsmEvent(fsmState, fsmGraph, fsmText, eventName, payload);
+}
+
+function syncFsmFromLegacy() {
+    if (textEditorState.activeId) {
+        fsmState.mode = FSM_MODES.TYPING;
+    } else if (isRectangleSelecting) {
+        fsmState.mode = FSM_MODES.SELECTING;
+    } else if (isDragConfirmed || isPanningBackground || isDraggingCenter || isDraggingCoordSystem) {
+        fsmState.mode = FSM_MODES.DRAGGING;
+    } else if (isDrawingMode) {
+        fsmState.mode = FSM_MODES.DRAWING;
+    } else {
+        fsmState.mode = FSM_MODES.IDLE;
+    }
+
+    fsmState.modifiers.shift = currentShiftPressed;
+    fsmState.modifiers.ctrl = currentCtrlPressed;
+    fsmState.modifiers.alt = currentAltPressed;
+
+    fsmState.selection.vertices = new Set(selectedVertexIds);
+    fsmState.selection.edges = new Set(selectedEdgeIds);
+    fsmState.selection.faces = new Set(selectedFaceIds);
+    fsmState.selection.text = new Set(selectedTextIds);
+    fsmState.selection.transformationObjects = new Set(selectedCenterIds);
+    fsmState.activeTransformationObjectId = activeCenterId;
+
+    if (hoveredTextId) {
+        fsmState.hoverTarget = { type: FSM_ENTITY_TYPES.TEXT, id: hoveredTextId };
+    } else if (hoveredVertexId) {
+        fsmState.hoverTarget = { type: FSM_ENTITY_TYPES.VERTEX, id: hoveredVertexId };
+    } else if (hoveredEdgeId) {
+        fsmState.hoverTarget = { type: FSM_ENTITY_TYPES.EDGE, id: hoveredEdgeId };
+    } else if (hoveredFaceId) {
+        fsmState.hoverTarget = { type: FSM_ENTITY_TYPES.FACE, id: hoveredFaceId };
+    } else {
+        fsmState.hoverTarget = { type: FSM_ENTITY_TYPES.CANVAS, id: null };
+    }
+
+    fsmState.marqueeRect = {
+        active: isRectangleSelecting,
+        startX: rectangleSelectStartPos.x,
+        startY: rectangleSelectStartPos.y,
+        endX: mousePos.x,
+        endY: mousePos.y
+    };
+
+    fsmState.zoomLevel = viewTransform.scale;
+    fsmState.lastMouseX = mousePos.x;
+    fsmState.lastMouseY = mousePos.y;
+
+    const input = textEditorState.inputEl;
+    fsmState.textInput.active = Boolean(textEditorState.activeId);
+    fsmState.textInput.x = mousePos.x;
+    fsmState.textInput.y = mousePos.y;
+    fsmState.textInput.value = input ? input.value : '';
+
+    if (isActionInProgress) {
+        fsmState.dragAction = {
+            hasMoved: isDragConfirmed,
+            button: currentMouseButton,
+            type: isRectangleSelecting ? FSM_DRAG_TYPES.MARQUEE_SELECT : (isPanningBackground ? FSM_DRAG_TYPES.PANNING : null)
+        };
+    } else {
+        fsmState.dragAction = null;
+    }
+}
+
+function setMobileButtonState(button, isActive) {
+    if (!button) return;
+    button.classList.toggle('active', isActive);
+    button.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+}
+
+function triggerModifierKey(mod, isDown) {
+    const baseEvent = {
+        key: mod,
+        shiftKey: mod === 'Shift',
+        ctrlKey: mod === 'Control',
+        metaKey: false,
+        altKey: mod === 'Alt',
+        repeat: false,
+        target: document.body,
+        preventDefault: () => {},
+        stopPropagation: () => {}
+    };
+    if (isDown) {
+        handleKeyDown(baseEvent);
+    } else {
+        handleKeyUp(baseEvent);
+    }
+}
+
+function setupMobileControls() {
+    const container = document.getElementById('mobile-controls');
+    if (!container) return;
+
+    const hoverButton = container.querySelector('[data-mod="hover"]');
+    const shiftButton = container.querySelector('[data-mod="shift"]');
+    const ctrlButton = container.querySelector('[data-mod="ctrl"]');
+    const altButton = container.querySelector('[data-mod="alt"]');
+
+    const toggleHover = () => {
+        mobileHoverMode = !mobileHoverMode;
+        setMobileButtonState(hoverButton, mobileHoverMode);
+        syncFsmFromLegacy();
+    };
+
+    const toggleModifier = (button, key, currentState) => {
+        const nextState = !currentState;
+        setMobileButtonState(button, nextState);
+        triggerModifierKey(key, nextState);
+    };
+
+    if (hoverButton) {
+        hoverButton.addEventListener('click', toggleHover);
+    }
+    if (shiftButton) {
+        shiftButton.addEventListener('click', () => toggleModifier(shiftButton, 'Shift', currentShiftPressed));
+    }
+    if (ctrlButton) {
+        ctrlButton.addEventListener('click', () => toggleModifier(ctrlButton, 'Control', currentCtrlPressed));
+    }
+    if (altButton) {
+        altButton.addEventListener('click', () => toggleModifier(altButton, 'Alt', currentAltPressed));
+    }
+}
+
+function getUiElementAt(screenPos) {
+    return U.getClickedUIElement(screenPos, canvasUI, {
+        isToolbarExpanded,
+        isColorPaletteExpanded,
+        isColorModePanelExpanded,
+        isInterpolationPanelExpanded,
+        isTransformPanelExpanded,
+        isDisplayPanelExpanded,
+        isVisibilityPanelExpanded,
+        isSessionsPanelExpanded
+    });
+}
 
 
 function ensureFaceCoordinateSystems() {
@@ -292,14 +611,7 @@ function getColorForTarget(targetType, index = 0, total = 1) {
 }
 
 function syncColorAssignmentsForInheritance() {
-    if (edgeColorMode === 'inherit_vertices') {
-        colorAssignments[C.COLOR_TARGET_EDGE] = colorAssignments[C.COLOR_TARGET_VERTEX];
-    }
-    if (faceColorMode === 'inherit_vertices') {
-        colorAssignments[C.COLOR_TARGET_FACE] = colorAssignments[C.COLOR_TARGET_VERTEX];
-    } else if (faceColorMode === 'inherit_edges') {
-        colorAssignments[C.COLOR_TARGET_FACE] = colorAssignments[C.COLOR_TARGET_EDGE];
-    }
+    // Inheritance is per-geometry; global color assignments stay independent.
 }
 
 function normalizeActiveColorTargets() {
@@ -307,56 +619,168 @@ function normalizeActiveColorTargets() {
 }
 
 function getInheritedBaseTarget(target) {
-    if (target === C.COLOR_TARGET_EDGE && edgeColorMode === 'inherit_vertices') {
-        return C.COLOR_TARGET_VERTEX;
-    }
-    if (target === C.COLOR_TARGET_FACE) {
-        if (faceColorMode === 'inherit_vertices') return C.COLOR_TARGET_VERTEX;
-        if (faceColorMode === 'inherit_edges') return C.COLOR_TARGET_EDGE;
-    }
     return target;
 }
 
 function getDependentTargets(baseTarget) {
-    const dependents = [];
-    if (baseTarget === C.COLOR_TARGET_VERTEX) {
-        if (edgeColorMode === 'inherit_vertices') dependents.push(C.COLOR_TARGET_EDGE);
-        if (faceColorMode === 'inherit_vertices') dependents.push(C.COLOR_TARGET_FACE);
+    return [];
+}
+
+function getSelectedEdgeIds() {
+    const ids = new Set(selectedEdgeIds);
+    const fsmIds = Array.from(fsmState.selection.edges || []);
+    fsmIds.forEach(id => ids.add(id));
+    return Array.from(ids);
+}
+
+function getSelectedFaceIds() {
+    const ids = new Set(selectedFaceIds);
+    const fsmIds = Array.from(fsmState.selection.faces || []);
+    fsmIds.forEach(id => ids.add(id));
+    return Array.from(ids);
+}
+
+function getSelectedEdgeModesForUI() {
+    const edgeIds = getSelectedEdgeIds();
+    if (edgeIds.length === 0) return [];
+    const modes = new Set();
+    edgeIds.forEach(edgeId => {
+        const edge = allEdges.find(e => U.getEdgeId(e) === edgeId);
+        if (edge) modes.add(getEdgeColorModeFor(edge));
+    });
+    return Array.from(modes);
+}
+
+function getSelectedFaceModesForUI() {
+    const faceIds = getSelectedFaceIds();
+    if (faceIds.length === 0) return [];
+    const modes = new Set();
+    faceIds.forEach(faceId => {
+        const face = allFaces.find(f => U.getFaceId(f) === faceId);
+        if (face) modes.add(getFaceColorModeFor(face));
+    });
+    return Array.from(modes);
+}
+
+function updateColorModeDriverFromSelection() {
+    const edgeIds = getSelectedEdgeIds();
+    if (edgeIds.length > 0) {
+        const hoveredEdge = hoveredEdgeId ? allEdges.find(e => U.getEdgeId(e) === hoveredEdgeId) : null;
+        if (hoveredEdge && edgeIds.includes(U.getEdgeId(hoveredEdge))) {
+            const hoveredMode = getEdgeColorModeFor(hoveredEdge);
+            if (getSelectedEdgeModesForUI().includes(hoveredMode)) {
+                lastSelectedEdgeMode = hoveredMode;
+            }
+        }
+        if (!getSelectedEdgeModesForUI().includes(lastSelectedEdgeMode)) {
+            lastSelectedEdgeMode = getSelectedEdgeModesForUI()[0] || lastSelectedEdgeMode;
+        }
     }
-    if (baseTarget === C.COLOR_TARGET_EDGE && faceColorMode === 'inherit_edges') {
-        dependents.push(C.COLOR_TARGET_FACE);
+
+    const faceIds = getSelectedFaceIds();
+    if (faceIds.length > 0) {
+        const hoveredFace = hoveredFaceId ? allFaces.find(f => U.getFaceId(f) === hoveredFaceId) : null;
+        if (hoveredFace && faceIds.includes(U.getFaceId(hoveredFace))) {
+            const hoveredMode = getFaceColorModeFor(hoveredFace);
+            if (getSelectedFaceModesForUI().includes(hoveredMode)) {
+                lastSelectedFaceMode = hoveredMode;
+            }
+        }
+        if (!getSelectedFaceModesForUI().includes(lastSelectedFaceMode)) {
+            lastSelectedFaceMode = getSelectedFaceModesForUI()[0] || lastSelectedFaceMode;
+        }
     }
-    return dependents;
+}
+
+function getEdgeColorModeFor(edge) {
+    return edge?.colorMode || edgeColorMode;
+}
+
+function getFaceColorModeFor(face) {
+    return face?.colorMode || faceColorMode;
+}
+
+function applyEdgeColorMode(edge, mode) {
+    edge.colorMode = mode;
+    if (mode === 'fixed') {
+        const fallbackColor = getColorForTarget(C.COLOR_TARGET_EDGE);
+        edge.color = edge.color || fallbackColor;
+        delete edge.colormapItem;
+        delete edge.gradientStart;
+        delete edge.gradientEnd;
+        return;
+    }
+    if (mode === 'colormap') {
+        const colorItem = allColors[colorAssignments[C.COLOR_TARGET_EDGE]];
+        if (colorItem && colorItem.type === 'colormap') {
+            edge.colormapItem = edge.colormapItem || colorItem;
+            edge.gradientStart = edge.gradientStart ?? 0;
+            edge.gradientEnd = edge.gradientEnd ?? 1;
+            delete edge.color;
+            return;
+        }
+        edge.color = getColorForTarget(C.COLOR_TARGET_EDGE);
+        delete edge.colormapItem;
+        delete edge.gradientStart;
+        delete edge.gradientEnd;
+        return;
+    }
+    delete edge.colormapItem;
+    delete edge.gradientStart;
+    delete edge.gradientEnd;
+}
+
+function applyFaceColorMode(face, mode) {
+    face.colorMode = mode;
+    if (mode === 'fixed') {
+        const fallbackColor = getColorForTarget(C.COLOR_TARGET_FACE);
+        face.color = face.color || fallbackColor;
+        delete face.colormapItem;
+        delete face.colormapDistribution;
+        return;
+    }
+    if (mode === 'colormap_xy' || mode === 'colormap_polar') {
+        const colorItem = allColors[colorAssignments[C.COLOR_TARGET_FACE]];
+        if (colorItem && colorItem.type === 'colormap') {
+            face.colormapItem = face.colormapItem || colorItem;
+            face.colormapDistribution = face.colormapDistribution || 'x';
+            delete face.color;
+            return;
+        }
+        face.color = getColorForTarget(C.COLOR_TARGET_FACE);
+        delete face.colormapItem;
+        delete face.colormapDistribution;
+        return;
+    }
+    delete face.colormapItem;
+    delete face.colormapDistribution;
+}
+
+function applyEdgeColorModeToSelection(mode, edgeIds = null) {
+    const ids = edgeIds || getSelectedEdgeIds();
+    ids.forEach(edgeId => {
+        const edge = allEdges.find(e => U.getEdgeId(e) === edgeId);
+        if (edge) applyEdgeColorMode(edge, mode);
+    });
+}
+
+function applyFaceColorModeToSelection(mode, faceIds = null) {
+    const ids = faceIds || getSelectedFaceIds();
+    ids.forEach(faceId => {
+        const face = allFaces.find(f => U.getFaceId(f) === faceId);
+        if (face) applyFaceColorMode(face, mode);
+    });
 }
 
 function applyColorModeDefaults() {
-    if (edgeColorMode === 'fixed') {
-        const fallbackColor = getColorForTarget(C.COLOR_TARGET_EDGE);
-        allEdges.forEach(edge => {
-            edge.color = edge.color || fallbackColor;
-            delete edge.colormapItem;
-            delete edge.gradientStart;
-            delete edge.gradientEnd;
-        });
-    }
-    if (faceColorMode === 'fixed') {
-        const fallbackColor = getColorForTarget(C.COLOR_TARGET_FACE);
-        allFaces.forEach(face => {
-            face.color = face.color || fallbackColor;
-            delete face.colormapItem;
-            delete face.colormapDistribution;
-        });
-    }
-    if (faceColorMode.startsWith('colormap')) {
-        const colorIndex = colorAssignments[C.COLOR_TARGET_FACE];
-        const colorItem = allColors[colorIndex];
-        if (colorItem && colorItem.type === 'colormap') {
-            allFaces.forEach(face => {
-                face.colormapItem = face.colormapItem || colorItem;
-                face.colormapDistribution = 'x';
-            });
-        }
-    }
+    allEdges.forEach(edge => {
+        const mode = edge.colorMode || edgeColorMode;
+        applyEdgeColorMode(edge, mode);
+    });
+    allFaces.forEach(face => {
+        const mode = face.colorMode || faceColorMode;
+        applyFaceColorMode(face, mode);
+    });
 }
 
 function applyColorsToSelection() {
@@ -382,69 +806,54 @@ function applyColorsToSelection() {
             }
         } else if (target === C.COLOR_TARGET_EDGE) {
             const colorItem = allColors[colorIndex];
-            if (edgeColorMode === 'colormap' && colorItem && colorItem.type === 'colormap') {
-                selectedEdgeIds.forEach((edgeId, index) => {
-                    const edge = allEdges.find(e => U.getEdgeId(e) === edgeId);
-                    if (edge) {
-                        const totalEdges = selectedEdgeIds.length;
-                        const startT = totalEdges > 1 ? index / totalEdges : 0;
-                        const endT = totalEdges > 1 ? (index + 1) / totalEdges : 1;
-                        edge.gradientStart = startT;
-                        edge.gradientEnd = endT;
-                        edge.colormapItem = colorItem;
-                        delete edge.color;
-                    }
-                });
-            } else {
+            selectedEdgeIds.forEach((edgeId, index) => {
+                const edge = allEdges.find(e => U.getEdgeId(e) === edgeId);
+                if (!edge) return;
+                const mode = getEdgeColorModeFor(edge);
+                if (mode === 'inherit_vertices') {
+                    return;
+                }
+                if (mode === 'colormap' && colorItem && colorItem.type === 'colormap') {
+                    const totalEdges = selectedEdgeIds.length;
+                    const startT = totalEdges > 1 ? index / totalEdges : 0;
+                    const endT = totalEdges > 1 ? (index + 1) / totalEdges : 1;
+                    edge.gradientStart = startT;
+                    edge.gradientEnd = endT;
+                    edge.colormapItem = colorItem;
+                    delete edge.color;
+                    return;
+                }
                 const color = colorItem && colorItem.type === 'colormap'
                     ? U.sampleColormap(colorItem, 0.5)
                     : getColorForTarget(C.COLOR_TARGET_EDGE);
-                allEdges.forEach(edge => {
-                    if (selectedEdgeIds.includes(U.getEdgeId(edge))) {
-                        edge.color = color;
-                        delete edge.gradientStart;
-                        delete edge.gradientEnd;
-                        delete edge.colormapItem;
-                    }
-                });
-            }
+                edge.color = color;
+                delete edge.gradientStart;
+                delete edge.gradientEnd;
+                delete edge.colormapItem;
+            });
         } else if (target === C.COLOR_TARGET_FACE) {
             const colorIndex = colorAssignments[target];
-            if (faceColorMode === 'inherit_vertices' || faceColorMode === 'inherit_edges') {
-                return;
-            }
-            if (colorIndex === -1) {
-                const color = getColorForTarget(C.COLOR_TARGET_FACE);
-                allFaces.forEach(face => {
-                    if (selectedFaceIds.includes(U.getFaceId(face))) {
-                        face.color = color;
-                        delete face.colormapItem;
-                        delete face.colormapDistribution;
-                    }
-                });
-            } else {
-                const colorItem = allColors[colorIndex];
-                if (faceColorMode.startsWith('colormap') && colorItem && colorItem.type === 'colormap') {
-                    allFaces.forEach(face => {
-                        if (selectedFaceIds.includes(U.getFaceId(face))) {
-                            face.colormapItem = colorItem;
-                            face.colormapDistribution = 'x'; // Default to x-direction
-                            delete face.color;
-                        }
-                    });
-                } else {
-                    const color = colorItem && colorItem.type === 'colormap'
-                        ? U.sampleColormap(colorItem, 0.5)
-                        : getColorForTarget(C.COLOR_TARGET_FACE);
-                    allFaces.forEach(face => {
-                        if (selectedFaceIds.includes(U.getFaceId(face))) {
-                            face.color = color;
-                            delete face.colormapItem;
-                            delete face.colormapDistribution;
-                        }
-                    });
+            const colorItem = allColors[colorIndex];
+            selectedFaceIds.forEach(faceId => {
+                const face = allFaces.find(f => U.getFaceId(f) === faceId);
+                if (!face) return;
+                const mode = getFaceColorModeFor(face);
+                if (mode === 'inherit_vertices' || mode === 'inherit_edges') {
+                    return;
                 }
-            }
+                if ((mode === 'colormap_xy' || mode === 'colormap_polar') && colorItem && colorItem.type === 'colormap') {
+                    face.colormapItem = colorItem;
+                    face.colormapDistribution = 'x';
+                    delete face.color;
+                    return;
+                }
+                const color = colorItem && colorItem.type === 'colormap'
+                    ? U.sampleColormap(colorItem, 0.5)
+                    : getColorForTarget(C.COLOR_TARGET_FACE);
+                face.color = color;
+                delete face.colormapItem;
+                delete face.colormapDistribution;
+            });
         } else if (target === C.COLOR_TARGET_TEXT) {
             const colorItem = allColors[colorIndex];
             if (colorItem && colorItem.type === 'colormap') {
@@ -626,6 +1035,22 @@ function isExpressionAllowed(expression, allowedIdentifiers) {
 }
 
 function updateColorModeExpressionInputs() {
+    const selectedEdgeModes = getSelectedEdgeModesForUI();
+    const selectedFaceModes = getSelectedFaceModesForUI();
+    const activeEdgeMode = selectedEdgeModes.length > 0
+        ? (selectedEdgeModes.includes(lastSelectedEdgeMode) ? lastSelectedEdgeMode : selectedEdgeModes[0])
+        : edgeColorMode;
+    const activeFaceMode = selectedFaceModes.length > 0
+        ? (selectedFaceModes.includes(lastSelectedFaceMode) ? lastSelectedFaceMode : selectedFaceModes[0])
+        : faceColorMode;
+
+    if (activeEdgeMode !== 'colormap') {
+        edgeExpressionFieldWidth = null;
+    }
+    if (activeFaceMode !== 'colormap_xy' && activeFaceMode !== 'colormap_polar') {
+        faceExpressionFieldWidth = null;
+    }
+
     edgeExpressionField = ensureExpressionField(edgeExpressionField, {
         placeholder: 'x',
         onChange: (value) => {
@@ -668,7 +1093,7 @@ function updateColorModeExpressionInputs() {
 
     if (!isColorModePanelExpanded || !canvasUI.colorModeIcons.length) return;
 
-    if (edgeColorMode === 'colormap') {
+    if (activeEdgeMode === 'colormap') {
         const field = canvasUI.colorModeExprFields.find(entry => entry.group === 'edge');
         if (field) {
             const labelText = 'c(x)=';
@@ -685,19 +1110,31 @@ function updateColorModeExpressionInputs() {
             edgeExpressionField.container.style.color = labelTextColor;
             edgeExpressionField.input.style.color = labelTextColor;
             edgeExpressionField.container.style.display = 'flex';
+
+            const baseWidth = field.baseWidth || field.width;
+            const expandedWidth = field.expandedWidth || field.width;
+            const labelWidth = edgeExpressionField.label.getBoundingClientRect().width;
+            const inputWidth = edgeExpressionField.input.scrollWidth;
+            const desiredWidth = labelWidth + inputWidth + 8;
+            const nextWidth = desiredWidth > baseWidth ? expandedWidth : baseWidth;
+            if (edgeExpressionFieldWidth !== nextWidth) {
+                edgeExpressionFieldWidth = nextWidth;
+                buildColorModePanelUI();
+                return;
+            }
         }
     }
 
-    if (faceColorMode === 'colormap_xy' || faceColorMode === 'colormap_polar') {
+    if (activeFaceMode === 'colormap_xy' || activeFaceMode === 'colormap_polar') {
         const field = canvasUI.colorModeExprFields.find(entry => entry.group === 'face');
         if (field) {
-            const labelText = faceColorMode === 'colormap_polar' ? 'c(r,\\phi)=' : 'c(x,y)=';
+            const labelText = activeFaceMode === 'colormap_polar' ? 'c(r,\\phi)=' : 'c(x,y)=';
             if (faceExpressionField.labelText !== labelText) {
                 renderStringToElement(faceExpressionField.label, formatStringToMathDisplay(labelText));
                 faceExpressionField.labelText = labelText;
             }
-            const value = faceColorMode === 'colormap_polar' ? faceColorPolarExpression : faceColorExpression;
-            faceExpressionField.input.value = value || (faceColorMode === 'colormap_polar' ? 'r' : 'x');
+            const value = activeFaceMode === 'colormap_polar' ? faceColorPolarExpression : faceColorExpression;
+            faceExpressionField.input.value = value || (activeFaceMode === 'colormap_polar' ? 'r' : 'x');
             faceExpressionField.container.style.left = `${field.x}px`;
             faceExpressionField.container.style.top = `${field.y}px`;
             faceExpressionField.container.style.width = `${field.width}px`;
@@ -706,6 +1143,18 @@ function updateColorModeExpressionInputs() {
             faceExpressionField.container.style.color = labelTextColor;
             faceExpressionField.input.style.color = labelTextColor;
             faceExpressionField.container.style.display = 'flex';
+
+            const baseWidth = field.baseWidth || field.width;
+            const expandedWidth = field.expandedWidth || field.width;
+            const labelWidth = faceExpressionField.label.getBoundingClientRect().width;
+            const inputWidth = faceExpressionField.input.scrollWidth;
+            const desiredWidth = labelWidth + inputWidth + 8;
+            const nextWidth = desiredWidth > baseWidth ? expandedWidth : baseWidth;
+            if (faceExpressionFieldWidth !== nextWidth) {
+                faceExpressionFieldWidth = nextWidth;
+                buildColorModePanelUI();
+                return;
+            }
         }
     }
 }
@@ -1387,27 +1836,34 @@ function createTextElementFromHover(initialContent = '') {
 }
 
 function handleCenterSelection(centerId, shiftKey, ctrlKey) {
+    const nextCenters = new Set(fsmState.selection.transformationObjects);
+    let nextActiveCenterId = fsmState.activeTransformationObjectId;
+
     // Only ctrl-click can remove; normal clicks keep existing selection
     if (ctrlKey) {
-        const index = selectedCenterIds.indexOf(centerId);
-        if (index > -1) {
-            selectedCenterIds.splice(index, 1);
-            if (activeCenterId === centerId) {
-                activeCenterId = selectedCenterIds.length > 0 ? selectedCenterIds[selectedCenterIds.length - 1] : null;
+        if (nextCenters.has(centerId)) {
+            nextCenters.delete(centerId);
+            if (nextActiveCenterId === centerId) {
+                const remaining = Array.from(nextCenters);
+                nextActiveCenterId = remaining.length > 0 ? remaining[remaining.length - 1] : null;
             }
-            return;
+        } else {
+            nextCenters.add(centerId);
+            nextActiveCenterId = centerId;
         }
-        // ctrl-click on unselected center toggles it on
-        selectedCenterIds.push(centerId);
-        activeCenterId = centerId;
-        return;
+    } else {
+        // Non-ctrl: never clear other selections; just ensure this one is selected/active
+        if (!nextCenters.has(centerId)) {
+            nextCenters.add(centerId);
+        }
+        nextActiveCenterId = centerId;
     }
 
-    // Non-ctrl: never clear other selections; just ensure this one is selected/active
-    if (!selectedCenterIds.includes(centerId)) {
-        selectedCenterIds.push(centerId);
-    }
-    activeCenterId = centerId;
+    fsmState.selection.transformationObjects = nextCenters;
+    fsmState.activeTransformationObjectId = nextActiveCenterId;
+
+    selectedCenterIds = Array.from(nextCenters);
+    activeCenterId = nextActiveCenterId;
 }
 
 function getBestSnapPosition(mouseDataPos) {
@@ -1982,11 +2438,27 @@ function buildColorPaletteUI() {
     canvasUI.colorSwatches = [];
     canvasUI.colorTargetIcons = [];
 
+    const isDraggingSwatch = isDraggingColorSwatch && draggedSwatchInfo;
+    const previewOrderIndices = (() => {
+        if (!isDraggingSwatch) {
+            return allColors.map((_, index) => index);
+        }
+        const count = allColors.length;
+        const fromIndex = Math.max(0, Math.min(count - 1, draggedSwatchInfo.originalIndex));
+        const toIndex = Math.max(0, Math.min(count - 1, draggedSwatchInfo.previewIndex ?? fromIndex));
+        const indices = allColors.map((_, index) => index);
+        const [moved] = indices.splice(fromIndex, 1);
+        indices.splice(toIndex, 0, moved);
+        return indices;
+    })();
+
     // --- Standard Grid Parameters ---
+    const itemSize = C.UI_SWATCH_SIZE;
     const standardHorizontalSpacing = C.TRANSFORM_ICON_SIZE + C.TRANSFORM_ICON_PADDING;
+    const swatchGap = standardHorizontalSpacing - itemSize;
+    const wideSwatchWidth = itemSize * 2 + swatchGap;
     const panelStartX = C.UI_TOOLBAR_WIDTH + C.UI_BUTTON_PADDING;
     const buttonCenterY = canvasUI.colorToolButton.y + (C.TOOL_BUTTON_HEIGHT / 2);
-    const itemSize = C.UI_SWATCH_SIZE;
     const verticalOffset = -2; // Nudge icons UP to align their visual center with the main button
     const itemY = buttonCenterY - (itemSize / 2) + verticalOffset;
     let currentGridX = panelStartX;
@@ -2002,18 +2474,27 @@ function buildColorPaletteUI() {
     };
     currentGridX += standardHorizontalSpacing;
 
-    allColors.forEach((item, index) => {
+    const isLongSwatch = (item) => {
+        if (!item || item.type !== 'colormap') return false;
+        return Array.isArray(item.vertices) && item.vertices.length > 1;
+    };
+
+    previewOrderIndices.forEach((originalIndex, positionIndex) => {
+        const item = allColors[originalIndex];
+        const isWide = isLongSwatch(item);
+        const swatchWidth = isWide ? wideSwatchWidth : itemSize;
         canvasUI.colorSwatches.push({
-            id: `swatch-${index}`,
+            id: `swatch-${originalIndex}`,
             type: "colorSwatch",
             x: currentGridX + (standardHorizontalSpacing - itemSize) / 2,
             y: itemY,
-            width: itemSize,
+            width: swatchWidth,
             height: itemSize,
-            index: index,
+            index: originalIndex,
+            positionIndex,
             item: item
         });
-        currentGridX += standardHorizontalSpacing;
+        currentGridX += isWide ? (standardHorizontalSpacing * 2) : standardHorizontalSpacing;
     });
 
     canvasUI.addColorButton = {
@@ -2038,21 +2519,6 @@ function buildColorPaletteUI() {
                 width: targetIconSize,
                 height: targetIconSize
             });
-        }
-    });
-
-    const targetIconMap = new Map(canvasUI.colorTargetIcons.map(icon => [icon.target, icon]));
-    Object.keys(colorAssignments).forEach((target) => {
-        const baseTarget = getInheritedBaseTarget(target);
-        if (baseTarget !== target) {
-            const baseIcon = targetIconMap.get(baseTarget);
-            const icon = targetIconMap.get(target);
-            if (baseIcon && icon) {
-                icon.x = baseIcon.x;
-                icon.y = baseIcon.y;
-                icon.width = baseIcon.width;
-                icon.height = baseIcon.height;
-            }
         }
     });
 
@@ -2086,56 +2552,72 @@ function buildColorModePanelUI() {
     const verticalOffset = -2;
     const rowY = buttonCenterY - (iconSize / 2) + verticalOffset;
     const spacing = C.TRANSFORM_ICON_SIZE + C.TRANSFORM_ICON_PADDING;
+    const gap = spacing - iconSize;
+    const baseExprWidth = (iconSize * 3) + (gap * 2);
+    const expandedExprWidth = baseExprWidth + iconSize + gap;
     const slotOffset = (spacing - iconSize) / 2;
 
-    const entries = [
-        { id: 'edge-color-mode', group: 'edge' },
-        { id: 'face-color-mode', group: 'face' }
-    ];
+    const edgeModes = ['fixed', 'inherit_vertices', 'colormap'];
+    const faceModes = ['fixed', 'inherit_vertices', 'inherit_edges', 'colormap_xy', 'colormap_polar'];
+    const selectedEdgeModes = getSelectedEdgeModesForUI();
+    const selectedFaceModes = getSelectedFaceModesForUI();
+    const hasEdgeSelection = selectedEdgeModes.length > 0;
+    const hasFaceSelection = selectedFaceModes.length > 0;
+    const driverEdgeMode = hasEdgeSelection
+        ? (selectedEdgeModes.includes(lastSelectedEdgeMode) ? lastSelectedEdgeMode : selectedEdgeModes[0])
+        : edgeColorMode;
+    const driverFaceMode = hasFaceSelection
+        ? (selectedFaceModes.includes(lastSelectedFaceMode) ? lastSelectedFaceMode : selectedFaceModes[0])
+        : faceColorMode;
 
     canvasUI.colorModeExprFields = [];
 
     let currentX = panelStartX;
-    entries.forEach(entry => {
+    const addModeIcon = (group, mode) => {
         canvasUI.colorModeIcons.push({
-            id: entry.id,
+            id: `${group}-color-mode-${mode}`,
             type: 'colorModeIcon',
-            group: entry.group,
+            group,
+            mode,
             x: currentX + slotOffset,
             y: rowY,
             width: iconSize,
             height: iconSize
         });
+    };
+    const addExprField = (group, desiredWidth) => {
+        canvasUI.colorModeExprFields.push({
+            id: `${group}-color-expr`,
+            type: 'colorModeExprField',
+            group,
+            x: currentX + spacing + slotOffset,
+            y: rowY,
+            width: desiredWidth,
+            height: iconSize,
+            baseWidth: baseExprWidth,
+            expandedWidth: expandedExprWidth
+        });
+        currentX = currentX + spacing + slotOffset + desiredWidth + slotOffset;
+    };
 
-        if (entry.group === 'edge' && edgeColorMode === 'colormap') {
-            canvasUI.colorModeExprFields.push({
-                id: 'edge-color-expr',
-                type: 'colorModeExprField',
-                group: 'edge',
-                x: currentX + spacing + slotOffset,
-                y: rowY,
-                width: iconSize,
-                height: iconSize
-            });
-            currentX += spacing * 2;
-            return;
+    edgeModes.forEach(mode => {
+        addModeIcon('edge', mode);
+        if (driverEdgeMode === mode && mode === 'colormap') {
+            const desiredWidth = edgeExpressionFieldWidth || baseExprWidth;
+            addExprField('edge', desiredWidth);
+        } else {
+            currentX += spacing;
         }
+    });
 
-        if (entry.group === 'face' && (faceColorMode === 'colormap_xy' || faceColorMode === 'colormap_polar')) {
-            canvasUI.colorModeExprFields.push({
-                id: 'face-color-expr',
-                type: 'colorModeExprField',
-                group: 'face',
-                x: currentX + spacing + slotOffset,
-                y: rowY,
-                width: iconSize,
-                height: iconSize
-            });
-            currentX += spacing * 2;
-            return;
+    faceModes.forEach(mode => {
+        addModeIcon('face', mode);
+        if (driverFaceMode === mode && (mode === 'colormap_xy' || mode === 'colormap_polar')) {
+            const desiredWidth = faceExpressionFieldWidth || baseExprWidth;
+            addExprField('face', desiredWidth);
+        } else {
+            currentX += spacing;
         }
-
-        currentX += spacing;
     });
 
     const allPanelElements = [...canvasUI.colorModeIcons, ...canvasUI.colorModeExprFields].filter(Boolean);
@@ -2161,7 +2643,7 @@ function buildInterpolationPanelUI() {
 
     const panelStartX = C.UI_TOOLBAR_WIDTH + C.UI_BUTTON_PADDING;
     const buttonCenterY = canvasUI.interpolationToolButton.y + (C.TOOL_BUTTON_HEIGHT / 2);
-    const iconSize = C.TRANSFORM_ICON_SIZE;
+    const iconSize = C.UI_SWATCH_SIZE;
     const verticalOffset = -2;
     const iconY = buttonCenterY - (iconSize / 2) + verticalOffset;
     const spacing = C.TRANSFORM_ICON_SIZE + C.TRANSFORM_ICON_PADDING;
@@ -2224,7 +2706,7 @@ function buildDisplayPanelUI() {
     const standardHorizontalSpacing = C.TRANSFORM_ICON_SIZE + C.TRANSFORM_ICON_PADDING;
     const panelStartX = C.UI_TOOLBAR_WIDTH + C.UI_BUTTON_PADDING;
     const buttonCenterY = canvasUI.visibilityToolButton.y + (C.TOOL_BUTTON_HEIGHT / 2);
-    const iconSize = C.DISPLAY_ICON_SIZE;
+    const iconSize = C.UI_SWATCH_SIZE;
     const verticalOffset = -2; // Nudge icons UP to align their visual center with the main button
     const iconY = buttonCenterY - (iconSize / 2) + verticalOffset;
     let currentGridX = panelStartX;
@@ -2374,6 +2856,13 @@ function removeColorAtIndex(indexToRemove) {
     }
 
     allColors.splice(indexToRemove, 1);
+    if (lastSelectedSwatchIndex !== null) {
+        if (lastSelectedSwatchIndex === indexToRemove) {
+            lastSelectedSwatchIndex = Math.min(indexToRemove, allColors.length - 1);
+        } else if (lastSelectedSwatchIndex > indexToRemove) {
+            lastSelectedSwatchIndex -= 1;
+        }
+    }
 
     Object.keys(colorAssignments).forEach(target => {
         if (colorAssignments[target] > indexToRemove) {
@@ -2382,7 +2871,6 @@ function removeColorAtIndex(indexToRemove) {
             colorAssignments[target] = Math.min(indexToRemove, allColors.length - 1);
         }
     });
-    syncColorAssignmentsForInheritance();
 
     buildColorPaletteUI();
 }
@@ -2594,7 +3082,6 @@ function restoreState(state) {
     if (colorAssignments[C.COLOR_TARGET_TEXT] === undefined) {
         colorAssignments[C.COLOR_TARGET_TEXT] = 0;
     }
-    syncColorAssignmentsForInheritance();
     applyColorModeDefaults();
     activeCenterId = state.activeCenterId !== undefined ? state.activeCenterId : null;
     isDrawingMode = state.isDrawingMode !== undefined ? state.isDrawingMode : false;
@@ -3425,6 +3912,7 @@ function deleteSelectedItems() {
                 const edgeExists = allEdges.some(e => (e.id1 === id1 && e.id2 === id2) || (e.id1 === id2 && e.id2 === id1));
                 if (v1 && v2 && !edgeExists) {
                     const newEdge = U.createEdge(v1, v2, gridInterval, getColorForTarget);
+                    applyEdgeColorMode(newEdge, edgeColorMode);
                     applyActiveInterpolationToEdge(newEdge);
                     newEdgesToAdd.push(newEdge);
                 }
@@ -3485,6 +3973,11 @@ function zoomAt(zoomCenterScreen_css_pixels, scaleFactor) {
     viewTransform.offsetY = (canvas.height - mouseY_physical) * (1 - effectiveScaleFactor) + viewTransform.offsetY * effectiveScaleFactor;
 
     viewTransform.scale = newScale;
+}
+
+function panByScreenDelta(deltaScreen) {
+    viewTransform.offsetX += deltaScreen.x * dpr;
+    viewTransform.offsetY -= deltaScreen.y * dpr;
 }
 
 function getDrawingContext(currentDrawStartVertexId) {
@@ -3654,6 +4147,7 @@ function completeGraphOnSelectedVertices() {
                 const v2 = findVertexById(id2);
                 if (v1 && v2) {
                     const newEdge = U.createEdge(v1, v2, gridInterval, getColorForTarget);
+                    applyEdgeColorMode(newEdge, edgeColorMode);
                     applyActiveInterpolationToEdge(newEdge);
                     allEdges.push(newEdge);
                     edgesWereAdded = true;
@@ -3666,9 +4160,8 @@ function completeGraphOnSelectedVertices() {
         updateFaces(edgesBefore, allEdges);
         
         allFaces.forEach(face => {
-            if (!face.color) {
-                face.color = getColorForTarget(C.COLOR_TARGET_FACE);
-            }
+            face.colorMode = face.colorMode || faceColorMode;
+            applyFaceColorMode(face, face.colorMode);
         });
         
         ensureFaceCoordinateSystems();
@@ -3680,39 +4173,53 @@ function applySelectionLogic(vertexIdsToSelect = [], edgeIdsToSelect = [], faceI
     if (targetIsCenter) {
         handleCenterSelection(vertexIdsToSelect[0], wantsShift, wantsCtrl);
     } else {
+        let nextVertices = new Set(fsmState.selection.vertices);
+        let nextEdges = new Set(fsmState.selection.edges);
+        let nextFaces = new Set(fsmState.selection.faces);
+        let nextText = new Set(fsmState.selection.text);
+
         if (wantsShift) {
-            selectedVertexIds = [...new Set([...selectedVertexIds, ...vertexIdsToSelect])];
-            selectedEdgeIds = [...new Set([...selectedEdgeIds, ...edgeIdsToSelect])];
-            selectedFaceIds = [...new Set([...selectedFaceIds, ...faceIdsToSelect])];
-            selectedTextIds = [...new Set([...selectedTextIds, ...textIdsToSelect])];
+            vertexIdsToSelect.forEach(id => nextVertices.add(id));
+            edgeIdsToSelect.forEach(id => nextEdges.add(id));
+            faceIdsToSelect.forEach(id => nextFaces.add(id));
+            textIdsToSelect.forEach(id => nextText.add(id));
         } else if (wantsCtrl) {
             vertexIdsToSelect.forEach(id => {
-                const index = selectedVertexIds.indexOf(id);
-                if (index > -1) selectedVertexIds.splice(index, 1);
-                else selectedVertexIds.push(id);
+                if (nextVertices.has(id)) nextVertices.delete(id);
+                else nextVertices.add(id);
             });
             edgeIdsToSelect.forEach(id => {
-                const index = selectedEdgeIds.indexOf(id);
-                if (index > -1) selectedEdgeIds.splice(index, 1);
-                else selectedEdgeIds.push(id);
+                if (nextEdges.has(id)) nextEdges.delete(id);
+                else nextEdges.add(id);
             });
             faceIdsToSelect.forEach(id => {
-                const index = selectedFaceIds.indexOf(id);
-                if (index > -1) selectedFaceIds.splice(index, 1);
-                else selectedFaceIds.push(id);
+                if (nextFaces.has(id)) nextFaces.delete(id);
+                else nextFaces.add(id);
             });
             textIdsToSelect.forEach(id => {
-                const index = selectedTextIds.indexOf(id);
-                if (index > -1) selectedTextIds.splice(index, 1);
-                else selectedTextIds.push(id);
+                if (nextText.has(id)) nextText.delete(id);
+                else nextText.add(id);
             });
         } else {
-            selectedVertexIds = [...vertexIdsToSelect];
-            selectedEdgeIds = [...edgeIdsToSelect];
-            selectedFaceIds = [...faceIdsToSelect];
-            selectedTextIds = [...textIdsToSelect];
+            nextVertices = new Set(vertexIdsToSelect);
+            nextEdges = new Set(edgeIdsToSelect);
+            nextFaces = new Set(faceIdsToSelect);
+            nextText = new Set(textIdsToSelect);
         }
+
+        fsmState.selection.vertices = nextVertices;
+        fsmState.selection.edges = nextEdges;
+        fsmState.selection.faces = nextFaces;
+        fsmState.selection.text = nextText;
+
+        selectedVertexIds = Array.from(nextVertices);
+        selectedEdgeIds = Array.from(nextEdges);
+        selectedFaceIds = Array.from(nextFaces);
+        selectedTextIds = Array.from(nextText);
     }
+
+    updateActiveColorTargetsFromSelection();
+    updateColorModeDriverFromSelection();
 }
 
 function calculateTransformFromMouse(center, mouseData, startReferenceVertex, centerType, currentAccumulatedRotation = 0) {
@@ -3851,23 +4358,8 @@ function updateFaces(edgesBefore, edgesAfter) {
             }
         }
         
-        const colorIndex = colorAssignments[C.COLOR_TARGET_FACE];
-        if (colorIndex !== -1) {
-            const colorItem = allColors[colorIndex];
-            if (colorItem && colorItem.type === 'colormap') {
-                newFace.colormapItem = colorItem;
-                newFace.colormapDistribution = 'x';
-                delete newFace.color;
-            } else {
-                newFace.color = getColorForTarget(C.COLOR_TARGET_FACE);
-                delete newFace.colormapItem;
-                delete newFace.colormapDistribution;
-            }
-        } else {
-            newFace.color = getColorForTarget(C.COLOR_TARGET_FACE);
-            delete newFace.colormapItem;
-            delete newFace.colormapDistribution;
-        }
+        newFace.colorMode = newFace.colorMode || faceColorMode;
+        applyFaceColorMode(newFace, newFace.colorMode);
         
         newFace.parentFaceId = null;
         newFace.childFaceIds = [];
@@ -3899,6 +4391,9 @@ function insertVertexOnEdgeWithFaces(targetEdge, insertionVertex, gridInterval, 
 
     const edgeA = U.createEdge(p1, newVertex, gridInterval, getColorForTarget);
     const edgeB = U.createEdge(newVertex, p2, gridInterval, getColorForTarget);
+    const baseEdgeMode = targetEdge?.colorMode || edgeColorMode;
+    applyEdgeColorMode(edgeA, baseEdgeMode);
+    applyEdgeColorMode(edgeB, baseEdgeMode);
     applyActiveInterpolationToEdge(edgeA);
     applyActiveInterpolationToEdge(edgeB);
     allEdges.push(edgeA);
@@ -4360,10 +4855,12 @@ function drawUIElements(colors, axisFormatInfo) {
         dpr, canvasUI, isToolbarExpanded, isColorPaletteExpanded, isColorModePanelExpanded, isInterpolationPanelExpanded, isTransformPanelExpanded, isDisplayPanelExpanded, isVisibilityPanelExpanded, isSessionsPanelExpanded,
         isPlacingTransform, placingTransformType, placingSnapPos, mousePos,
         allColors, activeThemeName, colors, verticesVisible, edgesVisible, facesVisible, coordsDisplayMode, gridDisplayMode, angleDisplayMode, distanceDisplayMode,
-        namedColors: colorEditor.namedColors, colorAssignments, activeColorTargets,
+        namedColors: colorEditor.namedColors, colorAssignments, activeColorTargets, lastSelectedSwatchIndex,
         interpolationStyles, activeInterpolationStyleId,
         sessions, activeSessionIndex, selectedSessionIndex,
         edgeColorMode, faceColorMode, edgeColorExpression, faceColorExpression, faceColorPolarExpression,
+        selectedEdgeModes: getSelectedEdgeModesForUI(),
+        selectedFaceModes: getSelectedFaceModesForUI(),
         isDraggingColorTarget, draggedColorTargetInfo
     };
     stateForUI.selectedInterpolationStyleId = getSelectionInterpolationStyleId();
@@ -4457,6 +4954,11 @@ function handleColorPaletteClick(screenPos, shiftKey, ctrlKey) {
                 saveStateForUndo();
                 removeColorAtIndex(colorIndexToRemove);
             }
+        } else if (allColors.length > 1 && lastSelectedSwatchIndex !== null) {
+            if (lastSelectedSwatchIndex >= 0 && lastSelectedSwatchIndex < allColors.length) {
+                saveStateForUndo();
+                removeColorAtIndex(lastSelectedSwatchIndex);
+            }
         }
         return true;
     }
@@ -4467,6 +4969,25 @@ function handleColorPaletteClick(screenPos, shiftKey, ctrlKey) {
         isEditingColor = false;
         editingColorIndex = null;
         colorEditor.show();
+        return true;
+    }
+
+    return false;
+}
+
+function updateActiveColorTargetsFromSelection() {
+    const newActiveTargets = [];
+    if (selectedFaceIds.length > 0) newActiveTargets.push(C.COLOR_TARGET_FACE);
+    if (selectedEdgeIds.length > 0) newActiveTargets.push(C.COLOR_TARGET_EDGE);
+    if (selectedVertexIds.length > 0) newActiveTargets.push(C.COLOR_TARGET_VERTEX);
+    if (selectedTextIds.length > 0) newActiveTargets.push(C.COLOR_TARGET_TEXT);
+
+    if (newActiveTargets.length > 0) {
+        activeColorTargets = newActiveTargets;
+        lastSelectedSwatchIndex = null;
+        if (isColorPaletteExpanded) {
+            buildColorPaletteUI();
+        }
         return true;
     }
 
@@ -5099,7 +5620,16 @@ function handleInterpolationPanelClick(screenPos) {
                 const hasSelection = selectedEdgeIds.length > 0 || selectedFaceIds.length > 0 || selectedVertexIds.length > 0;
                 if (hasSelection) {
                     clearInterpolationStyleFromSelection();
-                } else {
+                }
+                const styleIdToRemove = getSelectionInterpolationStyleId() || activeInterpolationStyleId;
+                if (styleIdToRemove && styleIdToRemove !== DEFAULT_INTERPOLATION_STYLE.id) {
+                    interpolationStyles = interpolationStyles.filter(style => style.id !== styleIdToRemove);
+                    if (activeInterpolationStyleId === styleIdToRemove) {
+                        setActiveInterpolationStyle(DEFAULT_INTERPOLATION_STYLE.id);
+                    }
+                    buildInterpolationPanelUI();
+                    schedulePersistState();
+                } else if (!hasSelection) {
                     setActiveInterpolationStyle(DEFAULT_INTERPOLATION_STYLE.id);
                 }
                 return true;
@@ -5139,15 +5669,27 @@ function handleColorModePanelClick(screenPos) {
         if (screenPos.x >= icon.x && screenPos.x <= icon.x + icon.width &&
             screenPos.y >= icon.y && screenPos.y <= icon.y + icon.height) {
             if (icon.group === 'edge') {
-                const modes = ['fixed', 'inherit_vertices', 'colormap'];
-                edgeColorMode = modes[(modes.indexOf(edgeColorMode) + 1) % modes.length];
+                const edgeIds = getSelectedEdgeIds();
+                const hasEdgeSelection = edgeIds.length > 0;
+                if (hasEdgeSelection) {
+                    applyEdgeColorModeToSelection(icon.mode, edgeIds);
+                    lastSelectedEdgeMode = icon.mode;
+                } else {
+                    edgeColorMode = icon.mode;
+                    applyColorModeDefaults();
+                }
             } else if (icon.group === 'face') {
-                const modes = ['fixed', 'inherit_vertices', 'inherit_edges', 'colormap_xy', 'colormap_polar'];
-                faceColorMode = modes[(modes.indexOf(faceColorMode) + 1) % modes.length];
+                const faceIds = getSelectedFaceIds();
+                const hasFaceSelection = faceIds.length > 0;
+                if (hasFaceSelection) {
+                    applyFaceColorModeToSelection(icon.mode, faceIds);
+                    lastSelectedFaceMode = icon.mode;
+                } else {
+                    faceColorMode = icon.mode;
+                    applyColorModeDefaults();
+                }
             }
-            syncColorAssignmentsForInheritance();
             normalizeActiveColorTargets();
-            applyColorModeDefaults();
             buildColorPaletteUI();
             buildColorModePanelUI();
             schedulePersistState();
@@ -6049,6 +6591,17 @@ function handleLeftMouseButtonDown(event) {
     let clickedEdge = !clickedText && !clickedVertex ? findClickedEdge(mousePos) : null;
     let clickedFace = !clickedText && !clickedVertex && !clickedEdge ? findClickedFace(mousePos) : null;
 
+    if (clickedText) {
+        dispatchFsmEvent('entityMouseDown', { type: FSM_ENTITY_TYPES.TEXT, id: clickedText.id, button: event.button });
+    } else if (clickedVertex) {
+        const entityType = clickedVertex.type === 'regular' ? FSM_ENTITY_TYPES.VERTEX : FSM_ENTITY_TYPES.TRANSFORMATION_OBJECT;
+        dispatchFsmEvent('entityMouseDown', { type: entityType, id: clickedVertex.id, button: event.button });
+    } else if (clickedEdge) {
+        dispatchFsmEvent('entityMouseDown', { type: FSM_ENTITY_TYPES.EDGE, id: U.getEdgeId(clickedEdge), button: event.button });
+    } else if (clickedFace) {
+        dispatchFsmEvent('entityMouseDown', { type: FSM_ENTITY_TYPES.FACE, id: U.getFaceId(clickedFace), button: event.button });
+    }
+
     const shiftOrCtrl = event.shiftKey || event.ctrlKey || event.metaKey;
     const clickedItem = clickedText || clickedVertex || clickedEdge || clickedFace;
     let isClickOnSelection = false;
@@ -6279,6 +6832,9 @@ function finalizeDragAction() {
             const p2 = findVertexById(targetEdge.id2);
             const edgeA = U.createEdge(p1, vertexToUpdate, gridInterval, getColorForTarget);
             const edgeB = U.createEdge(p2, vertexToUpdate, gridInterval, getColorForTarget);
+            const baseEdgeMode = targetEdge?.colorMode || edgeColorMode;
+            applyEdgeColorMode(edgeA, baseEdgeMode);
+            applyEdgeColorMode(edgeB, baseEdgeMode);
             applyActiveInterpolationToEdge(edgeA);
             applyActiveInterpolationToEdge(edgeB);
             allEdges.push(edgeA);
@@ -6611,14 +7167,14 @@ function handleCanvasClick(actionContext) {
             const edgeExists = allEdges.some(e => (e.id1 === startVertex.id && e.id2 === newVertex.id) || (e.id2 === startVertex.id && e.id1 === newVertex.id));
             if (!edgeExists) {
                 const newEdge = U.createEdge(startVertex, newVertex, gridInterval, getColorForTarget);
+                applyEdgeColorMode(newEdge, edgeColorMode);
                 applyActiveInterpolationToEdge(newEdge);
                 allEdges.push(newEdge);
                 updateFaces(edgesBefore, allEdges);
                 updateFaceHierarchy();
                 allFaces.forEach(face => {
-                    if (!face.color) {
-                        face.color = getColorForTarget(C.COLOR_TARGET_FACE);
-                    }
+                    face.colorMode = face.colorMode || faceColorMode;
+                    applyFaceColorMode(face, face.colorMode);
                 });
             }
             
@@ -6772,18 +7328,7 @@ function handleCanvasClick(actionContext) {
                         break;
                 }
 
-                const newActiveTargets = [];
-                if (selectedFaceIds.length > 0) newActiveTargets.push(C.COLOR_TARGET_FACE);
-                if (selectedEdgeIds.length > 0) newActiveTargets.push(C.COLOR_TARGET_EDGE);
-                if (selectedVertexIds.length > 0) newActiveTargets.push(C.COLOR_TARGET_VERTEX);
-                if (selectedTextIds.length > 0) newActiveTargets.push(C.COLOR_TARGET_TEXT);
-
-                if (newActiveTargets.length > 0) {
-                    activeColorTargets = newActiveTargets;
-                    if (isColorPaletteExpanded) {
-                        buildColorPaletteUI();
-                    }
-                }
+                updateActiveColorTargetsFromSelection();
             }
         }
     }
@@ -6808,6 +7353,7 @@ function handleUIClick(actionContext) {
         
         clickData.targetId = iconId;
         clickData.timestamp = now;
+        lastSelectedSwatchIndex = null;
         return;
     }
 
@@ -6815,6 +7361,12 @@ function handleUIClick(actionContext) {
         const { element } = actionContext;
         const now = Date.now();
         const swatchId = `swatch-${element.index}`;
+        const hasGeometrySelection = selectedVertexIds.length > 0 || selectedEdgeIds.length > 0 || selectedFaceIds.length > 0 || selectedTextIds.length > 0;
+        if (!hasGeometrySelection && activeColorTargets.length === 0) {
+            lastSelectedSwatchIndex = element.index;
+        } else {
+            lastSelectedSwatchIndex = null;
+        }
 
         if (clickData.targetId === swatchId && (now - clickData.timestamp) < C.DOUBLE_CLICK_MS) {
             isEditingColor = true;
@@ -6837,9 +7389,9 @@ function handleUIClick(actionContext) {
             if (activeColorTargets.length > 0) {
                 saveStateForUndo();
                 activeColorTargets.forEach(target => colorAssignments[target] = element.index);
-                syncColorAssignmentsForInheritance();
                 applyColorsToSelection();
                 buildColorPaletteUI();
+                lastSelectedSwatchIndex = null;
             }
         }
         clickData.targetId = swatchId;
@@ -6891,6 +7443,28 @@ function handleLeftMouseButtonUp(event) {
             if (isOverRemoveButton && allColors.length > 1) {
                 const currentIndex = allColors.indexOf(draggedSwatchInfo.item);
                 if (currentIndex !== -1) removeColorAtIndex(currentIndex);
+            } else if (draggedSwatchInfo && draggedSwatchInfo.previewIndex !== null && draggedSwatchInfo.previewIndex !== undefined) {
+                const fromIndex = draggedSwatchInfo.originalIndex;
+                const targetIndex = draggedSwatchInfo.previewIndex;
+                if (fromIndex !== targetIndex && fromIndex >= 0 && targetIndex >= 0) {
+                    const reordered = [...draggedSwatchInfo.originalAllColors];
+                    const [moved] = reordered.splice(fromIndex, 1);
+                    reordered.splice(targetIndex, 0, moved);
+                    allColors = reordered;
+
+                    const newAssignments = { ...draggedSwatchInfo.originalAssignments };
+                    Object.keys(newAssignments).forEach(target => {
+                        const value = newAssignments[target];
+                        if (value === fromIndex) {
+                            newAssignments[target] = targetIndex;
+                        } else if (fromIndex < targetIndex && value > fromIndex && value <= targetIndex) {
+                            newAssignments[target] = value - 1;
+                        } else if (fromIndex > targetIndex && value >= targetIndex && value < fromIndex) {
+                            newAssignments[target] = value + 1;
+                        }
+                    });
+                    colorAssignments = newAssignments;
+                }
             }
         } else if (isDraggingSession) {
             const removeBtn = canvasUI.removeSessionButton;
@@ -6983,18 +7557,8 @@ function handleRightMouseButtonUp(event) {
             selectedCenterIds = centersInRect;
         }
 
-        const newActiveTargets = [];
-        if (selectedFaceIds.length > 0) newActiveTargets.push(C.COLOR_TARGET_FACE);
-        if (selectedEdgeIds.length > 0) newActiveTargets.push(C.COLOR_TARGET_EDGE);
-        if (selectedVertexIds.length > 0) newActiveTargets.push(C.COLOR_TARGET_VERTEX);
-        if (selectedTextIds.length > 0) newActiveTargets.push(C.COLOR_TARGET_TEXT);
-
-        if (newActiveTargets.length > 0) {
-            activeColorTargets = newActiveTargets;
-            if (isColorPaletteExpanded) {
-                buildColorPaletteUI();
-            }
-        }
+        updateActiveColorTargetsFromSelection();
+        updateColorModeDriverFromSelection();
     } else {
         if (isSessionsPanelExpanded && canvasUI.sessionsPanelBounds) {
             const panel = canvasUI.sessionsPanelBounds;
@@ -7007,6 +7571,12 @@ function handleRightMouseButtonUp(event) {
         }
         // This is a simple right-click (not a drag), so show the context menu.
         showContextMenu(event);
+        const hasSelection = selectedVertexIds.length > 0 || selectedEdgeIds.length > 0 || selectedFaceIds.length > 0 || selectedTextIds.length > 0;
+        lastSelectedSwatchIndex = null;
+        if (!hasSelection) {
+            activeColorTargets = [];
+        }
+        if (isColorPaletteExpanded) buildColorPaletteUI();
     }
 }
 
@@ -7015,19 +7585,24 @@ function handleWheelEvent(event){
     const mouseScreen = U.getMousePosOnCanvas(event, canvas);
     const scaleFactor = event.deltaY > 0 ? 1 / 1.15 : 1.15;
     zoomAt(mouseScreen, scaleFactor)
+    dispatchFsmEvent('wheel', event);
+    syncFsmFromLegacy();
 }
 
 function handleMouseEnter() {
     isMouseOverCanvas = true;
+    syncFsmFromLegacy();
 }
 
 function handleMouseLeave() {
     isMouseOverCanvas = false;
     redrawAll();
+    syncFsmFromLegacy();
 }
 
 function handleContextMenu(event){
     event.preventDefault()
+    syncFsmFromLegacy();
 }
 
 function handleTranslationDrag(rawDelta, mouseData) {
@@ -7376,62 +7951,20 @@ function handleUIDrag(mousePos) {
     }
 
     if (isDraggingColorSwatch) {
-        const removeBtn = canvasUI.removeColorButton;
-        const isOverRemoveButton = removeBtn &&
-            mousePos.x >= removeBtn.x && mousePos.x <= removeBtn.x + removeBtn.width &&
-            mousePos.y >= removeBtn.y && mousePos.y <= removeBtn.y + removeBtn.height;
-
-        if (isOverRemoveButton && allColors.length > 1 && !draggedSwatchTemporarilyRemoved) {
-            draggedSwatchTemporarilyRemoved = true;
-            const indexToRemove = allColors.indexOf(draggedSwatchInfo.item);
-            if (indexToRemove >= 0) {
-                removeColorAtIndex(indexToRemove);
-                buildColorPaletteUI();
-            }
-            return true;
-        } else if (!isOverRemoveButton && draggedSwatchTemporarilyRemoved) {
-            draggedSwatchTemporarilyRemoved = false;
-            allColors.splice(draggedSwatchInfo.originalIndex, 0, draggedSwatchInfo.item);
-            Object.keys(colorAssignments).forEach(target => {
-                if (colorAssignments[target] >= draggedSwatchInfo.originalIndex) {
-                    colorAssignments[target]++;
-                }
-            });
-            Object.keys(draggedSwatchInfo.originalAssignments).forEach(target => {
-                if (draggedSwatchInfo.originalAssignments[target] === draggedSwatchInfo.originalIndex) {
-                    colorAssignments[target] = draggedSwatchInfo.originalIndex;
-                }
-            });
-            buildColorPaletteUI();
-            return true;
-        }
-
-        if (draggedSwatchTemporarilyRemoved) return true;
-
-        const fromIndex = allColors.indexOf(draggedSwatchInfo.item);
-        let targetIndex = fromIndex;
-        for (let i = 0; i < canvasUI.colorSwatches.length; i++) {
-            const swatch = canvasUI.colorSwatches[i];
-            if (mousePos.x >= swatch.x && mousePos.x <= swatch.x + swatch.width) {
-                targetIndex = allColors.indexOf(swatch.item);
+        const fromIndex = draggedSwatchInfo.originalIndex;
+        const remainingSwatches = canvasUI.colorSwatches.filter(swatch => swatch.index !== fromIndex);
+        let targetIndex = remainingSwatches.length;
+        for (let i = 0; i < remainingSwatches.length; i++) {
+            const swatch = remainingSwatches[i];
+            const centerX = swatch.x + swatch.width / 2;
+            if (mousePos.x < centerX) {
+                targetIndex = i;
                 break;
             }
         }
-        
-        if (targetIndex !== fromIndex) {
-            const temp = allColors[fromIndex];
-            allColors.splice(fromIndex, 1);
-            allColors.splice(targetIndex, 0, temp);
-            
-            Object.keys(colorAssignments).forEach(target => {
-                if (colorAssignments[target] === fromIndex) {
-                    colorAssignments[target] = targetIndex;
-                } else if (colorAssignments[target] > fromIndex && colorAssignments[target] <= targetIndex) {
-                    colorAssignments[target]--;
-                } else if (colorAssignments[target] < fromIndex && colorAssignments[target] >= targetIndex) {
-                    colorAssignments[target]++;
-                }
-            });
+
+        if (draggedSwatchInfo.previewIndex !== targetIndex) {
+            draggedSwatchInfo.previewIndex = targetIndex;
             buildColorPaletteUI();
         }
         return true;
@@ -7470,6 +8003,7 @@ function handleMouseMove(event) {
     mousePos = U.getMousePosOnCanvas(event, canvas);
     currentShiftPressed = event.shiftKey;
     currentAltPressed = event.altKey;
+    currentCtrlPressed = event.ctrlKey || event.metaKey;
 
     if (isMouseInUIPanel(mousePos)) {
         canvas.style.cursor = 'default';
@@ -7513,7 +8047,8 @@ function handleMouseMove(event) {
                     offsetX: mousePos.x - actionContext.element.x,
                     originalIndex: actionContext.element.index,
                     originalAllColors: JSON.parse(JSON.stringify(allColors)),
-                    originalAssignments: JSON.parse(JSON.stringify(colorAssignments))
+                    originalAssignments: JSON.parse(JSON.stringify(colorAssignments)),
+                    previewIndex: actionContext.element.index
                 };
             } else if (actionContext.target === 'ui_session') {
                 isDraggingSession = true;
@@ -7657,6 +8192,15 @@ function handleMouseMove(event) {
             updateHoverStates();
         }
     }
+
+    dispatchFsmEvent('mouseMove', {
+        clientX: event.clientX,
+        clientY: event.clientY,
+        shiftKey: event.shiftKey,
+        ctrlKey: event.ctrlKey || event.metaKey,
+        altKey: event.altKey
+    });
+    syncFsmFromLegacy();
 }
 
 function handleTranslationDragSnapVisualization(finalDelta, snapResult) {
@@ -7794,6 +8338,12 @@ function handleMouseUpDispatcher(event) {
     }
 
     schedulePersistState();
+    if (currentMouseButton === 2) {
+        dispatchFsmEvent('rightMouseUp', event);
+    } else if (currentMouseButton === 0) {
+        dispatchFsmEvent('mouseUp', event);
+    }
+    syncFsmFromLegacy();
 }
 
 function cleanupAfterDrag() {
@@ -7838,12 +8388,14 @@ function handleMouseDownDispatcher(event) {
     const targetElement = event.target;
     if (targetElement && (targetElement.tagName === 'INPUT' || targetElement.closest('.katex'))) {
         event.stopPropagation();
+        syncFsmFromLegacy();
         return;
     }
 
     if ((isDrawingMode || isPlacingTransform) && event.button === 2) {
         performEscapeAction();
         event.preventDefault();
+        syncFsmFromLegacy();
         return;
     }
 
@@ -7853,14 +8405,25 @@ function handleMouseDownDispatcher(event) {
 
     if (currentMouseButton === 0) {
         handleLeftMouseButtonDown(event);
+        dispatchFsmEvent('mouseDown', event);
     } else if (currentMouseButton === 2) {
         handleRightMouseButtonDown(event);
+        dispatchFsmEvent('rightMouseDown', event);
     }
+
+    syncFsmFromLegacy();
 }
 
 function handleKeyDown(event) {
     if (event.target.tagName === 'INPUT' || event.target.tagName === 'TEXTAREA' || event.target.isContentEditable) {
         return;
+    }
+    const finalizeKeyDown = () => {
+        dispatchFsmEvent('keyDown', event);
+        syncFsmFromLegacy();
+    };
+    if (event.key === 'Control' || event.key === 'Meta') {
+        currentCtrlPressed = true;
     }
     if (event.key === 'Alt' && !event.repeat) {
         event.preventDefault();
@@ -7872,6 +8435,7 @@ function handleKeyDown(event) {
     if (isTypingKey && !isDrawingMode && !isPlacingTransform && !isActionInProgress) {
         event.preventDefault();
         createTextElementFromHover(event.key);
+        finalizeKeyDown();
         return;
     }
 
@@ -7886,6 +8450,7 @@ function handleKeyDown(event) {
         applySelectionLogic(allRegularVertexIds, allEdgeIds, allFaceIds, false, false, false, allTextIds);
         selectedCenterIds = allVertices.filter(v => v.type !== 'regular').map(v => v.id);
         activeCenterId = selectedCenterIds.length > 0 ? selectedCenterIds[selectedCenterIds.length - 1] : null;
+        finalizeKeyDown();
         return;
     }
 
@@ -8004,6 +8569,7 @@ function handleKeyDown(event) {
         if (isDrawingMode && previewLineStartVertexId) {
             handleRepeat();
         }
+        finalizeKeyDown();
         return;
     }
     const allowedDuringAction = ['Shift', 'Control', 'Meta', 'Alt', 'Escape', 'Delete', 'Backspace'];
@@ -8012,12 +8578,14 @@ function handleKeyDown(event) {
         event.preventDefault();
         const centerScreen = { x: (canvas.width / dpr) / 2, y: (canvas.height / dpr) / 2 };
         zoomAt(centerScreen, C.KEYBOARD_ZOOM_FACTOR);
+        finalizeKeyDown();
         return;
     }
     if (isMouseOverCanvas && isCtrlOrCmd && event.key === C.KEY_ZOOM_OUT) {
         event.preventDefault();
         const centerScreen = { x: (canvas.width / dpr) / 2, y: (canvas.height / dpr) / 2 };
         zoomAt(centerScreen, 1 / C.KEYBOARD_ZOOM_FACTOR);
+        finalizeKeyDown();
         return;
     }
     if (event.key === C.KEY_SPACE) {
@@ -8032,6 +8600,7 @@ function handleKeyDown(event) {
         if (isSessionsPanelExpanded && sessions[selectedSessionIndex]) {
             event.preventDefault();
             sessionClipboard = JSON.parse(JSON.stringify(sessions[selectedSessionIndex]));
+            finalizeKeyDown();
             return;
         }
         event.preventDefault();
@@ -8043,6 +8612,7 @@ function handleKeyDown(event) {
         if (isSessionsPanelExpanded && sessionClipboard) {
             event.preventDefault();
             addSessionFromClipboard();
+            finalizeKeyDown();
             return;
         }
         event.preventDefault();
@@ -8051,6 +8621,7 @@ function handleKeyDown(event) {
         if (isSessionsPanelExpanded && sessionUndoStack.length > 0) {
             event.preventDefault();
             restoreDeletedSession();
+            finalizeKeyDown();
             return;
         }
         event.preventDefault();
@@ -8078,9 +8649,14 @@ function handleKeyDown(event) {
             }
         }
     }
+    finalizeKeyDown();
 }
 
 function handleKeyUp(event) {
+    const finalizeKeyUp = () => {
+        dispatchFsmEvent('keyUp', event);
+        syncFsmFromLegacy();
+    };
     if (event.key === 'Shift') {
         currentShiftPressed = false;
         ghostVertexPosition = null;
@@ -8102,8 +8678,12 @@ function handleKeyUp(event) {
         currentAltPressed = false;
         updateHoverStates();
     }
+    if (event.key === 'Control' || event.key === 'Meta') {
+        currentCtrlPressed = false;
+    }
 
     schedulePersistState();
+    finalizeKeyUp();
 }
 
 function handleResize() {
@@ -8143,6 +8723,29 @@ function handleLoad() {
     initializeCanvasUI();
     buildMainToolbarUI();
     handleResize();
+    setupMobileControls();
+    setupMobileInput({
+        canvas,
+        onMouseDown: handleMouseDownDispatcher,
+        onMouseMove: handleMouseMove,
+        onMouseUp: handleMouseUpDispatcher,
+        onPinchZoom: (scaleFactor, center) => {
+            zoomAt(center, scaleFactor);
+            syncFsmFromLegacy();
+        },
+        onPan: (delta) => {
+            panByScreenDelta(delta);
+            syncFsmFromLegacy();
+        },
+        getModifiers: () => ({
+            shiftKey: currentShiftPressed,
+            ctrlKey: currentCtrlPressed,
+            altKey: currentAltPressed
+        }),
+        isHoverMode: () => mobileHoverMode,
+        getHoverTarget: () => fsmState.hoverTarget,
+        getUiTargetAt: getUiElementAt
+    });
 
     colorEditor = new ColormapSelector();
     colorEditor.initialize();
@@ -8225,6 +8828,7 @@ function handleLoad() {
     }
     gameLoop();
     updateComponentDrawOrder();
+    syncFsmFromLegacy();
 }
 
 canvas.addEventListener('wheel', handleWheelEvent, { passive: false });
