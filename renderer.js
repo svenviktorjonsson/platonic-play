@@ -4653,9 +4653,10 @@ function drawColorPalette(ctx, htmlOverlay, state, updateHtmlLabel) {
 }
 
 function drawColorModePanel(ctx, htmlOverlay, state, updateHtmlLabel) {
-    const { canvasUI, colors, allColors, edgeColorMode, faceColorMode, edgeColorExpression, faceColorExpression, faceColorPolarExpression } = state;
+    const { canvasUI, colors, allColors, activeThemeName, edgeColorMode, faceColorMode } = state;
     const icons = canvasUI.colorModeIcons || [];
     if (!icons.length) return;
+    const rgbVertexColors = ['rgb(255,0,0)', 'rgb(0,255,0)', 'rgb(0,0,255)'];
 
     const getPreviewColormap = () => {
         if (!allColors) return null;
@@ -4683,7 +4684,9 @@ function drawColorModePanel(ctx, htmlOverlay, state, updateHtmlLabel) {
         if (icon.group === 'edge') {
             const opts = { ...baseOptions, edgeState: 'solid' };
             if (edgeColorMode === 'inherit_vertices') {
-                opts.vertexState = 'solid';
+                opts.vertexState = 'filled';
+                opts.vertexColors = rgbVertexColors;
+                opts.edgeVertexColors = rgbVertexColors;
             }
             if (edgeColorMode === 'colormap') {
                 opts.edgeColormapItem = getPreviewColormap();
@@ -4705,32 +4708,6 @@ function drawColorModePanel(ctx, htmlOverlay, state, updateHtmlLabel) {
         ctx.restore();
     });
 
-    const edgeIcon = icons.find(icon => icon.group === 'edge');
-    const faceIcon = icons.find(icon => icon.group === 'face');
-    if (edgeColorMode === 'colormap' && edgeIcon) {
-        updateHtmlLabel({
-            id: 'edge-color-mode-label',
-            content: `c(${edgeColorExpression || 'x'}) =`,
-            x: edgeIcon.x + edgeIcon.width + 12,
-            y: edgeIcon.y + edgeIcon.height / 2,
-            color: colors.uiTextDefault,
-            fontSize: C.UI_ICON_LABEL_FONT_SIZE,
-            options: { textAlign: 'left', textBaseline: 'middle' }
-        }, htmlOverlay);
-    }
-    if ((faceColorMode === 'colormap_xy' || faceColorMode === 'colormap_polar') && faceIcon) {
-        const expr = faceColorMode === 'colormap_polar' ? (faceColorPolarExpression || 'r') : (faceColorExpression || 'x');
-        const label = faceColorMode === 'colormap_polar' ? `c(r,\\phi) =` : `c(x,y) =`;
-        updateHtmlLabel({
-            id: 'face-color-mode-label',
-            content: `${label}`,
-            x: faceIcon.x + faceIcon.width + 12,
-            y: faceIcon.y + faceIcon.height / 2,
-            color: colors.uiTextDefault,
-            fontSize: C.UI_ICON_LABEL_FONT_SIZE,
-            options: { textAlign: 'left', textBaseline: 'middle' }
-        }, htmlOverlay);
-    }
 }
 
 function drawSessionPreview(ctx, rect, sessionState, colors) {
@@ -4938,7 +4915,7 @@ function getTriangleIconGeometry(rect) {
 }
 
 function drawTriangleIcon(ctx, rect, options, colors, isActive = false) {
-    const { vertexState = 'none', edgeState = 'none', faceState = 'none', faceColor, edgeColor, vertexColor: optionsVertexColor, faceColormapItem, showAllDisabled = false } = options;
+    const { vertexState = 'none', edgeState = 'none', faceState = 'none', faceColor, edgeColor, vertexColor: optionsVertexColor, vertexColors, edgeVertexColors, faceColormapItem, showAllDisabled = false } = options;
 
     ctx.save();
 
@@ -4968,13 +4945,15 @@ function drawTriangleIcon(ctx, rect, options, colors, isActive = false) {
         ctx.setLineDash([]);
         
         const edges = [
-            [vertices[0], vertices[1]],
-            [vertices[1], vertices[2]],
-            [vertices[2], vertices[0]]
+            [0, 1],
+            [1, 2],
+            [2, 0]
         ];
         
         edges.forEach((edge, edgeIndex) => {
-            const [start, end] = edge;
+            const [startIndex, endIndex] = edge;
+            const start = vertices[startIndex];
+            const end = vertices[endIndex];
             if (options.edgeColormapItem && options.edgeColormapItem.type === 'colormap' && edgeState === 'solid') {
                 const gradient = ctx.createLinearGradient(start.x, start.y, end.x, end.y);
                 const edgeOffset = edges.length > 1 ? edgeIndex / (edges.length - 1) : 0.5;
@@ -4984,6 +4963,11 @@ function drawTriangleIcon(ctx, rect, options, colors, isActive = false) {
                 const endColor = U.sampleColormap(options.edgeColormapItem, endT);
                 gradient.addColorStop(0, startColor);
                 gradient.addColorStop(1, endColor);
+                ctx.strokeStyle = gradient;
+            } else if (edgeVertexColors && edgeVertexColors.length >= 3) {
+                const gradient = ctx.createLinearGradient(start.x, start.y, end.x, end.y);
+                gradient.addColorStop(0, edgeVertexColors[startIndex]);
+                gradient.addColorStop(1, edgeVertexColors[endIndex]);
                 ctx.strokeStyle = gradient;
             } else if (edgeState === 'disabled') {
                 ctx.strokeStyle = '#808080';
@@ -5000,7 +4984,7 @@ function drawTriangleIcon(ctx, rect, options, colors, isActive = false) {
     if (vertexState === 'filled' || vertexState === 'disabled') {
         ctx.lineWidth = C.UI_ICON_LINE_WIDTH_SMALL;
         vertices.forEach((vertex, index) => {
-            let currentVertexColor = optionsVertexColor || colors.vertex;
+            let currentVertexColor = (vertexColors && vertexColors[index]) || optionsVertexColor || colors.vertex;
             if (options.vertexColormapItem && options.vertexColormapItem.type === 'colormap' && vertexState === 'filled') {
                 const t = vertices.length > 1 ? index / (vertices.length - 1) : 0.5;
                 currentVertexColor = U.sampleColormap(options.vertexColormapItem, t);
@@ -5443,27 +5427,14 @@ function drawMainToolbar(ctx, htmlOverlay, state, updateHtmlLabel) {
    const cmb = canvasUI.colorModeToolButton;
    if (cmb) {
        const rect = cmb;
-       const edgeRect = {
-           x: rect.x + 3,
-           y: rect.y + 2,
-           width: rect.width - 8,
-           height: rect.height - 8
-       };
-       const faceRect = {
-           x: rect.x + 6,
-           y: rect.y + 6,
-           width: rect.width - 10,
-           height: rect.height - 10
+       const iconRect = {
+           x: rect.x,
+           y: rect.y,
+           width: rect.width,
+           height: rect.height
        };
        const drawRgbTriangleEdges = (rect) => {
-           const center = { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
-           const triSize = rect.width * 0.85;
-           const height = triSize * Math.sqrt(3) / 2;
-           const vertices = [
-               { x: center.x, y: center.y - height / 1.5 },
-               { x: center.x - triSize / 2, y: center.y + height / 3 },
-               { x: center.x + triSize / 2, y: center.y + height / 3 }
-           ];
+           const { vertices } = getTriangleIconGeometry(rect);
            const edgePairs = [
                [vertices[0], vertices[1]],
                [vertices[1], vertices[2]],
@@ -5479,9 +5450,9 @@ function drawMainToolbar(ctx, htmlOverlay, state, updateHtmlLabel) {
                ctx.stroke();
            });
        };
-       drawRgbTriangleEdges(edgeRect);
+       drawRgbTriangleEdges(iconRect);
        ctx.fillStyle = '#ffffff';
-       drawTriangleIcon(ctx, faceRect, { edgeState: 'none', faceState: 'filled', vertexState: 'none', faceColor: '#ffffff' }, colors);
+       drawTriangleIcon(ctx, iconRect, { edgeState: 'none', faceState: 'filled', vertexState: 'none', faceColor: '#ffffff' }, colors);
    }
 
    const ttb = canvasUI.transformToolButton;

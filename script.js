@@ -46,6 +46,7 @@ const canvasUI = {
     addColorButton: null,
     colorModeToolButton: null,
     colorModeIcons: [],
+    colorModeExprFields: [],
     colorModePanelBounds: null,
     interpolationToolButton: null,
     interpolationIcons: [],
@@ -170,8 +171,8 @@ let faceColorMode = 'fixed';
 let edgeColorExpression = 'x';
 let faceColorExpression = 'x';
 let faceColorPolarExpression = 'r';
-let edgeExpressionInput = null;
-let faceExpressionInput = null;
+let edgeExpressionField = null;
+let faceExpressionField = null;
 let currentAltPressed = false;
 let ghostVertexSnapType = null;
 
@@ -237,6 +238,8 @@ let isDraggingColorSwatch = false;
 let draggedSwatchInfo = null;
 let isDraggingSession = false;
 let draggedSessionInfo = null;
+let edgeExpressionField = null;
+let faceExpressionField = null;
 
 let colorAssignments = {
     [C.COLOR_TARGET_VERTEX]: 0,
@@ -540,7 +543,16 @@ function updateHtmlLabel({ id, content, x, y, color, fontSize, options = {} }) {
     el.style.top = `${y}px`;
     el.style.transformOrigin = transformOrigin;
     el.style.transform = `translate(${translateX}, ${translateY}) rotate(${options.rotation || 0}deg)`;
-    
+
+    el.style.display = 'inline-block';
+    el.style.background = 'transparent';
+    el.style.border = 'none';
+    el.style.borderRadius = '0';
+    el.style.padding = '0';
+    el.style.minHeight = '0';
+    el.style.alignItems = '';
+    el.style.justifyContent = '';
+
     el.style.color = color;
     el.style.fontSize = `${fontSize}px`;
 
@@ -552,29 +564,53 @@ function updateHtmlLabel({ id, content, x, y, color, fontSize, options = {} }) {
         el.katexContent = normalizedContent;
     }
 
+
 }
 
-function ensureExpressionInput(ref, { placeholder, onChange }) {
+function ensureExpressionField(ref, { placeholder, onChange }) {
     if (ref) return ref;
+    const container = document.createElement('div');
+    container.style.position = 'absolute';
+    container.style.display = 'none';
+    container.style.boxSizing = 'border-box';
+    container.style.pointerEvents = 'auto';
+    container.style.fontFamily = 'Consolas, Monaco, "Courier New", monospace';
+    container.style.fontSize = `${C.COLOR_MODE_EXPR_FONT_SIZE}px`;
+    container.style.padding = `${C.COLOR_MODE_EXPR_PADDING_Y}px ${C.COLOR_MODE_EXPR_PADDING_X}px`;
+    container.style.borderRadius = `${C.COLOR_MODE_EXPR_BORDER_RADIUS}px`;
+    container.style.border = `${C.COLOR_MODE_EXPR_BORDER_WIDTH}px solid rgba(0,0,0,0.3)`;
+    container.style.background = 'transparent';
+    container.style.alignItems = 'center';
+    container.style.gap = '4px';
+
+    const label = document.createElement('div');
+    label.style.display = 'inline-flex';
+    label.style.alignItems = 'center';
+    label.style.whiteSpace = 'nowrap';
+    label.style.lineHeight = '1';
+
     const input = document.createElement('input');
     input.type = 'text';
     input.placeholder = placeholder;
-    input.style.position = 'absolute';
+    input.style.flex = '1';
+    input.style.minWidth = '0';
+    input.style.border = 'none';
+    input.style.outline = 'none';
+    input.style.background = 'transparent';
     input.style.fontFamily = 'Consolas, Monaco, "Courier New", monospace';
-    input.style.fontSize = '12px';
-    input.style.padding = '2px 4px';
-    input.style.borderRadius = '4px';
-    input.style.border = '1px solid rgba(0,0,0,0.3)';
-    input.style.background = 'rgba(255,255,255,0.9)';
+    input.style.fontSize = `${C.COLOR_MODE_EXPR_FONT_SIZE}px`;
     input.style.color = '#111111';
-    input.style.width = '70px';
-    input.style.display = 'none';
+    input.style.height = '100%';
+    input.style.lineHeight = '1';
     input.style.pointerEvents = 'auto';
     input.addEventListener('input', () => {
         if (onChange) onChange(input.value);
     });
-    htmlOverlay.appendChild(input);
-    return input;
+
+    container.appendChild(label);
+    container.appendChild(input);
+    htmlOverlay.appendChild(container);
+    return { container, label, input, labelText: '' };
 }
 
 function getIdentifiersFromExpression(expression) {
@@ -590,19 +626,19 @@ function isExpressionAllowed(expression, allowedIdentifiers) {
 }
 
 function updateColorModeExpressionInputs() {
-    edgeExpressionInput = ensureExpressionInput(edgeExpressionInput, {
+    edgeExpressionField = ensureExpressionField(edgeExpressionField, {
         placeholder: 'x',
         onChange: (value) => {
             const trimmed = value.trim();
             if (!isExpressionAllowed(trimmed, ['x'])) {
-                edgeExpressionInput.value = edgeColorExpression || 'x';
+                edgeExpressionField.input.value = edgeColorExpression || 'x';
                 return;
             }
             edgeColorExpression = trimmed || 'x';
             schedulePersistState();
         }
     });
-    faceExpressionInput = ensureExpressionInput(faceExpressionInput, {
+    faceExpressionField = ensureExpressionField(faceExpressionField, {
         placeholder: 'x',
         onChange: (value) => {
             const trimmed = value.trim();
@@ -611,7 +647,7 @@ function updateColorModeExpressionInputs() {
                 const fallback = faceColorMode === 'colormap_polar'
                     ? (faceColorPolarExpression || 'r')
                     : (faceColorExpression || 'x');
-                faceExpressionInput.value = fallback;
+                faceExpressionField.input.value = fallback;
                 return;
             }
             if (faceColorMode === 'colormap_polar') {
@@ -623,33 +659,53 @@ function updateColorModeExpressionInputs() {
         }
     });
 
-    edgeExpressionInput.style.display = 'none';
-    faceExpressionInput.style.display = 'none';
+    const isLightTheme = activeThemeName === 'light';
+    const labelTextColor = isLightTheme ? '#000000' : '#ffffff';
+    const labelBorder = isLightTheme ? '#000000' : '#ffffff';
+
+    edgeExpressionField.container.style.display = 'none';
+    faceExpressionField.container.style.display = 'none';
 
     if (!isColorModePanelExpanded || !canvasUI.colorModeIcons.length) return;
 
     if (edgeColorMode === 'colormap') {
-        const edgeIcon = canvasUI.colorModeIcons.find(icon => icon.group === 'edge');
-        const faceIcon = canvasUI.colorModeIcons.find(icon => icon.group === 'face');
-        if (edgeIcon) {
-            edgeExpressionInput.value = edgeColorExpression || 'x';
-            const gap = faceIcon ? (faceIcon.x - (edgeIcon.x + edgeIcon.width)) : 160;
-            const left = edgeIcon.x + edgeIcon.width + 60;
-            edgeExpressionInput.style.left = `${left}px`;
-            edgeExpressionInput.style.top = `${edgeIcon.y + edgeIcon.height / 2 - 10}px`;
-            edgeExpressionInput.style.width = `${Math.max(60, gap - 70)}px`;
-            edgeExpressionInput.style.display = 'block';
+        const field = canvasUI.colorModeExprFields.find(entry => entry.group === 'edge');
+        if (field) {
+            const labelText = 'c(x)=';
+            if (edgeExpressionField.labelText !== labelText) {
+                renderStringToElement(edgeExpressionField.label, formatStringToMathDisplay(labelText));
+                edgeExpressionField.labelText = labelText;
+            }
+            edgeExpressionField.input.value = edgeColorExpression || 'x';
+            edgeExpressionField.container.style.left = `${field.x}px`;
+            edgeExpressionField.container.style.top = `${field.y}px`;
+            edgeExpressionField.container.style.width = `${field.width}px`;
+            edgeExpressionField.container.style.height = `${field.height}px`;
+            edgeExpressionField.container.style.border = `${C.COLOR_MODE_EXPR_BORDER_WIDTH}px solid ${labelBorder}`;
+            edgeExpressionField.container.style.color = labelTextColor;
+            edgeExpressionField.input.style.color = labelTextColor;
+            edgeExpressionField.container.style.display = 'flex';
         }
     }
 
     if (faceColorMode === 'colormap_xy' || faceColorMode === 'colormap_polar') {
-        const faceIcon = canvasUI.colorModeIcons.find(icon => icon.group === 'face');
-        if (faceIcon) {
+        const field = canvasUI.colorModeExprFields.find(entry => entry.group === 'face');
+        if (field) {
+            const labelText = faceColorMode === 'colormap_polar' ? 'c(r,\\phi)=' : 'c(x,y)=';
+            if (faceExpressionField.labelText !== labelText) {
+                renderStringToElement(faceExpressionField.label, formatStringToMathDisplay(labelText));
+                faceExpressionField.labelText = labelText;
+            }
             const value = faceColorMode === 'colormap_polar' ? faceColorPolarExpression : faceColorExpression;
-            faceExpressionInput.value = value || (faceColorMode === 'colormap_polar' ? 'r' : 'x');
-            faceExpressionInput.style.left = `${faceIcon.x + faceIcon.width + 60}px`;
-            faceExpressionInput.style.top = `${faceIcon.y + faceIcon.height / 2 - 10}px`;
-            faceExpressionInput.style.display = 'block';
+            faceExpressionField.input.value = value || (faceColorMode === 'colormap_polar' ? 'r' : 'x');
+            faceExpressionField.container.style.left = `${field.x}px`;
+            faceExpressionField.container.style.top = `${field.y}px`;
+            faceExpressionField.container.style.width = `${field.width}px`;
+            faceExpressionField.container.style.height = `${field.height}px`;
+            faceExpressionField.container.style.border = `${C.COLOR_MODE_EXPR_BORDER_WIDTH}px solid ${labelBorder}`;
+            faceExpressionField.container.style.color = labelTextColor;
+            faceExpressionField.input.style.color = labelTextColor;
+            faceExpressionField.container.style.display = 'flex';
         }
     }
 }
@@ -2030,30 +2086,59 @@ function buildColorModePanelUI() {
     const verticalOffset = -2;
     const rowY = buttonCenterY - (iconSize / 2) + verticalOffset;
     const spacing = C.TRANSFORM_ICON_SIZE + C.TRANSFORM_ICON_PADDING;
+    const slotOffset = (spacing - iconSize) / 2;
 
     const entries = [
         { id: 'edge-color-mode', group: 'edge' },
         { id: 'face-color-mode', group: 'face' }
     ];
 
+    canvasUI.colorModeExprFields = [];
+
     let currentX = panelStartX;
     entries.forEach(entry => {
-        const extraGap = entry.group === 'face' && (edgeColorMode === 'colormap' || faceColorMode.startsWith('colormap'))
-            ? 240
-            : 0;
         canvasUI.colorModeIcons.push({
             id: entry.id,
             type: 'colorModeIcon',
             group: entry.group,
-            x: currentX + (spacing - iconSize) / 2,
+            x: currentX + slotOffset,
             y: rowY,
             width: iconSize,
             height: iconSize
         });
-        currentX += spacing + extraGap;
+
+        if (entry.group === 'edge' && edgeColorMode === 'colormap') {
+            canvasUI.colorModeExprFields.push({
+                id: 'edge-color-expr',
+                type: 'colorModeExprField',
+                group: 'edge',
+                x: currentX + spacing + slotOffset,
+                y: rowY,
+                width: iconSize,
+                height: iconSize
+            });
+            currentX += spacing * 2;
+            return;
+        }
+
+        if (entry.group === 'face' && (faceColorMode === 'colormap_xy' || faceColorMode === 'colormap_polar')) {
+            canvasUI.colorModeExprFields.push({
+                id: 'face-color-expr',
+                type: 'colorModeExprField',
+                group: 'face',
+                x: currentX + spacing + slotOffset,
+                y: rowY,
+                width: iconSize,
+                height: iconSize
+            });
+            currentX += spacing * 2;
+            return;
+        }
+
+        currentX += spacing;
     });
 
-    const allPanelElements = canvasUI.colorModeIcons.filter(Boolean);
+    const allPanelElements = [...canvasUI.colorModeIcons, ...canvasUI.colorModeExprFields].filter(Boolean);
     if (allPanelElements.length > 0) {
         const minY = Math.min(...allPanelElements.map(el => el.y));
         const maxX = Math.max(...allPanelElements.map(el => el.x + el.width));
