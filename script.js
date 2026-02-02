@@ -18,7 +18,7 @@ const ctx = canvas.getContext('2d', { willReadFrequently: true });
 const htmlOverlay = document.getElementById('html-overlay');
 const dpr = window.devicePixelRatio || 1;
 const activeHtmlLabels = new Map();
-const DEFAULT_TEXT_FONT_SIZE = 18;
+const DEFAULT_TEXT_FONT_SIZE = C.AXIS_NAME_FONT_SIZE;
 const TEXT_EDGE_MARGIN_PX = 8;
 const TEXT_VERTEX_OFFSET_PX = { x: 12, y: -12 };
 const TEXT_BACKGROUND_OFFSET_PX = { x: 8, y: -8 };
@@ -170,8 +170,8 @@ let activeSessionIndex = 0;
 let selectedSessionIndex = 0;
 let sessionClipboard = null;
 let sessionUndoStack = [];
-let edgeColorMode = 'fixed';
-let faceColorMode = 'fixed';
+let edgeColorMode = 'colormap';
+let faceColorMode = 'colormap_xy';
 let edgeColorExpression = 'x';
 let faceColorExpression = 'x';
 let faceColorPolarExpression = 'r';
@@ -700,20 +700,39 @@ function getFaceColorModeFor(face) {
     return face?.colorMode || faceColorMode;
 }
 
+function isSingleColorItem(item) {
+    if (!item) return false;
+    if (item.type === 'color') return true;
+    if (item.type === 'colormap') {
+        return Array.isArray(item.vertices) && item.vertices.length === 1;
+    }
+    return false;
+}
+
+function makeSingleColorColormap(item) {
+    if (!item) return null;
+    if (item.type === 'colormap') return item;
+    if (item.type === 'color') {
+        const parsed = U.parseColor(item.value);
+        const color = parsed
+            ? [Math.round(parsed.r), Math.round(parsed.g), Math.round(parsed.b)]
+            : [255, 255, 255];
+        return {
+            type: 'colormap',
+            vertices: [{ pos: 0, color, alpha: 1 }],
+            isCyclic: false
+        };
+    }
+    return null;
+}
+
 function applyEdgeColorMode(edge, mode) {
     edge.colorMode = mode;
-    if (mode === 'fixed') {
-        const fallbackColor = getColorForTarget(C.COLOR_TARGET_EDGE);
-        edge.color = edge.color || fallbackColor;
-        delete edge.colormapItem;
-        delete edge.gradientStart;
-        delete edge.gradientEnd;
-        return;
-    }
     if (mode === 'colormap') {
         const colorItem = allColors[colorAssignments[C.COLOR_TARGET_EDGE]];
-        if (colorItem && colorItem.type === 'colormap') {
-            edge.colormapItem = edge.colormapItem || colorItem;
+        const colormapItem = makeSingleColorColormap(colorItem);
+        if (colormapItem) {
+            edge.colormapItem = edge.colormapItem || colormapItem;
             edge.gradientStart = edge.gradientStart ?? 0;
             edge.gradientEnd = edge.gradientEnd ?? 1;
             delete edge.color;
@@ -732,17 +751,11 @@ function applyEdgeColorMode(edge, mode) {
 
 function applyFaceColorMode(face, mode) {
     face.colorMode = mode;
-    if (mode === 'fixed') {
-        const fallbackColor = getColorForTarget(C.COLOR_TARGET_FACE);
-        face.color = face.color || fallbackColor;
-        delete face.colormapItem;
-        delete face.colormapDistribution;
-        return;
-    }
-    if (mode === 'colormap_xy' || mode === 'colormap_polar') {
+    if (mode === 'colormap_xy') {
         const colorItem = allColors[colorAssignments[C.COLOR_TARGET_FACE]];
-        if (colorItem && colorItem.type === 'colormap') {
-            face.colormapItem = face.colormapItem || colorItem;
+        const colormapItem = makeSingleColorColormap(colorItem);
+        if (colormapItem) {
+            face.colormapItem = face.colormapItem || colormapItem;
             face.colormapDistribution = face.colormapDistribution || 'x';
             delete face.color;
             return;
@@ -841,7 +854,7 @@ function applyColorsToSelection() {
                 if (mode === 'inherit_vertices' || mode === 'inherit_edges') {
                     return;
                 }
-                if ((mode === 'colormap_xy' || mode === 'colormap_polar') && colorItem && colorItem.type === 'colormap') {
+                if (mode === 'colormap_xy' && colorItem && colorItem.type === 'colormap') {
                     face.colormapItem = colorItem;
                     face.colormapDistribution = 'x';
                     delete face.color;
@@ -997,6 +1010,7 @@ function ensureExpressionField(ref, { placeholder, onChange }) {
     label.style.alignItems = 'center';
     label.style.whiteSpace = 'nowrap';
     label.style.lineHeight = '1';
+    label.style.pointerEvents = 'none';
 
     const input = document.createElement('input');
     input.type = 'text';
@@ -1044,10 +1058,45 @@ function updateColorModeExpressionInputs() {
         ? (selectedFaceModes.includes(lastSelectedFaceMode) ? lastSelectedFaceMode : selectedFaceModes[0])
         : faceColorMode;
 
+    const getPrimarySelectedEdge = () => {
+        const edgeIds = getSelectedEdgeIds();
+        if (edgeIds.length === 0) return null;
+        if (hoveredEdgeId) {
+            const hovered = allEdges.find(e => U.getEdgeId(e) === hoveredEdgeId);
+            if (hovered && edgeIds.includes(U.getEdgeId(hovered))) return hovered;
+        }
+        const first = allEdges.find(e => U.getEdgeId(e) === edgeIds[0]);
+        return first || null;
+    };
+
+    const getPrimarySelectedFace = () => {
+        const faceIds = getSelectedFaceIds();
+        if (faceIds.length === 0) return null;
+        if (hoveredFaceId) {
+            const hovered = allFaces.find(f => U.getFaceId(f) === hoveredFaceId);
+            if (hovered && faceIds.includes(U.getFaceId(hovered))) return hovered;
+        }
+        const first = allFaces.find(f => U.getFaceId(f) === faceIds[0]);
+        return first || null;
+    };
+
+    const getDefaultExpression = (targetType) => {
+        const colorIndex = colorAssignments[targetType];
+        const item = colorIndex >= 0 ? allColors[colorIndex] : null;
+        return isSingleColorItem(item) ? '1' : 'x';
+    };
+
+    const setExprLabelText = (field, text) => {
+        if (field.labelText !== text) {
+            field.label.textContent = text;
+            field.labelText = text;
+        }
+    };
+
     if (activeEdgeMode !== 'colormap') {
         edgeExpressionFieldWidth = null;
     }
-    if (activeFaceMode !== 'colormap_xy' && activeFaceMode !== 'colormap_polar') {
+    if (activeFaceMode !== 'colormap_xy') {
         faceExpressionFieldWidth = null;
     }
 
@@ -1059,7 +1108,15 @@ function updateColorModeExpressionInputs() {
                 edgeExpressionField.input.value = edgeColorExpression || 'x';
                 return;
             }
-            edgeColorExpression = trimmed || 'x';
+            const edgeIds = getSelectedEdgeIds();
+            if (edgeIds.length > 0) {
+                edgeIds.forEach(edgeId => {
+                    const edge = allEdges.find(e => U.getEdgeId(e) === edgeId);
+                    if (edge) edge.colorExpression = trimmed || getDefaultExpression(C.COLOR_TARGET_EDGE);
+                });
+            } else {
+                edgeColorExpression = trimmed || getDefaultExpression(C.COLOR_TARGET_EDGE);
+            }
             schedulePersistState();
         }
     });
@@ -1067,18 +1124,19 @@ function updateColorModeExpressionInputs() {
         placeholder: 'x',
         onChange: (value) => {
             const trimmed = value.trim();
-            const allowed = faceColorMode === 'colormap_polar' ? ['r', 'phi'] : ['x', 'y'];
+            const allowed = ['x', 'y', 'r', 'a'];
             if (!isExpressionAllowed(trimmed, allowed)) {
-                const fallback = faceColorMode === 'colormap_polar'
-                    ? (faceColorPolarExpression || 'r')
-                    : (faceColorExpression || 'x');
-                faceExpressionField.input.value = fallback;
+                faceExpressionField.input.value = faceColorExpression || faceColorPolarExpression || 'x';
                 return;
             }
-            if (faceColorMode === 'colormap_polar') {
-                faceColorPolarExpression = trimmed || 'r';
+            const faceIds = getSelectedFaceIds();
+            if (faceIds.length > 0) {
+                faceIds.forEach(faceId => {
+                    const face = allFaces.find(f => U.getFaceId(f) === faceId);
+                    if (face) face.colorExpression = trimmed || getDefaultExpression(C.COLOR_TARGET_FACE);
+                });
             } else {
-                faceColorExpression = trimmed || 'x';
+                faceColorExpression = trimmed || getDefaultExpression(C.COLOR_TARGET_FACE);
             }
             schedulePersistState();
         }
@@ -1087,6 +1145,7 @@ function updateColorModeExpressionInputs() {
     const isLightTheme = activeThemeName === 'light';
     const labelTextColor = isLightTheme ? '#000000' : '#ffffff';
     const labelBorder = isLightTheme ? '#000000' : '#ffffff';
+    const fieldBackground = getColors().background;
 
     edgeExpressionField.container.style.display = 'none';
     faceExpressionField.container.style.display = 'none';
@@ -1097,18 +1156,28 @@ function updateColorModeExpressionInputs() {
         const field = canvasUI.colorModeExprFields.find(entry => entry.group === 'edge');
         if (field) {
             const labelText = 'c(x)=';
-            if (edgeExpressionField.labelText !== labelText) {
-                renderStringToElement(edgeExpressionField.label, formatStringToMathDisplay(labelText));
-                edgeExpressionField.labelText = labelText;
+            setExprLabelText(edgeExpressionField, labelText);
+            if (document.activeElement !== edgeExpressionField.input) {
+                const edge = getPrimarySelectedEdge();
+                const value = edge?.colorExpression || edgeColorExpression || getDefaultExpression(C.COLOR_TARGET_EDGE);
+                edgeExpressionField.input.value = value;
             }
-            edgeExpressionField.input.value = edgeColorExpression || 'x';
-            edgeExpressionField.container.style.left = `${field.x}px`;
-            edgeExpressionField.container.style.top = `${field.y}px`;
-            edgeExpressionField.container.style.width = `${field.width}px`;
-            edgeExpressionField.container.style.height = `${field.height}px`;
+            const edgeSelectionPadding = 2;
+            edgeExpressionField.container.style.left = `${field.x - edgeSelectionPadding}px`;
+            edgeExpressionField.container.style.top = `${field.y - edgeSelectionPadding}px`;
+            edgeExpressionField.container.style.width = `${field.width + edgeSelectionPadding * 2}px`;
+            edgeExpressionField.container.style.height = `${field.height + edgeSelectionPadding * 2}px`;
+            edgeExpressionField.container.style.padding = `0 ${C.COLOR_MODE_EXPR_PADDING_X}px`;
             edgeExpressionField.container.style.border = `${C.COLOR_MODE_EXPR_BORDER_WIDTH}px solid ${labelBorder}`;
+            edgeExpressionField.container.style.background = fieldBackground;
             edgeExpressionField.container.style.color = labelTextColor;
+            const edgeFontSize = Math.max(10, Math.floor(field.height * 0.64));
+            edgeExpressionField.container.style.fontSize = `${edgeFontSize}px`;
+            edgeExpressionField.input.style.fontSize = `${edgeFontSize}px`;
             edgeExpressionField.input.style.color = labelTextColor;
+            edgeExpressionField.input.style.minWidth = '3ch';
+            edgeExpressionField.input.style.height = `${field.height + edgeSelectionPadding * 2}px`;
+            edgeExpressionField.input.style.lineHeight = `${field.height + edgeSelectionPadding * 2}px`;
             edgeExpressionField.container.style.display = 'flex';
 
             const baseWidth = field.baseWidth || field.width;
@@ -1125,23 +1194,32 @@ function updateColorModeExpressionInputs() {
         }
     }
 
-    if (activeFaceMode === 'colormap_xy' || activeFaceMode === 'colormap_polar') {
+    if (activeFaceMode === 'colormap_xy') {
         const field = canvasUI.colorModeExprFields.find(entry => entry.group === 'face');
         if (field) {
-            const labelText = activeFaceMode === 'colormap_polar' ? 'c(r,\\phi)=' : 'c(x,y)=';
-            if (faceExpressionField.labelText !== labelText) {
-                renderStringToElement(faceExpressionField.label, formatStringToMathDisplay(labelText));
-                faceExpressionField.labelText = labelText;
+            const labelText = 'c(x,y,r,a) =\u00A0';
+            setExprLabelText(faceExpressionField, labelText);
+            if (document.activeElement !== faceExpressionField.input) {
+                const face = getPrimarySelectedFace();
+                const value = face?.colorExpression || faceColorExpression || faceColorPolarExpression || getDefaultExpression(C.COLOR_TARGET_FACE);
+                faceExpressionField.input.value = value;
             }
-            const value = activeFaceMode === 'colormap_polar' ? faceColorPolarExpression : faceColorExpression;
-            faceExpressionField.input.value = value || (activeFaceMode === 'colormap_polar' ? 'r' : 'x');
-            faceExpressionField.container.style.left = `${field.x}px`;
-            faceExpressionField.container.style.top = `${field.y}px`;
-            faceExpressionField.container.style.width = `${field.width}px`;
-            faceExpressionField.container.style.height = `${field.height}px`;
+            const faceSelectionPadding = 2;
+            faceExpressionField.container.style.left = `${field.x - faceSelectionPadding}px`;
+            faceExpressionField.container.style.top = `${field.y - faceSelectionPadding}px`;
+            faceExpressionField.container.style.width = `${field.width + faceSelectionPadding * 2}px`;
+            faceExpressionField.container.style.height = `${field.height + faceSelectionPadding * 2}px`;
+            faceExpressionField.container.style.padding = `0 ${C.COLOR_MODE_EXPR_PADDING_X}px`;
             faceExpressionField.container.style.border = `${C.COLOR_MODE_EXPR_BORDER_WIDTH}px solid ${labelBorder}`;
+            faceExpressionField.container.style.background = fieldBackground;
             faceExpressionField.container.style.color = labelTextColor;
+            const faceFontSize = Math.max(10, Math.floor(field.height * 0.64));
+            faceExpressionField.container.style.fontSize = `${faceFontSize}px`;
+            faceExpressionField.input.style.fontSize = `${faceFontSize}px`;
             faceExpressionField.input.style.color = labelTextColor;
+            faceExpressionField.input.style.minWidth = '9ch';
+            faceExpressionField.input.style.height = `${field.height + faceSelectionPadding * 2}px`;
+            faceExpressionField.input.style.lineHeight = `${field.height + faceSelectionPadding * 2}px`;
             faceExpressionField.container.style.display = 'flex';
 
             const baseWidth = field.baseWidth || field.width;
@@ -1476,6 +1554,13 @@ function applyActiveInterpolationToEdge(edge) {
     const activeStyle = getActiveInterpolationStyle();
     if (activeStyle && activeStyle.type && activeStyle.type !== 'linear') {
         edge.interpolationStyleId = activeStyle.id;
+    }
+}
+
+function applyActiveInterpolationToFace(face) {
+    const activeStyle = getActiveInterpolationStyle();
+    if (activeStyle && activeStyle.type && activeStyle.type !== 'linear') {
+        face.interpolationStyleId = activeStyle.id;
     }
 }
 
@@ -1966,7 +2051,8 @@ function drawComponent(componentVertexIds, colors, isDragConfirmed = false, init
         edgeColorMode,
         faceColorExpression,
         faceColorPolarExpression,
-        edgeColorExpression
+        edgeColorExpression,
+        angleDisplayMode
     }, dataToScreen, findVertexById);
 
     const componentEdges = allEdges.filter(e => componentVertexIds.has(e.id1) && componentVertexIds.has(e.id2));
@@ -2557,8 +2643,8 @@ function buildColorModePanelUI() {
     const expandedExprWidth = baseExprWidth + iconSize + gap;
     const slotOffset = (spacing - iconSize) / 2;
 
-    const edgeModes = ['fixed', 'inherit_vertices', 'colormap'];
-    const faceModes = ['fixed', 'inherit_vertices', 'inherit_edges', 'colormap_xy', 'colormap_polar'];
+    const edgeModes = ['inherit_vertices', 'colormap'];
+    const faceModes = ['inherit_vertices', 'inherit_edges', 'colormap_xy'];
     const selectedEdgeModes = getSelectedEdgeModesForUI();
     const selectedFaceModes = getSelectedFaceModesForUI();
     const hasEdgeSelection = selectedEdgeModes.length > 0;
@@ -2612,7 +2698,7 @@ function buildColorModePanelUI() {
 
     faceModes.forEach(mode => {
         addModeIcon('face', mode);
-        if (driverFaceMode === mode && (mode === 'colormap_xy' || mode === 'colormap_polar')) {
+        if (driverFaceMode === mode && mode === 'colormap_xy') {
             const desiredWidth = faceExpressionFieldWidth || baseExprWidth;
             addExprField('face', desiredWidth);
         } else {
@@ -3074,11 +3160,42 @@ function restoreState(state) {
         [C.COLOR_TARGET_FACE]: 2,
         [C.COLOR_TARGET_TEXT]: 0,
     };
-    edgeColorMode = state.edgeColorMode || 'fixed';
-    faceColorMode = state.faceColorMode || 'fixed';
+    edgeColorMode = state.edgeColorMode || 'colormap';
+    faceColorMode = state.faceColorMode || 'colormap_xy';
     edgeColorExpression = state.edgeColorExpression || 'x';
     faceColorExpression = state.faceColorExpression || 'x';
     faceColorPolarExpression = state.faceColorPolarExpression || 'r';
+    allEdges.forEach(edge => {
+        if (!edge.directionFrom || !edge.directionTo) {
+            edge.directionFrom = edge.id1;
+            edge.directionTo = edge.id2;
+        }
+    });
+    if (edgeColorMode === 'fixed') {
+        edgeColorMode = 'colormap';
+    }
+    if (faceColorMode === 'fixed') {
+        faceColorMode = 'colormap_xy';
+    }
+    if (faceColorMode === 'colormap_polar') {
+        faceColorMode = 'colormap_xy';
+        if ((!state.faceColorExpression || state.faceColorExpression.trim() === '') && faceColorPolarExpression) {
+            faceColorExpression = faceColorPolarExpression;
+        }
+    }
+    allFaces.forEach(face => {
+        if (face.colorMode === 'fixed') {
+            face.colorMode = 'colormap_xy';
+        }
+        if (face.colorMode === 'colormap_polar') {
+            face.colorMode = 'colormap_xy';
+        }
+    });
+    allEdges.forEach(edge => {
+        if (edge.colorMode === 'fixed') {
+            edge.colorMode = 'colormap';
+        }
+    });
     if (colorAssignments[C.COLOR_TARGET_TEXT] === undefined) {
         colorAssignments[C.COLOR_TARGET_TEXT] = 0;
     }
@@ -3223,8 +3340,8 @@ function createDefaultSessionState() {
             [C.COLOR_TARGET_FACE]: 2,
             [C.COLOR_TARGET_TEXT]: 0,
         },
-        edgeColorMode: 'fixed',
-        faceColorMode: 'fixed',
+        edgeColorMode: 'colormap',
+        faceColorMode: 'colormap_xy',
         edgeColorExpression: 'x',
         faceColorExpression: 'x',
         faceColorPolarExpression: 'r',
@@ -4360,6 +4477,9 @@ function updateFaces(edgesBefore, edgesAfter) {
         
         newFace.colorMode = newFace.colorMode || faceColorMode;
         applyFaceColorMode(newFace, newFace.colorMode);
+        if (!newFace.interpolationStyleId) {
+            applyActiveInterpolationToFace(newFace);
+        }
         
         newFace.parentFaceId = null;
         newFace.childFaceIds = [];
@@ -4835,6 +4955,9 @@ function drawMainGeometry(colors) {
              edgeColorExpression,
              faceColorExpression,
              faceColorPolarExpression,
+             angleDisplayMode,
+             initialCoordSystemStates,
+             getInterpolationStyleById,
              snappedEdgesInfo: snappedEdgeIds,
              snappedVertexIds
          };
@@ -4872,8 +4995,6 @@ function redrawAll() {
     const colors = getColors();
     R.clearCanvas(ctx, { canvas, dpr, colors });
 
-    const axisFormatInfo = drawEnvironment(colors);
-
     drawMainGeometry(colors); // Call the dedicated function
 
     R.drawFaceGlows(ctx, { allFaces, hoveredFaceId, selectedFaceIds, colors, isDragConfirmed, dragPreviewVertices, currentAltPressed }, dataToScreen, findVertexById, U.getFaceId);
@@ -4884,6 +5005,7 @@ function redrawAll() {
     drawFeedbackAndIndicators(colors);
     drawTextElements(colors);
     R.drawAltHoverIndicator(ctx, { altHoverInfo, colors }, dataToScreen, findVertexById, updateHtmlLabel);
+    const axisFormatInfo = drawEnvironment(colors);
     drawUIElements(colors, axisFormatInfo);
     cleanupHtmlLabels();
 }
@@ -5688,6 +5810,7 @@ function handleColorModePanelClick(screenPos) {
                     faceColorMode = icon.mode;
                     applyColorModeDefaults();
                 }
+                ensureFaceCoordinateSystems();
             }
             normalizeActiveColorTargets();
             buildColorPaletteUI();
@@ -6939,7 +7062,9 @@ function finalizeDragAction() {
                         const newId1 = newIdMapForThisCopy.get(edge.id1);
                         const newId2 = newIdMapForThisCopy.get(edge.id2);
                         if (newId1 && newId2) {
-                            const newEdge = { ...edge, id1: newId1, id2: newId2 };
+                            const newDirectionFrom = edge.directionFrom === edge.id2 ? newId2 : newId1;
+                            const newDirectionTo = edge.directionFrom === edge.id2 ? newId1 : newId2;
+                            const newEdge = { ...edge, id1: newId1, id2: newId2, directionFrom: newDirectionFrom, directionTo: newDirectionTo };
                             allNewEdges.push(newEdge);
                             currentCopyEdges.push(U.getEdgeId(newEdge));
                         }
@@ -6949,7 +7074,11 @@ function finalizeDragAction() {
                         const originalDraggedVertexId = originalIds.has(edge.id1) ? edge.id1 : edge.id2;
                         const newDraggedVertexId = newIdMapForThisCopy.get(originalDraggedVertexId);
                         if (newDraggedVertexId) {
-                            const newEdge = { ...edge, id1: newDraggedVertexId, id2: staticVertexId };
+                            const newId1 = newDraggedVertexId;
+                            const newId2 = staticVertexId;
+                            const newDirectionFrom = edge.directionFrom === edge.id2 ? newId2 : newId1;
+                            const newDirectionTo = edge.directionFrom === edge.id2 ? newId1 : newId2;
+                            const newEdge = { ...edge, id1: newId1, id2: newId2, directionFrom: newDirectionFrom, directionTo: newDirectionTo };
                             allNewEdges.push(newEdge);
                         }
                     });
@@ -8435,7 +8564,7 @@ function handleKeyDown(event) {
     if (isTypingKey && !isDrawingMode && !isPlacingTransform && !isActionInProgress) {
         event.preventDefault();
         createTextElementFromHover(event.key);
-        finalizeKeyDown();
+        syncFsmFromLegacy();
         return;
     }
 
@@ -8486,7 +8615,7 @@ function handleKeyDown(event) {
                         };
                     }
                 }
-                R.drawDrawingPreview(ctx, { startVertex, snappedData, isShiftPressed: currentShiftPressed, currentColor: getColorForTarget(C.COLOR_TARGET_VERTEX), nextCreationColor: getColorForTarget(C.COLOR_TARGET_VERTEX), nextEdgeColor, colors, edgeColormapInfo }, dataToScreen);
+                R.drawDrawingPreview(ctx, { startVertex, snappedData, isShiftPressed: currentShiftPressed, currentColor: getColorForTarget(C.COLOR_TARGET_VERTEX), nextCreationColor: getColorForTarget(C.COLOR_TARGET_VERTEX), nextEdgeColor, colors, edgeColormapInfo, interpolationStyle: getActiveInterpolationStyle() }, dataToScreen);
                 const stateForSnapInfo = { showDistances, showAngles, currentShiftPressed, distanceSigFigs, angleSigFigs, angleDisplayMode, viewTransform, frozenReference_D_du, gridDisplayMode, frozenReference_A_rad, colors };
                 R.prepareSnapInfoTexts(ctx, htmlOverlay, startVertex, snappedData, snappedData, stateForSnapInfo, dataToScreen, currentPreviewDrawingContext, updateHtmlLabel);
             }

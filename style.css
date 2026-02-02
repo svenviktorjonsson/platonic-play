@@ -23,6 +23,17 @@ html, body {
     height: 100%;
 }
 
+.dev-banner {
+    flex: 0 0 auto;
+    background: #0b3d91;
+    color: #ffffff;
+    text-align: center;
+    font-size: 12px;
+    letter-spacing: 0.2px;
+    padding: 6px 10px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.15);
+}
+
 .canvas-container {
     flex-grow: 1;
     position: relative;

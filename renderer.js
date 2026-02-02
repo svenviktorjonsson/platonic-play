@@ -8,6 +8,7 @@ const toRgba = (value, fallback) => {
     if (!parsed) return fallback;
     return parsed;
 };
+const toRgbaString = (color) => `rgba(${Math.round(color.r)},${Math.round(color.g)},${Math.round(color.b)},${color.a ?? 1})`;
 const lerp = (a, b, t) => a + (b - a) * t;
 const mixColors = (colors, weights) => {
     let r = 0;
@@ -26,6 +27,88 @@ const mixColors = (colors, weights) => {
     if (total <= 0) return { r: 0, g: 0, b: 0, a: 1 };
     return { r: r / total, g: g / total, b: b / total, a: a / total };
 };
+
+function buildInterpolatedEdgePath(edge, edgeStyle, p1, p2, allEdges, getRenderVertexById, dataToScreen) {
+    if (!edgeStyle) return [p1, p2];
+    const fromId = edge.directionFrom || edge.id1;
+    const toId = edge.directionTo || edge.id2;
+    const fromVertex = getRenderVertexById(fromId) || p1;
+    const toVertex = getRenderVertexById(toId) || p2;
+    const edgeDirVec = {
+        x: toVertex.x - fromVertex.x,
+        y: toVertex.y - fromVertex.y
+    };
+    const edgeDirLen = Math.hypot(edgeDirVec.x, edgeDirVec.y) || 1;
+    edgeDirVec.x /= edgeDirLen;
+    edgeDirVec.y /= edgeDirLen;
+    const currentStyleId = edge.interpolationStyleId || null;
+    const getNeighborCandidates = (vertexId, excludeId) => {
+        const candidates = [];
+        allEdges.forEach(e => {
+            const isSameEdge = (e.id1 === edge.id1 && e.id2 === edge.id2) || (e.id1 === edge.id2 && e.id2 === edge.id1);
+            if (isSameEdge) return;
+            if (e.id1 === vertexId && e.id2 !== excludeId) candidates.push(e);
+            if (e.id2 === vertexId && e.id1 !== excludeId) candidates.push(e);
+        });
+        return candidates;
+    };
+    const pickDirectionalNeighbor = (vertexId, excludeId, preferAligned) => {
+        const neighborEdges = getNeighborCandidates(vertexId, excludeId).filter(e => (e.interpolationStyleId || null) === currentStyleId);
+        if (neighborEdges.length !== 1) return null; // Junctions or mismatched styles use anchors only
+        const neighborEdge = neighborEdges[0];
+        const neighborId = neighborEdge.id1 === vertexId ? neighborEdge.id2 : neighborEdge.id1;
+        const candidates = [neighborId];
+        let best = null;
+        let bestScore = preferAligned ? -Infinity : Infinity;
+        candidates.forEach(id => {
+            const neighbor = getRenderVertexById(id);
+            if (!neighbor || neighbor.type !== C.VERTEX_TYPE_REGULAR) return;
+            const origin = getRenderVertexById(vertexId);
+            if (!origin) return;
+            const vec = { x: neighbor.x - origin.x, y: neighbor.y - origin.y };
+            const len = Math.hypot(vec.x, vec.y);
+            if (len <= C.GEOMETRY_CALCULATION_EPSILON) return;
+            const dot = (vec.x / len) * edgeDirVec.x + (vec.y / len) * edgeDirVec.y;
+            if (preferAligned) {
+                if (dot > bestScore) {
+                    bestScore = dot;
+                    best = neighbor;
+                }
+            } else if (dot < bestScore) {
+                bestScore = dot;
+                best = neighbor;
+            }
+        });
+        return best;
+    };
+    const n1 = pickDirectionalNeighbor(fromId, toId, false);
+    const n2 = pickDirectionalNeighbor(toId, fromId, true);
+    const base = [fromVertex, toVertex];
+    if (n1) base.unshift(n1);
+    if (n2) base.push(n2);
+    const interpolated = U.buildInterpolatedPath(base, edgeStyle, false, dataToScreen);
+    if (!interpolated || interpolated.length < 2) return [p1, p2];
+    let idx1 = 0;
+    let idx2 = interpolated.length - 1;
+    let min1 = Infinity;
+    let min2 = Infinity;
+    interpolated.forEach((pt, idx) => {
+        const d1 = U.distance(pt, p1);
+        if (d1 < min1) {
+            min1 = d1;
+            idx1 = idx;
+        }
+        const d2 = U.distance(pt, p2);
+        if (d2 < min2) {
+            min2 = d2;
+            idx2 = idx;
+        }
+    });
+    if (idx1 === idx2) return [p1, p2];
+    const start = Math.min(idx1, idx2);
+    const end = Math.max(idx1, idx2);
+    return interpolated.slice(start, end + 1);
+}
 
 export function calculateGridIntervals(viewTransformScale) {
     const effectiveDataInterval = C.GRID_TARGET_SPACING / viewTransformScale;
@@ -412,7 +495,7 @@ function getFaceMode(face, fallback) {
     return face?.colorMode || fallback;
 }
 
-export function drawFaces(ctx, { allFaces, allEdges, facesVisible, isDragConfirmed, dragPreviewVertices, transformIndicatorData, initialDragVertexStates, colors, initialCoordSystemStates, interpolationStyle, getInterpolationStyleById, faceColorMode = 'fixed', edgeColorMode = 'fixed', faceColorExpression = 'x', faceColorPolarExpression = 'r', edgeColorExpression = 'x' }, dataToScreen, findVertexById) {
+export function drawFaces(ctx, { allFaces, allEdges, facesVisible, isDragConfirmed, dragPreviewVertices, transformIndicatorData, initialDragVertexStates, colors, initialCoordSystemStates, interpolationStyle, getInterpolationStyleById, faceColorMode = 'fixed', edgeColorMode = 'fixed', faceColorExpression = 'x', faceColorPolarExpression = 'r', edgeColorExpression = 'x', angleDisplayMode = 'degrees' }, dataToScreen, findVertexById) {
     if (!facesVisible || !allFaces || !colors || !ctx) return;
 
     const getLiveVertex = (vertexId) => {
@@ -435,7 +518,7 @@ export function drawFaces(ctx, { allFaces, allEdges, facesVisible, isDragConfirm
 
         const faceStyle = face.interpolationStyleId && getInterpolationStyleById
             ? getInterpolationStyleById(face.interpolationStyleId)
-            : interpolationStyle;
+            : null;
         const pathVertices = faceStyle
             ? U.buildInterpolatedPath(liveVertices, faceStyle, true, dataToScreen)
             : liveVertices;
@@ -461,7 +544,8 @@ export function drawFaces(ctx, { allFaces, allEdges, facesVisible, isDragConfirm
                 edgeColorMode,
                 faceColorExpression,
                 faceColorPolarExpression,
-                edgeColorExpression
+                edgeColorExpression,
+                angleDisplayMode
             }); // Pass true to draw holes
         }
     });
@@ -476,7 +560,7 @@ export function drawFaces(ctx, { allFaces, allEdges, facesVisible, isDragConfirm
 
         const faceStyle = face.interpolationStyleId && getInterpolationStyleById
             ? getInterpolationStyleById(face.interpolationStyleId)
-            : interpolationStyle;
+            : null;
         const pathVertices = faceStyle
             ? U.buildInterpolatedPath(liveVertices, faceStyle, true, dataToScreen)
             : liveVertices;
@@ -499,7 +583,8 @@ export function drawFaces(ctx, { allFaces, allEdges, facesVisible, isDragConfirm
                  edgeColorMode,
                  faceColorExpression,
                  faceColorPolarExpression,
-                 edgeColorExpression
+                 edgeColorExpression,
+                 angleDisplayMode
              }); // Pass false, don't draw holes within children
         }
     });
@@ -635,7 +720,7 @@ function calculatePreviewCoordSystem(face, { initialSystem, dragPreviewVertices,
 }
 
 export function drawRigidDragPreview(ctx, params, dataToScreen) {
-    const { copyCount, isDragConfirmed, initialDragVertexStates, dragPreviewVertices, transformIndicatorData, allEdges, allFaces, findVertexById, colors, snappedEdgesInfo, snappedVertexIds, edgeColorMode = 'fixed', faceColorMode = 'fixed', edgeColorExpression = 'x', faceColorExpression = 'x', faceColorPolarExpression = 'r' } = params;
+    const { copyCount, isDragConfirmed, initialDragVertexStates, dragPreviewVertices, transformIndicatorData, allEdges, allFaces, findVertexById, colors, snappedEdgesInfo, snappedVertexIds, edgeColorMode = 'fixed', faceColorMode = 'fixed', edgeColorExpression = 'x', faceColorExpression = 'x', faceColorPolarExpression = 'r', angleDisplayMode = 'degrees', initialCoordSystemStates = new Map(), getInterpolationStyleById } = params;
 
     const isDeformingDrag = initialDragVertexStates.length === 1 && !transformIndicatorData && initialDragVertexStates[0].type === 'regular';
     if (!isDragConfirmed || !initialDragVertexStates.length || copyCount <= 0 || isDeformingDrag) {
@@ -686,14 +771,27 @@ export function drawRigidDragPreview(ctx, params, dataToScreen) {
 
         affectedFaces.forEach(face => { /* Draw faces */
             const faceVertices = face.vertexIds.map(id => currentIdMap.get(id)).filter(Boolean);
-            if(faceVertices.length === face.vertexIds.length) {
-                const faceVerticesScreen = faceVertices.map(v => dataToScreen(v));
-                drawFace(ctx, faceVerticesScreen, face, colors, dataToScreen, findVertexById, allEdges, [], id => currentIdMap.get(id), false, null, {
+            if (faceVertices.length === face.vertexIds.length) {
+                const faceStyle = face.interpolationStyleId && getInterpolationStyleById
+                    ? getInterpolationStyleById(face.interpolationStyleId)
+                    : null;
+                const pathVertices = faceStyle
+                    ? U.buildInterpolatedPath(faceVertices, faceStyle, true, dataToScreen)
+                    : faceVertices;
+                const faceVerticesScreen = pathVertices.map(v => dataToScreen(v));
+                let faceToDraw = face;
+                if (face.localCoordSystem) {
+                    const initialSystem = initialCoordSystemStates.get(face.id) || face.localCoordSystem;
+                    const previewSystem = calculatePreviewCoordSystem(face, { initialSystem, dragPreviewVertices, initialDragVertexStates, findVertexById, transformIndicatorData });
+                    faceToDraw = { ...face, localCoordSystem: previewSystem };
+                }
+                drawFace(ctx, faceVerticesScreen, faceToDraw, colors, dataToScreen, findVertexById, allEdges, [], id => currentIdMap.get(id), false, null, {
                     faceColorMode: getFaceMode(face, faceColorMode),
                     edgeColorMode,
                     faceColorExpression,
                     faceColorPolarExpression,
-                    edgeColorExpression
+                    edgeColorExpression,
+                    angleDisplayMode
                 });
             }
         });
@@ -703,7 +801,6 @@ export function drawRigidDragPreview(ctx, params, dataToScreen) {
 
         const fallbackColor = toRgba(colors.edge, { r: 255, g: 255, b: 255, a: 1 });
         const getVertexColor = (vertex) => toRgba(vertex?.color || colors.vertex || colors.edge, fallbackColor);
-        const toRgbaString = (color) => `rgba(${Math.round(color.r)},${Math.round(color.g)},${Math.round(color.b)},${color.a})`;
         const getEdgeColorAtT = (edge, t, v1, v2) => {
             const mode = getEdgeMode(edge, edgeColorMode);
             if (mode === 'inherit_vertices' && v1 && v2) {
@@ -717,46 +814,79 @@ export function drawRigidDragPreview(ctx, params, dataToScreen) {
                 };
             }
             if (mode === 'colormap' && edge.colormapItem) {
-                const value = U.evaluateExpression(edgeColorExpression, { x: t }, t);
-                const clamped = clamp01(value);
-                const sampled = U.sampleColormap(edge.colormapItem, clamped);
+                const expression = edge.colorExpression || edgeColorExpression;
+                const value = U.evaluateExpression(expression, { x: t }, t);
+                const sampled = U.sampleColormap(edge.colormapItem, value);
                 return toRgba(sampled, fallbackColor);
             }
             return toRgba(edge.color || colors.edge, fallbackColor);
         };
 
+        const getRenderVertexById = (id) => currentIdMap.get(id) || findVertexById(id);
         incidentEdges.forEach(edge => { /* Draw incident edges + snaps */
             const p1 = currentIdMap.get(edge.id1); const p2 = currentIdMap.get(edge.id2);
             if (p1 && p2) {
-                const p1Screen = dataToScreen(p1); const p2Screen = dataToScreen(p2);
+                const edgeStyle = edge.interpolationStyleId && getInterpolationStyleById
+                    ? getInterpolationStyleById(edge.interpolationStyleId)
+                    : null;
+                const pathPoints = buildInterpolatedEdgePath(edge, edgeStyle, p1, p2, allEdges, getRenderVertexById, dataToScreen);
+                const pathScreen = pathPoints.map(pt => dataToScreen(pt));
+                if (pathScreen.length < 2) return;
+                const p1Screen = pathScreen[0];
+                const p2Screen = pathScreen[pathScreen.length - 1];
                 const mode = getEdgeMode(edge, edgeColorMode);
-                if (mode === 'inherit_vertices') {
+                if (mode === 'inherit_vertices' || mode === 'colormap') {
                     const c1 = getVertexColor(p1);
                     const c2 = getVertexColor(p2);
-                    const gradient = ctx.createLinearGradient(p1Screen.x, p1Screen.y, p2Screen.x, p2Screen.y);
-                    gradient.addColorStop(0, toRgbaString(c1));
-                    gradient.addColorStop(1, toRgbaString(c2));
-                    ctx.beginPath();
-                    ctx.moveTo(p1Screen.x, p1Screen.y);
-                    ctx.lineTo(p2Screen.x, p2Screen.y);
-                    ctx.strokeStyle = gradient;
-                    ctx.stroke();
-                } else if (mode === 'colormap') {
-                    const color = getEdgeColorAtT(edge, 0.5, p1, p2);
-                    ctx.beginPath();
-                    ctx.moveTo(p1Screen.x, p1Screen.y);
-                    ctx.lineTo(p2Screen.x, p2Screen.y);
-                    ctx.strokeStyle = toRgbaString(color);
-                    ctx.stroke();
+                    let totalLength = 0;
+                    for (let i = 1; i < pathScreen.length; i++) {
+                        totalLength += Math.hypot(pathScreen[i].x - pathScreen[i - 1].x, pathScreen[i].y - pathScreen[i - 1].y);
+                    }
+                    let cursor = 0;
+                    for (let i = 1; i < pathScreen.length; i++) {
+                        const segStart = pathScreen[i - 1];
+                        const segEnd = pathScreen[i];
+                        const segLength = Math.hypot(segEnd.x - segStart.x, segEnd.y - segStart.y);
+                        const startT = totalLength > 0 ? cursor / totalLength : 0;
+                        const endT = totalLength > 0 ? (cursor + segLength) / totalLength : 1;
+                        const midT = (startT + endT) / 2;
+                        const color = getEdgeColorAtT(edge, midT, p1, p2);
+                        ctx.strokeStyle = toRgbaString(color);
+                        ctx.beginPath();
+                        ctx.moveTo(segStart.x, segStart.y);
+                        ctx.lineTo(segEnd.x, segEnd.y);
+                        ctx.stroke();
+                        cursor += segLength;
+                    }
                 } else if (edge.colormapItem) {
-                    const gradient = ctx.createLinearGradient(p1Screen.x, p1Screen.y, p2Screen.x, p2Screen.y);
-                    const startColor = U.sampleColormap(edge.colormapItem, edge.gradientStart);
-                    const endColor = U.sampleColormap(edge.colormapItem, edge.gradientEnd);
-                    gradient.addColorStop(0, startColor); gradient.addColorStop(1, endColor);
-                    ctx.strokeStyle = gradient;
-                    ctx.stroke();
+                    let totalLength = 0;
+                    for (let i = 1; i < pathScreen.length; i++) {
+                        totalLength += Math.hypot(pathScreen[i].x - pathScreen[i - 1].x, pathScreen[i].y - pathScreen[i - 1].y);
+                    }
+                    let cursor = 0;
+                    for (let i = 1; i < pathScreen.length; i++) {
+                        const segStart = pathScreen[i - 1];
+                        const segEnd = pathScreen[i];
+                        const segLength = Math.hypot(segEnd.x - segStart.x, segEnd.y - segStart.y);
+                        const startT = totalLength > 0 ? cursor / totalLength : 0;
+                        const endT = totalLength > 0 ? (cursor + segLength) / totalLength : 1;
+                        const midT = (startT + endT) / 2;
+                        const t = edge.gradientStart + (edge.gradientEnd - edge.gradientStart) * midT;
+                        const color = U.sampleColormap(edge.colormapItem, t);
+                        ctx.strokeStyle = color;
+                        ctx.beginPath();
+                        ctx.moveTo(segStart.x, segStart.y);
+                        ctx.lineTo(segEnd.x, segEnd.y);
+                        ctx.stroke();
+                        cursor += segLength;
+                    }
                 } else {
                     ctx.strokeStyle = edge.color || colors.edge;
+                    ctx.beginPath();
+                    ctx.moveTo(pathScreen[0].x, pathScreen[0].y);
+                    for (let i = 1; i < pathScreen.length; i++) {
+                        ctx.lineTo(pathScreen[i].x, pathScreen[i].y);
+                    }
                     ctx.stroke();
                 }
                 const originalEdgeId = U.getEdgeId(edge);
@@ -786,34 +916,69 @@ export function drawRigidDragPreview(ctx, params, dataToScreen) {
             const p1_moving = currentIdMap.get(originalDraggedVertexId);
             const p2_static = findVertexById(staticVertexId);
             if (p1_moving && p2_static) {
-                const p1Screen = dataToScreen(p1_moving); const p2Screen = dataToScreen(p2_static);
+                const edgeStyle = edge.interpolationStyleId && getInterpolationStyleById
+                    ? getInterpolationStyleById(edge.interpolationStyleId)
+                    : null;
+                const pathPoints = buildInterpolatedEdgePath(edge, edgeStyle, p1_moving, p2_static, allEdges, getRenderVertexById, dataToScreen);
+                const pathScreen = pathPoints.map(pt => dataToScreen(pt));
+                if (pathScreen.length < 2) return;
+                const p1Screen = pathScreen[0];
+                const p2Screen = pathScreen[pathScreen.length - 1];
                 const mode = getEdgeMode(edge, edgeColorMode);
-                if (mode === 'inherit_vertices') {
+                if (mode === 'inherit_vertices' || mode === 'colormap') {
                     const c1 = getVertexColor(p1_moving);
                     const c2 = getVertexColor(p2_static);
-                    const gradient = ctx.createLinearGradient(p1Screen.x, p1Screen.y, p2Screen.x, p2Screen.y);
-                    gradient.addColorStop(0, toRgbaString(c1));
-                    gradient.addColorStop(1, toRgbaString(c2));
-                    ctx.beginPath();
-                    ctx.moveTo(p1Screen.x, p1Screen.y);
-                    ctx.lineTo(p2Screen.x, p2Screen.y);
-                    ctx.strokeStyle = gradient;
-                    ctx.stroke();
-                } else if (mode === 'colormap') {
-                    const color = getEdgeColorAtT(edge, 0.5, p1_moving, p2_static);
-                    ctx.beginPath();
-                    ctx.moveTo(p1Screen.x, p1Screen.y);
-                    ctx.lineTo(p2Screen.x, p2Screen.y);
-                    ctx.strokeStyle = toRgbaString(color);
-                    ctx.stroke();
+                    let totalLength = 0;
+                    for (let i = 1; i < pathScreen.length; i++) {
+                        totalLength += Math.hypot(pathScreen[i].x - pathScreen[i - 1].x, pathScreen[i].y - pathScreen[i - 1].y);
+                    }
+                    let cursor = 0;
+                    for (let i = 1; i < pathScreen.length; i++) {
+                        const segStart = pathScreen[i - 1];
+                        const segEnd = pathScreen[i];
+                        const segLength = Math.hypot(segEnd.x - segStart.x, segEnd.y - segStart.y);
+                        const startT = totalLength > 0 ? cursor / totalLength : 0;
+                        const endT = totalLength > 0 ? (cursor + segLength) / totalLength : 1;
+                        const midT = (startT + endT) / 2;
+                        const color = getEdgeColorAtT(edge, midT, p1_moving, p2_static);
+                        ctx.strokeStyle = toRgbaString(color);
+                        ctx.beginPath();
+                        ctx.moveTo(segStart.x, segStart.y);
+                        ctx.lineTo(segEnd.x, segEnd.y);
+                        ctx.stroke();
+                        cursor += segLength;
+                    }
                 } else if (edge.colormapItem) { /* Colormap logic */
-                    const gradient = ctx.createLinearGradient(p1Screen.x, p1Screen.y, p2Screen.x, p2Screen.y);
-                    const startColor = U.sampleColormap(edge.colormapItem, edge.gradientStart);
-                    const endColor = U.sampleColormap(edge.colormapItem, edge.gradientEnd);
-                    gradient.addColorStop(0, startColor); gradient.addColorStop(1, endColor);
-                    ctx.strokeStyle = gradient;
+                    let totalLength = 0;
+                    for (let i = 1; i < pathScreen.length; i++) {
+                        totalLength += Math.hypot(pathScreen[i].x - pathScreen[i - 1].x, pathScreen[i].y - pathScreen[i - 1].y);
+                    }
+                    let cursor = 0;
+                    for (let i = 1; i < pathScreen.length; i++) {
+                        const segStart = pathScreen[i - 1];
+                        const segEnd = pathScreen[i];
+                        const segLength = Math.hypot(segEnd.x - segStart.x, segEnd.y - segStart.y);
+                        const startT = totalLength > 0 ? cursor / totalLength : 0;
+                        const endT = totalLength > 0 ? (cursor + segLength) / totalLength : 1;
+                        const midT = (startT + endT) / 2;
+                        const t = edge.gradientStart + (edge.gradientEnd - edge.gradientStart) * midT;
+                        const color = U.sampleColormap(edge.colormapItem, t);
+                        ctx.strokeStyle = color;
+                        ctx.beginPath();
+                        ctx.moveTo(segStart.x, segStart.y);
+                        ctx.lineTo(segEnd.x, segEnd.y);
+                        ctx.stroke();
+                        cursor += segLength;
+                    }
+                } else {
+                    ctx.strokeStyle = edge.color || colors.edge;
+                    ctx.beginPath();
+                    ctx.moveTo(pathScreen[0].x, pathScreen[0].y);
+                    for (let i = 1; i < pathScreen.length; i++) {
+                        ctx.lineTo(pathScreen[i].x, pathScreen[i].y);
+                    }
                     ctx.stroke();
-                } else { ctx.strokeStyle = edge.color || colors.edge; ctx.stroke(); }
+                }
                 const originalEdgeId = U.getEdgeId(edge);
                 const snapEntries = snappedEdgesInfo?.get(originalEdgeId) || [];
                  if (snapEntries.some(s => s.copyIndex === copyIndex)) { /* Draw snap glow */
@@ -973,7 +1138,7 @@ export function drawVertexGlowsOnly(ctx, vertex, options, dataToScreen, updateHt
 }
 
 export function drawDeformingDragPreview(ctx, params, dataToScreen) {
-    const { copyCount = 1, initialDragVertexStates, dragPreviewVertices, allEdges, allFaces, findVertexById, findNeighbors, findAllVerticesInSubgraph, colors, snappedEdgesInfo, snappedVertexIds, edgeColorMode = 'fixed', faceColorMode = 'fixed', edgeColorExpression = 'x', faceColorExpression = 'x', faceColorPolarExpression = 'r' } = params;
+    const { copyCount = 1, initialDragVertexStates, dragPreviewVertices, allEdges, allFaces, findVertexById, findNeighbors, findAllVerticesInSubgraph, colors, snappedEdgesInfo, snappedVertexIds, edgeColorMode = 'fixed', faceColorMode = 'fixed', edgeColorExpression = 'x', faceColorExpression = 'x', faceColorPolarExpression = 'r', angleDisplayMode = 'degrees', initialCoordSystemStates = new Map(), getInterpolationStyleById } = params;
 
     if (!initialDragVertexStates || initialDragVertexStates.length !== 1 || !dragPreviewVertices || dragPreviewVertices.length === 0) {
         return;
@@ -1013,13 +1178,26 @@ export function drawDeformingDragPreview(ctx, params, dataToScreen) {
         componentFaces.forEach(compFace => {
             const faceVerticesForPreview = compFace.vertexIds.map(getLiveVertexForDeformCopy).filter(Boolean);
             if (faceVerticesForPreview.length >= 3) {
-                const screenVertices = faceVerticesForPreview.map(v => dataToScreen(v));
-                drawFace(ctx, screenVertices, compFace, colors, dataToScreen, findVertexById, allEdges, allFaces, getLiveVertexForDeformCopy, true, null, {
+                const faceStyle = compFace.interpolationStyleId && getInterpolationStyleById
+                    ? getInterpolationStyleById(compFace.interpolationStyleId)
+                    : null;
+                const pathVertices = faceStyle
+                    ? U.buildInterpolatedPath(faceVerticesForPreview, faceStyle, true, dataToScreen)
+                    : faceVerticesForPreview;
+                const screenVertices = pathVertices.map(v => dataToScreen(v));
+                let faceToDraw = compFace;
+                if (compFace.localCoordSystem) {
+                    const initialSystem = initialCoordSystemStates.get(compFace.id) || compFace.localCoordSystem;
+                    const previewSystem = calculatePreviewCoordSystem(compFace, { initialSystem, dragPreviewVertices, initialDragVertexStates, findVertexById, transformIndicatorData: null });
+                    faceToDraw = { ...compFace, localCoordSystem: previewSystem };
+                }
+                drawFace(ctx, screenVertices, faceToDraw, colors, dataToScreen, findVertexById, allEdges, allFaces, getLiveVertexForDeformCopy, true, null, {
                     faceColorMode: getFaceMode(compFace, faceColorMode),
                     edgeColorMode,
                     faceColorExpression,
                     faceColorPolarExpression,
-                    edgeColorExpression
+                    edgeColorExpression,
+                    angleDisplayMode
                 });
             }
         });
@@ -1042,9 +1220,9 @@ export function drawDeformingDragPreview(ctx, params, dataToScreen) {
                 };
             }
             if (mode === 'colormap' && edge.colormapItem) {
-                const value = U.evaluateExpression(edgeColorExpression, { x: t }, t);
-                const clamped = clamp01(value);
-                const sampled = U.sampleColormap(edge.colormapItem, clamped);
+                const expression = edge.colorExpression || edgeColorExpression;
+                const value = U.evaluateExpression(expression, { x: t }, t);
+                const sampled = U.sampleColormap(edge.colormapItem, value);
                 return toRgba(sampled, fallbackColor);
             }
             return toRgba(edge.color || colors.edge, fallbackColor);
@@ -1054,34 +1232,67 @@ export function drawDeformingDragPreview(ctx, params, dataToScreen) {
             const p1 = getLiveVertexForDeformCopy(compEdge.id1);
             const p2 = getLiveVertexForDeformCopy(compEdge.id2);
             if (p1 && p2) {
-                const p1Screen = dataToScreen(p1);
-                const p2Screen = dataToScreen(p2);
-                ctx.beginPath();
-                ctx.moveTo(p1Screen.x, p1Screen.y);
-                ctx.lineTo(p2Screen.x, p2Screen.y);
+                const edgeStyle = compEdge.interpolationStyleId && getInterpolationStyleById
+                    ? getInterpolationStyleById(compEdge.interpolationStyleId)
+                    : null;
+                const getRenderVertexById = (id) => getLiveVertexForDeformCopy(id);
+                const pathPoints = buildInterpolatedEdgePath(compEdge, edgeStyle, p1, p2, allEdges, getRenderVertexById, dataToScreen);
+                const pathScreen = pathPoints.map(pt => dataToScreen(pt));
+                if (pathScreen.length < 2) return;
+                const p1Screen = pathScreen[0];
+                const p2Screen = pathScreen[pathScreen.length - 1];
 
                 const mode = getEdgeMode(compEdge, edgeColorMode);
-                if (mode === 'inherit_vertices') {
-                    const c1 = getVertexColor(p1);
-                    const c2 = getVertexColor(p2);
-                    const gradient = ctx.createLinearGradient(p1Screen.x, p1Screen.y, p2Screen.x, p2Screen.y);
-                    gradient.addColorStop(0, toRgbaString(c1));
-                    gradient.addColorStop(1, toRgbaString(c2));
-                    ctx.strokeStyle = gradient;
-                    ctx.stroke();
-                } else if (mode === 'colormap') {
-                    const color = getEdgeColorAtT(compEdge, 0.5, p1, p2);
-                    ctx.strokeStyle = toRgbaString(color);
-                    ctx.stroke();
+                if (mode === 'inherit_vertices' || mode === 'colormap') {
+                    let totalLength = 0;
+                    for (let i = 1; i < pathScreen.length; i++) {
+                        totalLength += Math.hypot(pathScreen[i].x - pathScreen[i - 1].x, pathScreen[i].y - pathScreen[i - 1].y);
+                    }
+                    let cursor = 0;
+                    for (let i = 1; i < pathScreen.length; i++) {
+                        const segStart = pathScreen[i - 1];
+                        const segEnd = pathScreen[i];
+                        const segLength = Math.hypot(segEnd.x - segStart.x, segEnd.y - segStart.y);
+                        const startT = totalLength > 0 ? cursor / totalLength : 0;
+                        const endT = totalLength > 0 ? (cursor + segLength) / totalLength : 1;
+                        const midT = (startT + endT) / 2;
+                        const color = getEdgeColorAtT(compEdge, midT, p1, p2);
+                        ctx.strokeStyle = toRgbaString(color);
+                        ctx.beginPath();
+                        ctx.moveTo(segStart.x, segStart.y);
+                        ctx.lineTo(segEnd.x, segEnd.y);
+                        ctx.stroke();
+                        cursor += segLength;
+                    }
                 } else if (compEdge.colormapItem) {
-                    const gradient = ctx.createLinearGradient(p1Screen.x, p1Screen.y, p2Screen.x, p2Screen.y);
-                    const startColor = U.sampleColormap(compEdge.colormapItem, compEdge.gradientStart);
-                    const endColor = U.sampleColormap(compEdge.colormapItem, compEdge.gradientEnd);
-                    gradient.addColorStop(0, startColor); gradient.addColorStop(1, endColor);
-                    ctx.strokeStyle = gradient;
-                    ctx.stroke();
+                    let totalLength = 0;
+                    for (let i = 1; i < pathScreen.length; i++) {
+                        totalLength += Math.hypot(pathScreen[i].x - pathScreen[i - 1].x, pathScreen[i].y - pathScreen[i - 1].y);
+                    }
+                    let cursor = 0;
+                    for (let i = 1; i < pathScreen.length; i++) {
+                        const segStart = pathScreen[i - 1];
+                        const segEnd = pathScreen[i];
+                        const segLength = Math.hypot(segEnd.x - segStart.x, segEnd.y - segStart.y);
+                        const startT = totalLength > 0 ? cursor / totalLength : 0;
+                        const endT = totalLength > 0 ? (cursor + segLength) / totalLength : 1;
+                        const midT = (startT + endT) / 2;
+                        const t = compEdge.gradientStart + (compEdge.gradientEnd - compEdge.gradientStart) * midT;
+                        const color = U.sampleColormap(compEdge.colormapItem, t);
+                        ctx.strokeStyle = color;
+                        ctx.beginPath();
+                        ctx.moveTo(segStart.x, segStart.y);
+                        ctx.lineTo(segEnd.x, segEnd.y);
+                        ctx.stroke();
+                        cursor += segLength;
+                    }
                 } else {
                     ctx.strokeStyle = compEdge.color || colors.edge;
+                    ctx.beginPath();
+                    ctx.moveTo(pathScreen[0].x, pathScreen[0].y);
+                    for (let i = 1; i < pathScreen.length; i++) {
+                        ctx.lineTo(pathScreen[i].x, pathScreen[i].y);
+                    }
                     ctx.stroke();
                 }
 
@@ -1091,7 +1302,7 @@ export function drawDeformingDragPreview(ctx, params, dataToScreen) {
                      ctx.save();
                      ctx.strokeStyle = colors.feedbackSnapped; ctx.globalAlpha = C.SELECTION_GLOW_ALPHA; ctx.lineWidth = C.SELECTION_GLOW_LINE_WIDTH;
                      ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-                     const vecX = p2Screen.x - p1Screen.x; const vecY = p2Screen.y - p1Screen.y;
+                    const vecX = p2Screen.x - p1Screen.x; const vecY = p2Screen.y - p1Screen.y;
                      const mag = Math.hypot(vecX, vecY); const offsetDist = C.EDGE_GLOW_OFFSET_DISTANCE;
                      if (mag > C.GEOMETRY_CALCULATION_EPSILON) {
                          const normPerpX = -vecY / mag; const normPerpY = vecX / mag;
@@ -1174,6 +1385,33 @@ export function drawDrawingPreview(ctx, { startVertex, snappedData, isShiftPress
     }
     ctx.stroke();
     ctx.restore();
+
+    if (interpolationStyle?.linearStyle === 'arrows' && previewScreen.length >= 2) {
+        const drawArrowHead = (from, to) => {
+            const angle = Math.atan2(to.y - from.y, to.x - from.x);
+            const size = C.AXIS_ARROW_SIZE * 0.6;
+            const left = {
+                x: to.x - Math.cos(angle) * size + Math.cos(angle + Math.PI / 2) * size * 0.6,
+                y: to.y - Math.sin(angle) * size + Math.sin(angle + Math.PI / 2) * size * 0.6
+            };
+            const right = {
+                x: to.x - Math.cos(angle) * size + Math.cos(angle - Math.PI / 2) * size * 0.6,
+                y: to.y - Math.sin(angle) * size + Math.sin(angle - Math.PI / 2) * size * 0.6
+            };
+            ctx.beginPath();
+            ctx.moveTo(to.x, to.y);
+            ctx.lineTo(left.x, left.y);
+            ctx.lineTo(right.x, right.y);
+            ctx.closePath();
+            ctx.fill();
+        };
+        ctx.save();
+        const from = previewScreen[previewScreen.length - 2];
+        const to = previewScreen[previewScreen.length - 1];
+        ctx.fillStyle = ctx.strokeStyle || nextEdgeColor;
+        drawArrowHead(from, to);
+        ctx.restore();
+    }
 
     // --- Draw Target Vertex ---
     ctx.save();
@@ -2794,9 +3032,9 @@ export function drawAllEdges(ctx, { allEdges, selectedEdgeIds, hoveredEdgeId, is
             };
         }
         if (mode === 'colormap' && edge.colormapItem) {
-            const value = U.evaluateExpression(edgeColorExpression, { x: t }, t);
-            const clamped = clamp01(value);
-            const sampled = U.sampleColormap(edge.colormapItem, clamped);
+            const expression = edge.colorExpression || edgeColorExpression;
+            const value = U.evaluateExpression(expression, { x: t }, t);
+            const sampled = U.sampleColormap(edge.colormapItem, value);
             return toRgba(sampled, fallbackColor);
         }
         return toRgba(edge.color || colors.defaultStroke, fallbackColor);
@@ -2825,14 +3063,23 @@ export function drawAllEdges(ctx, { allEdges, selectedEdgeIds, hoveredEdgeId, is
 
         const edgeStyle = edge.interpolationStyleId && getInterpolationStyleById
             ? getInterpolationStyleById(edge.interpolationStyleId)
-            : interpolationStyle;
-        const pathPoints = edgeStyle
-            ? U.buildInterpolatedPath([p1_render, p2_render], edgeStyle, false, dataToScreen)
-            : [p1_render, p2_render];
+            : null;
+        const edgeStyleNonLinear = edgeStyle && edgeStyle.type !== 'linear';
+        const previewVertexMap = new Map();
+        if (isDragConfirmed && dragPreviewVertices && dragPreviewVertices.length > 0) {
+            dragPreviewVertices.forEach(v => {
+                if (!v || !v.id) return;
+                previewVertexMap.set(v.originalId || v.id, v);
+            });
+        }
+        const getRenderVertexById = (id) => previewVertexMap.get(id) || findVertexById(id);
+        const pathPoints = buildInterpolatedEdgePath(edge, edgeStyle, p1_render, p2_render, allEdges, getRenderVertexById, dataToScreen);
         const pathScreen = pathPoints.map(p => dataToScreen(p));
         if (pathScreen.length < 2) return;
         const p1Screen = pathScreen[0];
         const p2Screen = pathScreen[pathScreen.length - 1];
+        const p1ScreenRaw = dataToScreen(p1_render);
+        const p2ScreenRaw = dataToScreen(p2_render);
 
         ctx.beginPath();
         ctx.moveTo(pathScreen[0].x, pathScreen[0].y);
@@ -2882,6 +3129,9 @@ export function drawAllEdges(ctx, { allEdges, selectedEdgeIds, hoveredEdgeId, is
         }
 
         if (isSelected || isSnapped || isHovered) {
+            const glowPath = edgeStyleNonLinear
+                ? [p1ScreenRaw, p2ScreenRaw]
+                : pathScreen;
             ctx.save();
             ctx.strokeStyle = isSnapped ? colors.feedbackSnapped : colors.selectionGlow;
             ctx.globalAlpha = C.SELECTION_GLOW_ALPHA;
@@ -2889,9 +3139,9 @@ export function drawAllEdges(ctx, { allEdges, selectedEdgeIds, hoveredEdgeId, is
             ctx.lineCap = 'round';
             ctx.lineJoin = 'round';
             ctx.beginPath();
-            ctx.moveTo(pathScreen[0].x, pathScreen[0].y);
-            for (let i = 1; i < pathScreen.length; i++) {
-                ctx.lineTo(pathScreen[i].x, pathScreen[i].y);
+            ctx.moveTo(glowPath[0].x, glowPath[0].y);
+            for (let i = 1; i < glowPath.length; i++) {
+                ctx.lineTo(glowPath[i].x, glowPath[i].y);
             }
             ctx.stroke();
             ctx.restore();
@@ -4652,9 +4902,9 @@ function drawColorPalette(ctx, htmlOverlay, state, updateHtmlLabel) {
                 }
 
                 if (targetToDraw === C.COLOR_TARGET_TEXT) {
-                    drawTextTargetIcon(ctx, icon, iconOptions, colors, isActive);
+                    drawTextTargetIcon(ctx, icon, iconOptions, colors, false);
                 } else {
-                    drawTriangleIcon(ctx, icon, iconOptions, colors, isActive);
+                    drawTriangleIcon(ctx, icon, iconOptions, colors, false);
                 }
             }
         });
@@ -4769,7 +5019,7 @@ function drawColorModePanel(ctx, htmlOverlay, state, updateHtmlLabel) {
                 opts.edgeColors = rgbVertexColors;
                 opts.faceEdgeColors = rgbVertexColors;
             }
-            if (icon.mode === 'colormap_xy' || icon.mode === 'colormap_polar') {
+            if (icon.mode === 'colormap_xy') {
                 opts.faceColormapItem = getPreviewColormap();
             }
             const isActive = faceActiveModes.includes(icon.mode);
@@ -5247,7 +5497,8 @@ export function drawFace(ctx, screenVertices, face, colors, dataToScreen, findVe
         edgeColorMode = 'fixed',
         faceColorExpression = 'x',
         faceColorPolarExpression = 'r',
-        edgeColorExpression = 'x'
+        edgeColorExpression = 'x',
+        angleDisplayMode = 'degrees'
     } = colorModeConfig;
     const faceMode = getFaceMode(face, faceColorMode);
 
@@ -5255,7 +5506,7 @@ export function drawFace(ctx, screenVertices, face, colors, dataToScreen, findVe
     const getVertexColorValue = (vertex) => vertex?.color || colors.face;
     const fallbackColor = toRgba(colors.face, { r: 255, g: 255, b: 255, a: 1 });
 
-    const makePatternFromCanvas = (patternCanvas, coordSystem) => {
+    const makePatternFromCanvas = (patternCanvas, coordSystem, bounds) => {
         const pattern = ctx.createPattern(patternCanvas, 'no-repeat');
         const origin_s = dataToScreen(coordSystem.origin);
         const xAxisGlobal = U.localToGlobal({ x: 1, y: 0 }, coordSystem);
@@ -5267,13 +5518,19 @@ export function drawFace(ctx, screenVertices, face, colors, dataToScreen, findVe
         const ex = yAxis_s.x - origin_s.x;
         const ey = yAxis_s.y - origin_s.y;
         const size = patternCanvas.width;
-        const pxPerLocal = size / 2;
-        const a = dx / pxPerLocal;
-        const b = dy / pxPerLocal;
-        const c = ex / pxPerLocal;
-        const d = ey / pxPerLocal;
-        const e = origin_s.x - (dx + ex) * (size / 2) / pxPerLocal;
-        const f = origin_s.y - (dy + ey) * (size / 2) / pxPerLocal;
+        const boundsWidth = Math.max(bounds?.width || 0, 1e-6);
+        const boundsHeight = Math.max(bounds?.height || 0, 1e-6);
+        const localStepX = boundsWidth / (size - 1);
+        const localStepY = boundsHeight / (size - 1);
+        const a = dx * localStepX;
+        const b = dy * localStepX;
+        const c = ex * localStepY;
+        const d = ey * localStepY;
+        const localOrigin = { x: bounds?.minX || 0, y: bounds?.minY || 0 };
+        const originGlobal = U.localToGlobal(localOrigin, coordSystem);
+        const originLocal_s = dataToScreen(originGlobal);
+        const e = originLocal_s.x;
+        const f = originLocal_s.y;
         const matrix = new DOMMatrix([a, b, c, d, e, f]);
         pattern.setTransform(matrix);
         return pattern;
@@ -5291,7 +5548,37 @@ export function drawFace(ctx, screenVertices, face, colors, dataToScreen, findVe
 
         const vertices = faceVertices.filter(v => v.type === 'regular');
         const localVertices = vertices.map(v => U.globalToLocal(v, coordSystem));
+        let minX = Infinity;
+        let minY = Infinity;
+        let maxX = -Infinity;
+        let maxY = -Infinity;
+        let maxRadius = 1;
+        localVertices.forEach(v => {
+            if (!Number.isFinite(v.x) || !Number.isFinite(v.y)) return;
+            minX = Math.min(minX, v.x);
+            minY = Math.min(minY, v.y);
+            maxX = Math.max(maxX, v.x);
+            maxY = Math.max(maxY, v.y);
+            maxRadius = Math.max(maxRadius, Math.hypot(v.x, v.y));
+        });
+        if (!Number.isFinite(minX) || !Number.isFinite(minY) || !Number.isFinite(maxX) || !Number.isFinite(maxY)) {
+            minX = -1; minY = -1; maxX = 1; maxY = 1;
+        }
+        const bounds = {
+            minX,
+            minY,
+            width: Math.max(maxX - minX, 1e-6),
+            height: Math.max(maxY - minY, 1e-6),
+            maxRadius: Math.max(maxRadius, 1e-6)
+        };
+        const minBlendDistance = 0.02;
+        const blendPower = 2;
         const vertexColors = vertices.map(v => toRgba(getVertexColorValue(v), fallbackColor));
+        const normalizeLocal = (v) => ({
+            x: (v.x - minX) / bounds.width,
+            y: (v.y - minY) / bounds.height
+        });
+        const localVerticesNormalized = localVertices.map(normalizeLocal);
 
         const edges = [];
         if (face?.vertexIds && face.vertexIds.length > 1) {
@@ -5308,7 +5595,9 @@ export function drawFace(ctx, screenVertices, face, colors, dataToScreen, findVe
                         v1,
                         v2,
                         v1Local: U.globalToLocal(v1, coordSystem),
-                        v2Local: U.globalToLocal(v2, coordSystem)
+                        v2Local: U.globalToLocal(v2, coordSystem),
+                        v1Norm: normalizeLocal(U.globalToLocal(v1, coordSystem)),
+                        v2Norm: normalizeLocal(U.globalToLocal(v2, coordSystem))
                     });
                 }
             }
@@ -5327,9 +5616,9 @@ export function drawFace(ctx, screenVertices, face, colors, dataToScreen, findVe
                 };
             }
             if (mode === 'colormap' && edge.colormapItem) {
-                const value = U.evaluateExpression(edgeColorExpression, { x: t }, t);
-                const clamped = clamp01(value);
-                const sampled = U.sampleColormap(edge.colormapItem, clamped);
+                const expression = edge.colorExpression || edgeColorExpression;
+                const value = U.evaluateExpression(expression, { x: t }, t);
+                const sampled = U.sampleColormap(edge.colormapItem, value);
                 return toRgba(sampled, fallbackColor);
             }
             return toRgba(edge.color || colors.edge, fallbackColor);
@@ -5337,41 +5626,58 @@ export function drawFace(ctx, screenVertices, face, colors, dataToScreen, findVe
 
         for (let y = 0; y < size; y++) {
             for (let x = 0; x < size; x++) {
-                const localX = x * inv * 2 - 1;
-                const localY = y * inv * 2 - 1;
+                const localX = bounds.minX + x * inv * bounds.width;
+                const localY = bounds.minY + y * inv * bounds.height;
+                const normalizedX = clamp01((localX - bounds.minX) / bounds.width);
+                const normalizedY = clamp01((localY - bounds.minY) / bounds.height);
                 let color = fallbackColor;
 
                 if (mode === 'colormap_xy' || mode === 'colormap_polar') {
                     if (face?.colormapItem) {
-                        let t = 0.5;
-                        if (mode === 'colormap_xy') {
-                            t = U.evaluateExpression(faceColorExpression, { x: localX, y: localY }, localX);
+                        const normalizedR = Math.hypot(localX, localY);
+                        let angle = Math.atan2(localY, localX);
+                        if (angle < 0) angle += C.RADIANS_IN_CIRCLE;
+                        const angleValue = angleDisplayMode === 'degrees' ? angle * (180 / Math.PI) : angle;
+                        const expression = face?.colorExpression || faceColorExpression || faceColorPolarExpression || 'x';
+                        const t = U.evaluateExpression(
+                            expression,
+                            { x: normalizedX, y: normalizedY, r: normalizedR, a: angleValue },
+                            normalizedX
+                        );
+                        const isSingleStop = Array.isArray(face.colormapItem.vertices) && face.colormapItem.vertices.length === 1;
+                        if (isSingleStop) {
+                            const sampled = U.sampleColormap(face.colormapItem, 0);
+                            color = toRgba(sampled, fallbackColor);
+                        } else if (face.colormapItem.isCyclic) {
+                            const sampled = U.sampleColormap(face.colormapItem, t);
+                            color = toRgba(sampled, fallbackColor);
+                        } else if (t < 0) {
+                            color = { ...fallbackColor, a: 0 };
+                        } else if (t > 1) {
+                            const sampled = U.sampleColormap(face.colormapItem, 1);
+                            color = toRgba(sampled, fallbackColor);
                         } else {
-                            const r = Math.hypot(localX, localY);
-                            const phi = Math.atan2(localY, localX);
-                            t = U.evaluateExpression(faceColorPolarExpression, { r, phi }, r);
+                            const sampled = U.sampleColormap(face.colormapItem, t);
+                            color = toRgba(sampled, fallbackColor);
                         }
-                        const clamped = clamp01(t);
-                        const sampled = U.sampleColormap(face.colormapItem, clamped);
-                        color = toRgba(sampled, fallbackColor);
                     } else {
                         color = fallbackColor;
                     }
                 } else if (mode === 'inherit_vertices' && localVertices.length > 0) {
-                    const weights = localVertices.map(v => {
-                        const dx = localX - v.x;
-                        const dy = localY - v.y;
+                    const weights = localVerticesNormalized.map(v => {
+                        const dx = normalizedX - v.x;
+                        const dy = normalizedY - v.y;
                         const dist = Math.hypot(dx, dy);
-                        return 1 / Math.max(dist, 1e-4);
+                        return 1 / Math.pow(Math.max(dist, minBlendDistance), blendPower);
                     });
                     color = mixColors(vertexColors, weights);
                 } else if (mode === 'inherit_edges' && edges.length > 0) {
                     const weights = edges.map(entry => {
-                        const closest = U.getClosestPointOnLineSegment({ x: localX, y: localY }, entry.v1Local, entry.v2Local);
-                        return 1 / Math.max(closest.distance, 1e-4);
+                        const closest = U.getClosestPointOnLineSegment({ x: normalizedX, y: normalizedY }, entry.v1Norm, entry.v2Norm);
+                        return 1 / Math.pow(Math.max(closest.distance, minBlendDistance), blendPower);
                     });
                     const edgeColors = edges.map((entry, idx) => {
-                        const closest = U.getClosestPointOnLineSegment({ x: localX, y: localY }, entry.v1Local, entry.v2Local);
+                        const closest = U.getClosestPointOnLineSegment({ x: normalizedX, y: normalizedY }, entry.v1Norm, entry.v2Norm);
                         return getEdgeColorAtT(entry, closest.t);
                     });
                     color = mixColors(edgeColors, weights);
@@ -5385,15 +5691,15 @@ export function drawFace(ctx, screenVertices, face, colors, dataToScreen, findVe
             }
         }
         cctx.putImageData(image, 0, 0);
-        return canvas;
+        return { canvas, bounds };
     };
 
     if (faceMode === 'fixed') {
         ctx.fillStyle = face?.color || colors.face;
         ctx.fill(drawHoles ? 'evenodd' : 'nonzero');
     } else if (face.localCoordSystem) {
-        const shaderCanvas = buildFaceShaderCanvas(faceMode, face.localCoordSystem);
-        const pattern = makePatternFromCanvas(shaderCanvas, face.localCoordSystem);
+        const shader = buildFaceShaderCanvas(faceMode, face.localCoordSystem);
+        const pattern = makePatternFromCanvas(shader.canvas, face.localCoordSystem, shader.bounds);
         ctx.fillStyle = pattern || (face?.color || colors.face);
         ctx.fill(drawHoles ? 'evenodd' : 'nonzero');
     } else if (face?.colormapItem && face.localCoordSystem) {

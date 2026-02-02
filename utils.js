@@ -2012,7 +2012,7 @@ export function detectClosedPolygons(allEdges, findPointById) {
 }
 
 export function createEdge(v1, v2, gridInterval, getColorForTarget) {
-    const newEdge = { id1: v1.id, id2: v2.id };
+    const newEdge = { id1: v1.id, id2: v2.id, directionFrom: v1.id, directionTo: v2.id };
 
     const deltaX = v1.x - v2.x;
     const deltaY = v1.y - v2.y;
@@ -2143,8 +2143,14 @@ export function sampleColormap(colormapItem, t) {
         return `rgba(${p.color.join(',')},${alpha})`;
     }
 
-    // Clamp t to [0, 1]
-    t = Math.max(0, Math.min(1, t));
+    if (!Number.isFinite(t)) {
+        t = 0;
+    }
+    if (colormapItem.isCyclic) {
+        t = ((t % 1) + 1) % 1;
+    } else {
+        t = Math.max(0, Math.min(1, t));
+    }
 
     // Find the two vertices to interpolate between
     let leftPoint = vertices[0];
