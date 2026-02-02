@@ -175,10 +175,13 @@ let faceColorMode = 'colormap_xy';
 let edgeColorExpression = 'x';
 let faceColorExpression = 'x';
 let faceColorPolarExpression = 'r';
-let edgeExpressionField = null;
-let faceExpressionField = null;
-let edgeExpressionFieldWidth = null;
-let faceExpressionFieldWidth = null;
+let edgeWeightExpression = '1-r';
+let faceVertexWeightExpression = '1/(r+0.001)';
+let faceEdgeWeightExpression = '1/(r+0.001)';
+let edgeExpressionFields = {};
+let faceExpressionFields = {};
+let edgeExpressionFieldWidths = {};
+let faceExpressionFieldWidths = {};
 let lastSelectedEdgeMode = null;
 let lastSelectedFaceMode = null;
 let currentAltPressed = false;
@@ -1026,8 +1029,16 @@ function ensureExpressionField(ref, { placeholder, onChange }) {
     input.style.height = '100%';
     input.style.lineHeight = '1';
     input.style.pointerEvents = 'auto';
-    input.addEventListener('input', () => {
+    const fireChange = () => {
         if (onChange) onChange(input.value);
+    };
+    input.addEventListener('input', fireChange);
+    input.addEventListener('blur', fireChange);
+    input.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') {
+            fireChange();
+            input.blur();
+        }
     });
 
     container.appendChild(label);
@@ -1085,6 +1096,10 @@ function updateColorModeExpressionInputs() {
         const item = colorIndex >= 0 ? allColors[colorIndex] : null;
         return isSingleColorItem(item) ? '1' : 'x';
     };
+    const getDefaultWeightExpression = (kind) => {
+        if (kind === 'edge') return '1-r';
+        return '1/(r+0.001)';
+    };
 
     const setExprLabelText = (field, text) => {
         if (field.labelText !== text) {
@@ -1093,147 +1108,194 @@ function updateColorModeExpressionInputs() {
         }
     };
 
-    if (activeEdgeMode !== 'colormap') {
-        edgeExpressionFieldWidth = null;
-    }
-    if (activeFaceMode !== 'colormap_xy') {
-        faceExpressionFieldWidth = null;
-    }
+    const ensureEdgeField = (mode, onChange) => {
+        edgeExpressionFields[mode] = ensureExpressionField(edgeExpressionFields[mode], {
+            placeholder: 'x',
+            onChange
+        });
+        return edgeExpressionFields[mode];
+    };
 
-    edgeExpressionField = ensureExpressionField(edgeExpressionField, {
-        placeholder: 'x',
-        onChange: (value) => {
-            const trimmed = value.trim();
-            if (!isExpressionAllowed(trimmed, ['x'])) {
-                edgeExpressionField.input.value = edgeColorExpression || 'x';
-                return;
-            }
-            const edgeIds = getSelectedEdgeIds();
-            if (edgeIds.length > 0) {
-                edgeIds.forEach(edgeId => {
-                    const edge = allEdges.find(e => U.getEdgeId(e) === edgeId);
-                    if (edge) edge.colorExpression = trimmed || getDefaultExpression(C.COLOR_TARGET_EDGE);
-                });
+    const ensureFaceField = (mode, onChange) => {
+        faceExpressionFields[mode] = ensureExpressionField(faceExpressionFields[mode], {
+            placeholder: 'x',
+            onChange
+        });
+        return faceExpressionFields[mode];
+    };
+
+    const getEdgeFieldValue = (mode, edge) => {
+        if (mode === 'inherit_vertices') {
+            return edge?.weightExpression || edgeWeightExpression || getDefaultWeightExpression('edge');
+        }
+        return edge?.colorExpression || edgeColorExpression || getDefaultExpression(C.COLOR_TARGET_EDGE);
+    };
+
+    const getFaceFieldValue = (mode, face) => {
+        if (mode === 'inherit_edges') {
+            return face?.edgeWeightExpression || faceEdgeWeightExpression || getDefaultWeightExpression('face_edge');
+        }
+        if (mode === 'inherit_vertices') {
+            return face?.vertexWeightExpression || faceVertexWeightExpression || getDefaultWeightExpression('face_vertex');
+        }
+        return face?.colorExpression || faceColorExpression || faceColorPolarExpression || getDefaultExpression(C.COLOR_TARGET_FACE);
+    };
+
+    const handleEdgeFieldChange = (mode, value) => {
+        const trimmed = value.trim();
+        const allowed = ['x', 'r'];
+        if (!isExpressionAllowed(trimmed, allowed)) {
+            const field = edgeExpressionFields[mode];
+            if (field) field.input.value = getEdgeFieldValue(mode, getPrimarySelectedEdge());
+            return;
+        }
+        const edgeIds = getSelectedEdgeIds();
+        if (edgeIds.length > 0) {
+            edgeIds.forEach(edgeId => {
+                const edge = allEdges.find(e => U.getEdgeId(e) === edgeId);
+                if (!edge) return;
+                if (mode === 'inherit_vertices') {
+                    edge.weightExpression = trimmed || getDefaultWeightExpression('edge');
+                } else {
+                    edge.colorExpression = trimmed || getDefaultExpression(C.COLOR_TARGET_EDGE);
+                }
+            });
+        } else {
+            if (mode === 'inherit_vertices') {
+                edgeWeightExpression = trimmed || getDefaultWeightExpression('edge');
             } else {
                 edgeColorExpression = trimmed || getDefaultExpression(C.COLOR_TARGET_EDGE);
             }
-            schedulePersistState();
         }
-    });
-    faceExpressionField = ensureExpressionField(faceExpressionField, {
-        placeholder: 'x',
-        onChange: (value) => {
-            const trimmed = value.trim();
-            const allowed = ['x', 'y', 'r', 'a'];
-            if (!isExpressionAllowed(trimmed, allowed)) {
-                faceExpressionField.input.value = faceColorExpression || faceColorPolarExpression || 'x';
-                return;
-            }
-            const faceIds = getSelectedFaceIds();
-            if (faceIds.length > 0) {
-                faceIds.forEach(faceId => {
-                    const face = allFaces.find(f => U.getFaceId(f) === faceId);
-                    if (face) face.colorExpression = trimmed || getDefaultExpression(C.COLOR_TARGET_FACE);
-                });
+        schedulePersistState();
+    };
+
+    const handleFaceFieldChange = (mode, value) => {
+        const trimmed = value.trim();
+        const allowed = mode === 'inherit_edges' ? ['r'] : ['x', 'y', 'r', 'a'];
+        if (!isExpressionAllowed(trimmed, allowed)) {
+            const field = faceExpressionFields[mode];
+            if (field) field.input.value = getFaceFieldValue(mode, getPrimarySelectedFace());
+            return;
+        }
+        const faceIds = getSelectedFaceIds();
+        if (faceIds.length > 0) {
+            faceIds.forEach(faceId => {
+                const face = allFaces.find(f => U.getFaceId(f) === faceId);
+                if (!face) return;
+                if (mode === 'inherit_edges') {
+                    face.edgeWeightExpression = trimmed || getDefaultWeightExpression('face_edge');
+                } else if (mode === 'inherit_vertices') {
+                    face.vertexWeightExpression = trimmed || getDefaultWeightExpression('face_vertex');
+                } else {
+                    face.colorExpression = trimmed || getDefaultExpression(C.COLOR_TARGET_FACE);
+                }
+            });
+        } else {
+            if (mode === 'inherit_edges') {
+                faceEdgeWeightExpression = trimmed || getDefaultWeightExpression('face_edge');
+            } else if (mode === 'inherit_vertices') {
+                faceVertexWeightExpression = trimmed || getDefaultWeightExpression('face_vertex');
             } else {
                 faceColorExpression = trimmed || getDefaultExpression(C.COLOR_TARGET_FACE);
             }
-            schedulePersistState();
         }
-    });
+        schedulePersistState();
+    };
 
     const isLightTheme = activeThemeName === 'light';
     const labelTextColor = isLightTheme ? '#000000' : '#ffffff';
     const labelBorder = isLightTheme ? '#000000' : '#ffffff';
     const fieldBackground = getColors().background;
 
-    edgeExpressionField.container.style.display = 'none';
-    faceExpressionField.container.style.display = 'none';
+    Object.values(edgeExpressionFields).forEach(field => {
+        field.container.style.display = 'none';
+    });
+    Object.values(faceExpressionFields).forEach(field => {
+        field.container.style.display = 'none';
+    });
 
     if (!isColorModePanelExpanded || !canvasUI.colorModeIcons.length) return;
 
-    if (activeEdgeMode === 'colormap') {
-        const field = canvasUI.colorModeExprFields.find(entry => entry.group === 'edge');
-        if (field) {
-            const labelText = 'c(x)=';
-            setExprLabelText(edgeExpressionField, labelText);
-            if (document.activeElement !== edgeExpressionField.input) {
-                const edge = getPrimarySelectedEdge();
-                const value = edge?.colorExpression || edgeColorExpression || getDefaultExpression(C.COLOR_TARGET_EDGE);
-                edgeExpressionField.input.value = value;
-            }
-            const edgeSelectionPadding = 2;
-            edgeExpressionField.container.style.left = `${field.x - edgeSelectionPadding}px`;
-            edgeExpressionField.container.style.top = `${field.y - edgeSelectionPadding}px`;
-            edgeExpressionField.container.style.width = `${field.width + edgeSelectionPadding * 2}px`;
-            edgeExpressionField.container.style.height = `${field.height + edgeSelectionPadding * 2}px`;
-            edgeExpressionField.container.style.padding = `0 ${C.COLOR_MODE_EXPR_PADDING_X}px`;
-            edgeExpressionField.container.style.border = `${C.COLOR_MODE_EXPR_BORDER_WIDTH}px solid ${labelBorder}`;
-            edgeExpressionField.container.style.background = fieldBackground;
-            edgeExpressionField.container.style.color = labelTextColor;
-            const edgeFontSize = Math.max(10, Math.floor(field.height * 0.64));
-            edgeExpressionField.container.style.fontSize = `${edgeFontSize}px`;
-            edgeExpressionField.input.style.fontSize = `${edgeFontSize}px`;
-            edgeExpressionField.input.style.color = labelTextColor;
-            edgeExpressionField.input.style.minWidth = '3ch';
-            edgeExpressionField.input.style.height = `${field.height + edgeSelectionPadding * 2}px`;
-            edgeExpressionField.input.style.lineHeight = `${field.height + edgeSelectionPadding * 2}px`;
-            edgeExpressionField.container.style.display = 'flex';
+    const edgeFieldConfigs = [
+        { mode: 'inherit_vertices', label: 'w(x)=', minWidth: '3ch' },
+        { mode: 'colormap', label: 'c(x)=', minWidth: '3ch' }
+    ];
+    const faceFieldConfigs = [
+        { mode: 'inherit_vertices', label: 'w(x,y,r,a) =\u00A0', minWidth: '9ch' },
+        { mode: 'inherit_edges', label: 'w(r) =\u00A0', minWidth: '9ch' },
+        { mode: 'colormap_xy', label: 'c(x,y,r,a) =\u00A0', minWidth: '9ch' }
+    ];
 
-            const baseWidth = field.baseWidth || field.width;
-            const expandedWidth = field.expandedWidth || field.width;
-            const labelWidth = edgeExpressionField.label.getBoundingClientRect().width;
-            const inputWidth = edgeExpressionField.input.scrollWidth;
-            const desiredWidth = labelWidth + inputWidth + 8;
-            const nextWidth = desiredWidth > baseWidth ? expandedWidth : baseWidth;
-            if (edgeExpressionFieldWidth !== nextWidth) {
-                edgeExpressionFieldWidth = nextWidth;
-                buildColorModePanelUI();
-                return;
+    let needsRebuild = false;
+    const updateFieldDisplay = (group, config, isActive) => {
+        const fieldEntry = canvasUI.colorModeExprFields.find(entry => entry.group === group && entry.mode === config.mode);
+        if (!fieldEntry) return;
+        const field = group === 'edge'
+            ? ensureEdgeField(config.mode, (value) => handleEdgeFieldChange(config.mode, value))
+            : ensureFaceField(config.mode, (value) => handleFaceFieldChange(config.mode, value));
+        setExprLabelText(field, config.label);
+
+        if (!isActive) {
+            field.container.style.display = 'none';
+            return;
+        }
+
+        if (document.activeElement !== field.input) {
+            if (group === 'edge') {
+                field.input.value = getEdgeFieldValue(config.mode, getPrimarySelectedEdge());
+            } else {
+                field.input.value = getFaceFieldValue(config.mode, getPrimarySelectedFace());
             }
         }
-    }
 
-    if (activeFaceMode === 'colormap_xy') {
-        const field = canvasUI.colorModeExprFields.find(entry => entry.group === 'face');
-        if (field) {
-            const labelText = 'c(x,y,r,a) =\u00A0';
-            setExprLabelText(faceExpressionField, labelText);
-            if (document.activeElement !== faceExpressionField.input) {
-                const face = getPrimarySelectedFace();
-                const value = face?.colorExpression || faceColorExpression || faceColorPolarExpression || getDefaultExpression(C.COLOR_TARGET_FACE);
-                faceExpressionField.input.value = value;
+        const selectionPadding = 2;
+        field.container.style.left = `${fieldEntry.x - selectionPadding}px`;
+        field.container.style.top = `${fieldEntry.y - selectionPadding}px`;
+        field.container.style.width = `${fieldEntry.width + selectionPadding * 2}px`;
+        field.container.style.height = `${fieldEntry.height + selectionPadding * 2}px`;
+        field.container.style.padding = `0 ${C.COLOR_MODE_EXPR_PADDING_X}px`;
+        field.container.style.border = `${C.COLOR_MODE_EXPR_BORDER_WIDTH}px solid ${labelBorder}`;
+        field.container.style.background = fieldBackground;
+        field.container.style.color = labelTextColor;
+        const fieldFontSize = Math.max(10, Math.floor(fieldEntry.height * 0.64));
+        field.container.style.fontSize = `${fieldFontSize}px`;
+        field.input.style.fontSize = `${fieldFontSize}px`;
+        field.input.style.color = labelTextColor;
+        field.input.style.minWidth = config.minWidth;
+        field.input.style.height = `${fieldEntry.height + selectionPadding * 2}px`;
+        field.input.style.lineHeight = `${fieldEntry.height + selectionPadding * 2}px`;
+        field.container.style.display = 'flex';
+
+        const baseWidth = fieldEntry.baseWidth || fieldEntry.width;
+        const stepWidth = fieldEntry.stepWidth || baseWidth;
+        const labelWidth = field.label.getBoundingClientRect().width;
+        const inputWidth = field.input.scrollWidth;
+        const desiredWidth = labelWidth + inputWidth + 8;
+        const steps = Math.max(0, Math.ceil((desiredWidth - baseWidth) / stepWidth));
+        const nextWidth = baseWidth + steps * stepWidth;
+        if (group === 'edge') {
+            if (edgeExpressionFieldWidths[config.mode] !== nextWidth) {
+                edgeExpressionFieldWidths[config.mode] = nextWidth;
+                needsRebuild = true;
             }
-            const faceSelectionPadding = 2;
-            faceExpressionField.container.style.left = `${field.x - faceSelectionPadding}px`;
-            faceExpressionField.container.style.top = `${field.y - faceSelectionPadding}px`;
-            faceExpressionField.container.style.width = `${field.width + faceSelectionPadding * 2}px`;
-            faceExpressionField.container.style.height = `${field.height + faceSelectionPadding * 2}px`;
-            faceExpressionField.container.style.padding = `0 ${C.COLOR_MODE_EXPR_PADDING_X}px`;
-            faceExpressionField.container.style.border = `${C.COLOR_MODE_EXPR_BORDER_WIDTH}px solid ${labelBorder}`;
-            faceExpressionField.container.style.background = fieldBackground;
-            faceExpressionField.container.style.color = labelTextColor;
-            const faceFontSize = Math.max(10, Math.floor(field.height * 0.64));
-            faceExpressionField.container.style.fontSize = `${faceFontSize}px`;
-            faceExpressionField.input.style.fontSize = `${faceFontSize}px`;
-            faceExpressionField.input.style.color = labelTextColor;
-            faceExpressionField.input.style.minWidth = '9ch';
-            faceExpressionField.input.style.height = `${field.height + faceSelectionPadding * 2}px`;
-            faceExpressionField.input.style.lineHeight = `${field.height + faceSelectionPadding * 2}px`;
-            faceExpressionField.container.style.display = 'flex';
-
-            const baseWidth = field.baseWidth || field.width;
-            const expandedWidth = field.expandedWidth || field.width;
-            const labelWidth = faceExpressionField.label.getBoundingClientRect().width;
-            const inputWidth = faceExpressionField.input.scrollWidth;
-            const desiredWidth = labelWidth + inputWidth + 8;
-            const nextWidth = desiredWidth > baseWidth ? expandedWidth : baseWidth;
-            if (faceExpressionFieldWidth !== nextWidth) {
-                faceExpressionFieldWidth = nextWidth;
-                buildColorModePanelUI();
-                return;
+        } else {
+            if (faceExpressionFieldWidths[config.mode] !== nextWidth) {
+                faceExpressionFieldWidths[config.mode] = nextWidth;
+                needsRebuild = true;
             }
         }
+    };
+
+    const edgeVisibleModes = selectedEdgeModes.length > 0 ? selectedEdgeModes : [edgeColorMode];
+    const faceVisibleModes = selectedFaceModes.length > 0 ? selectedFaceModes : [faceColorMode];
+
+    edgeFieldConfigs.forEach(config => updateFieldDisplay('edge', config, edgeVisibleModes.includes(config.mode)));
+    faceFieldConfigs.forEach(config => updateFieldDisplay('face', config, faceVisibleModes.includes(config.mode)));
+
+    if (needsRebuild) {
+        buildColorModePanelUI();
+        return;
     }
 }
 
@@ -2052,6 +2114,9 @@ function drawComponent(componentVertexIds, colors, isDragConfirmed = false, init
         faceColorExpression,
         faceColorPolarExpression,
         edgeColorExpression,
+        edgeWeightExpression,
+        faceVertexWeightExpression,
+        faceEdgeWeightExpression,
         angleDisplayMode
     }, dataToScreen, findVertexById);
 
@@ -2065,7 +2130,8 @@ function drawComponent(componentVertexIds, colors, isDragConfirmed = false, init
         interpolationStyle: getActiveInterpolationStyle(),
         getInterpolationStyleById,
         edgeColorMode,
-        edgeColorExpression
+        edgeColorExpression,
+        edgeWeightExpression
     }, dataToScreen, findVertexById, U.getEdgeId);
 
     const componentVertices = allVertices.filter(v => componentVertexIds.has(v.id));
@@ -2639,8 +2705,8 @@ function buildColorModePanelUI() {
     const rowY = buttonCenterY - (iconSize / 2) + verticalOffset;
     const spacing = C.TRANSFORM_ICON_SIZE + C.TRANSFORM_ICON_PADDING;
     const gap = spacing - iconSize;
-    const baseExprWidth = (iconSize * 3) + (gap * 2);
-    const expandedExprWidth = baseExprWidth + iconSize + gap;
+    const baseExprWidthEdge = (iconSize * 2) + gap;
+    const baseExprWidthFace = (iconSize * 5) + (gap * 4);
     const slotOffset = (spacing - iconSize) / 2;
 
     const edgeModes = ['inherit_vertices', 'colormap'];
@@ -2655,6 +2721,8 @@ function buildColorModePanelUI() {
     const driverFaceMode = hasFaceSelection
         ? (selectedFaceModes.includes(lastSelectedFaceMode) ? lastSelectedFaceMode : selectedFaceModes[0])
         : faceColorMode;
+    const edgeVisibleModes = selectedEdgeModes.length > 0 ? selectedEdgeModes : [driverEdgeMode];
+    const faceVisibleModes = selectedFaceModes.length > 0 ? selectedFaceModes : [driverFaceMode];
 
     canvasUI.colorModeExprFields = [];
 
@@ -2671,26 +2739,27 @@ function buildColorModePanelUI() {
             height: iconSize
         });
     };
-    const addExprField = (group, desiredWidth) => {
+    const addExprField = (group, mode, desiredWidth, baseWidth) => {
         canvasUI.colorModeExprFields.push({
-            id: `${group}-color-expr`,
+            id: `${group}-color-expr-${mode}`,
             type: 'colorModeExprField',
             group,
+            mode,
             x: currentX + spacing + slotOffset,
             y: rowY,
             width: desiredWidth,
             height: iconSize,
-            baseWidth: baseExprWidth,
-            expandedWidth: expandedExprWidth
+            baseWidth,
+            stepWidth: spacing
         });
         currentX = currentX + spacing + slotOffset + desiredWidth + slotOffset;
     };
 
     edgeModes.forEach(mode => {
         addModeIcon('edge', mode);
-        if (driverEdgeMode === mode && mode === 'colormap') {
-            const desiredWidth = edgeExpressionFieldWidth || baseExprWidth;
-            addExprField('edge', desiredWidth);
+        if (edgeVisibleModes.includes(mode)) {
+            const desiredWidth = edgeExpressionFieldWidths[mode] || baseExprWidthEdge;
+            addExprField('edge', mode, desiredWidth, baseExprWidthEdge);
         } else {
             currentX += spacing;
         }
@@ -2698,9 +2767,9 @@ function buildColorModePanelUI() {
 
     faceModes.forEach(mode => {
         addModeIcon('face', mode);
-        if (driverFaceMode === mode && mode === 'colormap_xy') {
-            const desiredWidth = faceExpressionFieldWidth || baseExprWidth;
-            addExprField('face', desiredWidth);
+        if (faceVisibleModes.includes(mode)) {
+            const desiredWidth = faceExpressionFieldWidths[mode] || baseExprWidthFace;
+            addExprField('face', mode, desiredWidth, baseExprWidthFace);
         } else {
             currentX += spacing;
         }
@@ -3165,6 +3234,13 @@ function restoreState(state) {
     edgeColorExpression = state.edgeColorExpression || 'x';
     faceColorExpression = state.faceColorExpression || 'x';
     faceColorPolarExpression = state.faceColorPolarExpression || 'r';
+    if (!state.edgeWeightExpression || state.edgeWeightExpression === '1/(r+0.001)') {
+        edgeWeightExpression = '1-r';
+    } else {
+        edgeWeightExpression = state.edgeWeightExpression;
+    }
+    faceVertexWeightExpression = state.faceVertexWeightExpression || faceVertexWeightExpression;
+    faceEdgeWeightExpression = state.faceEdgeWeightExpression || faceEdgeWeightExpression;
     allEdges.forEach(edge => {
         if (!edge.directionFrom || !edge.directionTo) {
             edge.directionFrom = edge.id1;
@@ -3246,6 +3322,9 @@ function getCurrentState() {
         edgeColorExpression,
         faceColorExpression,
         faceColorPolarExpression,
+        edgeWeightExpression,
+        faceVertexWeightExpression,
+        faceEdgeWeightExpression,
         allColors: JSON.parse(JSON.stringify(allColors)),
         activeCenterId: activeCenterId,
         isDrawingMode: isDrawingMode,
@@ -3522,6 +3601,8 @@ function removeSessionAtIndex(index) {
     const [removed] = sessions.splice(index, 1);
     sessionUndoStack.push({ session: removed, index });
     if (activeSessionIndex === index) {
+        activeSessionIndex = -1;
+        selectedSessionIndex = -1;
         setActiveSession(Math.max(0, Math.min(nextIndex, sessions.length - 1)));
     } else {
         if (activeSessionIndex > index) activeSessionIndex -= 1;
@@ -4955,6 +5036,9 @@ function drawMainGeometry(colors) {
              edgeColorExpression,
              faceColorExpression,
              faceColorPolarExpression,
+             edgeWeightExpression,
+             faceVertexWeightExpression,
+             faceEdgeWeightExpression,
              angleDisplayMode,
              initialCoordSystemStates,
              getInterpolationStyleById,
@@ -4982,6 +5066,7 @@ function drawUIElements(colors, axisFormatInfo) {
         interpolationStyles, activeInterpolationStyleId,
         sessions, activeSessionIndex, selectedSessionIndex,
         edgeColorMode, faceColorMode, edgeColorExpression, faceColorExpression, faceColorPolarExpression,
+        edgeWeightExpression, faceVertexWeightExpression, faceEdgeWeightExpression,
         selectedEdgeModes: getSelectedEdgeModesForUI(),
         selectedFaceModes: getSelectedFaceModesForUI(),
         isDraggingColorTarget, draggedColorTargetInfo
@@ -6691,6 +6776,8 @@ function handleLeftMouseButtonDown(event) {
         for (const icon of canvasUI.sessionIcons) {
             if (mousePos.x >= icon.x && mousePos.x <= icon.x + icon.width &&
                 mousePos.y >= icon.y && mousePos.y <= icon.y + icon.height) {
+                selectedSessionIndex = icon.index;
+                if (isSessionsPanelExpanded) buildSessionsPanelUI();
                 actionContext = { target: 'ui_session', element: { ...icon } };
                 canvas.style.cursor = 'default';
                 return;
@@ -6969,14 +7056,242 @@ function finalizeDragAction() {
         if (transformIndicatorData) {
             const { center, rotation, scale, directionalScale, startPos } = transformIndicatorData;
             const startVector = { x: startPos.x - center.x, y: startPos.y - center.y };
-            initialDragVertexStates.forEach(p_initial => {
-                const vertexToUpdate = findVertexById(p_initial.id);
-                if (vertexToUpdate) {
-                    const newPos = U.applyTransformToVertex(p_initial, center, rotation, scale, directionalScale, startVector);
-                    vertexToUpdate.x = newPos.x;
-                    vertexToUpdate.y = newPos.y;
+            const applyTransformAtStep = (point, multiplier) => (
+                U.applyTransformToVertex(point, center, rotation * multiplier, Math.pow(scale, multiplier), directionalScale, startVector)
+            );
+            const applyTransformToCoordSystem = (initialSystem, multiplier) => {
+                if (!initialSystem) return null;
+                const stepRotation = rotation * multiplier;
+                const stepScale = Math.pow(scale, multiplier);
+                const newOrigin = U.applyTransformToVertex(initialSystem.origin, center, stepRotation, stepScale, directionalScale, startVector);
+                const updatedSystem = JSON.parse(JSON.stringify(initialSystem));
+                updatedSystem.origin = newOrigin;
+                if (directionalScale) {
+                    const pUnitXInitial = U.localToGlobal({ x: 1, y: 0 }, initialSystem);
+                    const pUnitXFinal = U.applyTransformToVertex(pUnitXInitial, center, stepRotation, stepScale, directionalScale, startVector);
+                    updatedSystem.scale = Math.max(0.01, U.distance(newOrigin, pUnitXFinal));
+                } else {
+                    updatedSystem.angle = U.normalizeAngle(initialSystem.angle + stepRotation);
+                    updatedSystem.scale = initialSystem.scale * stepScale;
                 }
-            });
+                return updatedSystem;
+            };
+
+            if (copyCount > 1) {
+                const verticesToCopy = initialDragVertexStates.filter(p => p.type === 'regular');
+                const originalIds = new Set(verticesToCopy.map(p => p.id));
+                const selectedFaceIdSet = new Set(selectedFaceIds);
+                const selectedEdgeIdSet = new Set(selectedEdgeIds);
+
+                selectedFaceIds.forEach(faceId => {
+                    const face = allFaces.find(f => U.getFaceId(f) === faceId);
+                    if (!face) return;
+                    face.vertexIds.forEach(id => originalIds.add(id));
+                });
+
+                const faceEdgeIds = new Set();
+                selectedFaceIds.forEach(faceId => {
+                    const face = allFaces.find(f => U.getFaceId(f) === faceId);
+                    if (!face) return;
+                    for (let i = 0; i < face.vertexIds.length; i++) {
+                        const id1 = face.vertexIds[i];
+                        const id2 = face.vertexIds[(i + 1) % face.vertexIds.length];
+                        faceEdgeIds.add(U.getEdgeId({ id1, id2 }));
+                    }
+                });
+
+                const edgesToCopy = allEdges.filter(e => {
+                    const edgeId = U.getEdgeId(e);
+                    if (selectedEdgeIdSet.has(edgeId)) return true;
+                    if (faceEdgeIds.has(edgeId)) return true;
+                    return originalIds.has(e.id1) && originalIds.has(e.id2);
+                });
+
+                const facesToCopy = selectedFaceIds.length > 0
+                    ? allFaces.filter(f => selectedFaceIdSet.has(U.getFaceId(f)))
+                    : allFaces.filter(f => f.vertexIds.every(id => originalIds.has(id)));
+
+                const boundaryEdges = allEdges.filter(e =>
+                    (originalIds.has(e.id1) && !originalIds.has(e.id2)) ||
+                    (originalIds.has(e.id2) && !originalIds.has(e.id1))
+                );
+
+                const allNewVertices = [];
+                const allNewEdges = [];
+                const allNewFaces = [];
+                firstCopySelectionIds = { vertices: [], edges: [], faces: [], texts: [] };
+
+                const selectedTextIdSet = new Set(selectedTextIds);
+                const textsToCopy = allTextElements.filter(text => {
+                    if (selectedTextIdSet.has(text.id)) return true;
+                    if (text.anchorType === 'vertex') return originalIds.has(text.anchorId);
+                    if (text.anchorType === 'edge') {
+                        const edge = allEdges.find(e => U.getEdgeId(e) === text.anchorId);
+                        return edge ? (originalIds.has(edge.id1) && originalIds.has(edge.id2)) : false;
+                    }
+                    if (text.anchorType === 'face') {
+                        if (selectedFaceIdSet.has(text.anchorId)) return true;
+                        const face = allFaces.find(f => U.getFaceId(f) === text.anchorId);
+                        return face ? face.vertexIds.every(id => originalIds.has(id)) : false;
+                    }
+                    return false;
+                });
+
+                for (let i = 1; i < copyCount; i++) {
+                    const newIdMapForThisCopy = new Map();
+                    const currentCopyVertices = [];
+                    const currentCopyEdges = [];
+                    const currentCopyFaces = [];
+                    const currentCopyTexts = [];
+
+                    verticesToCopy.forEach(p => {
+                        const newPos = applyTransformAtStep(p, i);
+                        const newVertex = { ...p, ...newPos, id: U.generateUniqueId() };
+                        allNewVertices.push(newVertex);
+                        newIdMapForThisCopy.set(p.id, newVertex.id);
+                        currentCopyVertices.push(newVertex.id);
+                    });
+
+                    edgesToCopy.forEach(edge => {
+                        const newId1 = newIdMapForThisCopy.get(edge.id1);
+                        const newId2 = newIdMapForThisCopy.get(edge.id2);
+                        if (newId1 && newId2) {
+                            const newDirectionFrom = edge.directionFrom === edge.id2 ? newId2 : newId1;
+                            const newDirectionTo = edge.directionFrom === edge.id2 ? newId1 : newId2;
+                            const newEdge = { ...edge, id1: newId1, id2: newId2, directionFrom: newDirectionFrom, directionTo: newDirectionTo };
+                            allNewEdges.push(newEdge);
+                            currentCopyEdges.push(U.getEdgeId(newEdge));
+                        }
+                    });
+
+                    boundaryEdges.forEach(edge => {
+                        const staticVertexId = originalIds.has(edge.id1) ? edge.id2 : edge.id1;
+                        const originalDraggedVertexId = originalIds.has(edge.id1) ? edge.id1 : edge.id2;
+                        const newDraggedVertexId = newIdMapForThisCopy.get(originalDraggedVertexId);
+                        if (newDraggedVertexId) {
+                            const newId1 = newDraggedVertexId;
+                            const newId2 = staticVertexId;
+                            const newDirectionFrom = edge.directionFrom === edge.id2 ? newId2 : newId1;
+                            const newDirectionTo = edge.directionFrom === edge.id2 ? newId1 : newId2;
+                            const newEdge = { ...edge, id1: newId1, id2: newId2, directionFrom: newDirectionFrom, directionTo: newDirectionTo };
+                            allNewEdges.push(newEdge);
+                        }
+                    });
+
+                    facesToCopy.forEach(originalFace => {
+                        const initialSystemForCopy = initialCoordSystemStates.get(originalFace.id) || originalFace.localCoordSystem;
+                        const newVertexIds = originalFace.vertexIds.map(id => newIdMapForThisCopy.get(id));
+                        if (newVertexIds.every(Boolean)) {
+                            const newFace = JSON.parse(JSON.stringify(originalFace));
+                            newFace.id = U.getFaceId({ vertexIds: newVertexIds });
+                            newFace.vertexIds = newVertexIds;
+                            if (newFace.localCoordSystem && initialSystemForCopy) {
+                                const updatedSystem = applyTransformToCoordSystem(initialSystemForCopy, i);
+                                if (updatedSystem) {
+                                    newFace.localCoordSystem = updatedSystem;
+                                }
+                            }
+                            allNewFaces.push(newFace);
+                            currentCopyFaces.push(newFace.id);
+                        }
+                    });
+
+                    textsToCopy.forEach(text => {
+                        const newText = JSON.parse(JSON.stringify(text));
+                        newText.id = U.generateUniqueId();
+                        const rotationDelta = (-rotation * (180 / Math.PI)) * i;
+                        const scaleMultiplier = Math.pow(scale, i);
+                        newText.rotationDeg = (text.rotationDeg || 0) + rotationDelta;
+                        newText.scale = (text.scale || 1) * scaleMultiplier;
+
+                        if (text.anchorType === 'canvas') {
+                            if (!newText.position) return;
+                            newText.position = applyTransformAtStep(newText.position, i);
+                        } else if (text.anchorType === 'vertex') {
+                            const newAnchorId = newIdMapForThisCopy.get(text.anchorId);
+                            if (!newAnchorId) return;
+                            const anchorData = getTextElementAnchorData(text);
+                            const anchor = anchorData ? anchorData.anchor : null;
+                            if (anchor) {
+                                const baseOffset = text.offset || { x: 0, y: 0 };
+                                const basePosition = { x: anchor.x + baseOffset.x, y: anchor.y + baseOffset.y };
+                                const transformedAnchor = applyTransformAtStep(anchor, i);
+                                const transformedPosition = applyTransformAtStep(basePosition, i);
+                                newText.offset = {
+                                    x: transformedPosition.x - transformedAnchor.x,
+                                    y: transformedPosition.y - transformedAnchor.y
+                                };
+                            }
+                            newText.anchorId = newAnchorId;
+                        } else if (text.anchorType === 'edge') {
+                            const edge = allEdges.find(e => U.getEdgeId(e) === text.anchorId);
+                            if (!edge) return;
+                            const newId1 = newIdMapForThisCopy.get(edge.id1);
+                            const newId2 = newIdMapForThisCopy.get(edge.id2);
+                            if (!newId1 || !newId2) return;
+                            const anchorData = getTextElementAnchorData(text);
+                            const anchor = anchorData ? anchorData.anchor : null;
+                            if (anchor) {
+                                const baseOffset = text.offset || { x: 0, y: 0 };
+                                const basePosition = { x: anchor.x + baseOffset.x, y: anchor.y + baseOffset.y };
+                                const transformedAnchor = applyTransformAtStep(anchor, i);
+                                const transformedPosition = applyTransformAtStep(basePosition, i);
+                                const newOffset = {
+                                    x: transformedPosition.x - transformedAnchor.x,
+                                    y: transformedPosition.y - transformedAnchor.y
+                                };
+                                newText.offset = newOffset;
+                                const newEdgeId = U.getEdgeId({ id1: newId1, id2: newId2 });
+                                const factor = computeEdgeOffsetFactor(newEdgeId, newOffset);
+                                if (typeof factor === 'number') {
+                                    newText.edgeOffsetFactor = factor;
+                                }
+                            }
+                            newText.anchorId = U.getEdgeId({ id1: newId1, id2: newId2 });
+                        } else if (text.anchorType === 'face') {
+                            const face = allFaces.find(f => U.getFaceId(f) === text.anchorId);
+                            if (!face) return;
+                            const newVertexIds = face.vertexIds.map(id => newIdMapForThisCopy.get(id));
+                            if (!newVertexIds.every(Boolean)) return;
+                            const anchorData = getTextElementAnchorData(text);
+                            const anchor = anchorData ? anchorData.anchor : null;
+                            if (anchor) {
+                                const baseOffset = text.offset || { x: 0, y: 0 };
+                                const basePosition = { x: anchor.x + baseOffset.x, y: anchor.y + baseOffset.y };
+                                const transformedAnchor = applyTransformAtStep(anchor, i);
+                                const transformedPosition = applyTransformAtStep(basePosition, i);
+                                newText.offset = {
+                                    x: transformedPosition.x - transformedAnchor.x,
+                                    y: transformedPosition.y - transformedAnchor.y
+                                };
+                            }
+                            newText.anchorId = U.getFaceId({ vertexIds: newVertexIds });
+                        }
+
+                        allTextElements.push(newText);
+                        if (selectedTextIdSet.has(text.id)) {
+                            currentCopyTexts.push(newText.id);
+                        }
+                    });
+
+                    if (i === 1) {
+                        firstCopySelectionIds = { vertices: currentCopyVertices, edges: currentCopyEdges, faces: currentCopyFaces, texts: currentCopyTexts };
+                    }
+                }
+
+                allVertices.push(...allNewVertices);
+                allEdges.push(...allNewEdges);
+                allFaces.push(...allNewFaces);
+            } else {
+                initialDragVertexStates.forEach(p_initial => {
+                    const vertexToUpdate = findVertexById(p_initial.id);
+                    if (vertexToUpdate) {
+                        const newPos = applyTransformAtStep(p_initial, 1);
+                        vertexToUpdate.x = newPos.x;
+                        vertexToUpdate.y = newPos.y;
+                    }
+                });
+            }
         } else if (dragPreviewVertices.length > 0) {
             const finalDelta = (actionContext.finalSnapResult && actionContext.finalSnapResult.snapped)
                 ? actionContext.finalSnapResult.finalDelta
@@ -7542,8 +7857,8 @@ function handleUIClick(actionContext) {
     }
 
     if (actionContext.target === 'ui_session_remove') {
-        if (selectedSessionIndex !== null) {
-            removeSessionAtIndex(selectedSessionIndex);
+        if (activeSessionIndex !== null && activeSessionIndex >= 0) {
+            removeSessionAtIndex(activeSessionIndex);
         }
         return;
     }

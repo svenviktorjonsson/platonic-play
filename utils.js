@@ -1148,7 +1148,8 @@ export function evaluateExpression(expression, variables = {}, fallback = 0) {
         const scope = { ...variables };
         const keys = Object.keys(scope);
         const values = keys.map(key => scope[key]);
-        const fn = new Function(...keys, `'use strict'; return (${trimmed});`);
+        const normalized = trimmed.replace(/\^/g, '**');
+        const fn = new Function(...keys, `'use strict'; return (${normalized});`);
         const result = fn(...values);
         return Number.isFinite(result) ? result : fallback;
     } catch (err) {
