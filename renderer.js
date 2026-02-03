@@ -495,7 +495,21 @@ function getFaceMode(face, fallback) {
     return face?.colorMode || fallback;
 }
 
-export function drawFaces(ctx, { allFaces, allEdges, facesVisible, isDragConfirmed, dragPreviewVertices, transformIndicatorData, initialDragVertexStates, colors, initialCoordSystemStates, interpolationStyle, getInterpolationStyleById, faceColorMode = 'fixed', edgeColorMode = 'fixed', faceColorExpression = 'x', faceColorPolarExpression = 'r', edgeColorExpression = 'x', edgeWeightExpression = 'r', faceVertexWeightExpression = '1/(r+0.001)', faceEdgeWeightExpression = '1/(r+0.001)', angleDisplayMode = 'degrees' }, dataToScreen, findVertexById) {
+function densifyLinearPath(points, segments = 32) {
+    if (!points || points.length !== 2) return points;
+    const [p1, p2] = points;
+    const densified = [];
+    for (let i = 0; i <= segments; i++) {
+        const t = i / segments;
+        densified.push({
+            x: p1.x + (p2.x - p1.x) * t,
+            y: p1.y + (p2.y - p1.y) * t
+        });
+    }
+    return densified;
+}
+
+export function drawFaces(ctx, { allFaces, allEdges, facesVisible, isDragConfirmed, dragPreviewVertices, transformIndicatorData, initialDragVertexStates, colors, initialCoordSystemStates, interpolationStyle, getInterpolationStyleById, faceColorMode = 'fixed', edgeColorMode = 'fixed', faceColorExpression = 'x', faceColorPolarExpression = 'r', edgeColorExpression = 'x', edgeWeightExpression = '1-r', faceVertexWeightExpression = '1/(r+0.001)', faceEdgeWeightExpression = '1/(r+0.001)', angleDisplayMode = 'degrees' }, dataToScreen, findVertexById) {
     if (!facesVisible || !allFaces || !colors || !ctx) return;
 
     const getLiveVertex = (vertexId) => {
@@ -726,7 +740,7 @@ function calculatePreviewCoordSystem(face, { initialSystem, dragPreviewVertices,
 }
 
 export function drawRigidDragPreview(ctx, params, dataToScreen) {
-    const { copyCount, isDragConfirmed, initialDragVertexStates, dragPreviewVertices, transformIndicatorData, allEdges, allFaces, findVertexById, colors, snappedEdgesInfo, snappedVertexIds, edgeColorMode = 'fixed', faceColorMode = 'fixed', edgeColorExpression = 'x', edgeWeightExpression = 'r', faceColorExpression = 'x', faceColorPolarExpression = 'r', faceVertexWeightExpression = '1/(r+0.001)', faceEdgeWeightExpression = '1/(r+0.001)', angleDisplayMode = 'degrees', initialCoordSystemStates = new Map(), getInterpolationStyleById } = params;
+    const { copyCount, isDragConfirmed, initialDragVertexStates, dragPreviewVertices, transformIndicatorData, allEdges, allFaces, findVertexById, colors, snappedEdgesInfo, snappedVertexIds, edgeColorMode = 'fixed', faceColorMode = 'fixed', edgeColorExpression = 'x', edgeWeightExpression = '1-r', faceColorExpression = 'x', faceColorPolarExpression = 'r', faceVertexWeightExpression = '1/(r+0.001)', faceEdgeWeightExpression = '1/(r+0.001)', angleDisplayMode = 'degrees', initialCoordSystemStates = new Map(), getInterpolationStyleById } = params;
 
     const isDeformingDrag = initialDragVertexStates.length === 1 && !transformIndicatorData && initialDragVertexStates[0].type === 'regular';
     if (!isDragConfirmed || !initialDragVertexStates.length || copyCount <= 0 || isDeformingDrag) {
@@ -821,8 +835,8 @@ export function drawRigidDragPreview(ctx, params, dataToScreen) {
                 const d2 = (1 - t) * len;
                 const d1Norm = d1 / len;
                 const d2Norm = d2 / len;
-                const w1 = U.evaluateExpression(expression, { x: 0, y: 0, r: d1Norm, a: 0 }, 1);
-                const w2 = U.evaluateExpression(expression, { x: 0, y: 0, r: d2Norm, a: 0 }, 1);
+                const w1 = U.evaluateExpression(expression, { r: d1Norm, a: 0 }, 1);
+                const w2 = U.evaluateExpression(expression, { r: d2Norm, a: 0 }, 1);
                 return mixColors([c1, c2], [w1, w2]);
             }
             if (mode === 'colormap' && edge.colormapItem) {
@@ -841,12 +855,15 @@ export function drawRigidDragPreview(ctx, params, dataToScreen) {
                 const edgeStyle = edge.interpolationStyleId && getInterpolationStyleById
                     ? getInterpolationStyleById(edge.interpolationStyleId)
                     : null;
-                const pathPoints = buildInterpolatedEdgePath(edge, edgeStyle, p1, p2, allEdges, getRenderVertexById, dataToScreen);
+                let pathPoints = buildInterpolatedEdgePath(edge, edgeStyle, p1, p2, allEdges, getRenderVertexById, dataToScreen);
+                const mode = getEdgeMode(edge, edgeColorMode);
+                if (pathPoints.length === 2 && (mode === 'inherit_vertices' || mode === 'colormap')) {
+                    pathPoints = densifyLinearPath(pathPoints);
+                }
                 const pathScreen = pathPoints.map(pt => dataToScreen(pt));
                 if (pathScreen.length < 2) return;
                 const p1Screen = pathScreen[0];
                 const p2Screen = pathScreen[pathScreen.length - 1];
-                const mode = getEdgeMode(edge, edgeColorMode);
                 if (mode === 'inherit_vertices' || mode === 'colormap') {
                     const c1 = getVertexColor(p1);
                     const c2 = getVertexColor(p2);
@@ -931,12 +948,15 @@ export function drawRigidDragPreview(ctx, params, dataToScreen) {
                 const edgeStyle = edge.interpolationStyleId && getInterpolationStyleById
                     ? getInterpolationStyleById(edge.interpolationStyleId)
                     : null;
-                const pathPoints = buildInterpolatedEdgePath(edge, edgeStyle, p1_moving, p2_static, allEdges, getRenderVertexById, dataToScreen);
+                let pathPoints = buildInterpolatedEdgePath(edge, edgeStyle, p1_moving, p2_static, allEdges, getRenderVertexById, dataToScreen);
+                const mode = getEdgeMode(edge, edgeColorMode);
+                if (pathPoints.length === 2 && (mode === 'inherit_vertices' || mode === 'colormap')) {
+                    pathPoints = densifyLinearPath(pathPoints);
+                }
                 const pathScreen = pathPoints.map(pt => dataToScreen(pt));
                 if (pathScreen.length < 2) return;
                 const p1Screen = pathScreen[0];
                 const p2Screen = pathScreen[pathScreen.length - 1];
-                const mode = getEdgeMode(edge, edgeColorMode);
                 if (mode === 'inherit_vertices' || mode === 'colormap') {
                     const c1 = getVertexColor(p1_moving);
                     const c2 = getVertexColor(p2_static);
@@ -1150,7 +1170,7 @@ export function drawVertexGlowsOnly(ctx, vertex, options, dataToScreen, updateHt
 }
 
 export function drawDeformingDragPreview(ctx, params, dataToScreen) {
-    const { copyCount = 1, initialDragVertexStates, dragPreviewVertices, allEdges, allFaces, findVertexById, findNeighbors, findAllVerticesInSubgraph, colors, snappedEdgesInfo, snappedVertexIds, edgeColorMode = 'fixed', faceColorMode = 'fixed', edgeColorExpression = 'x', edgeWeightExpression = 'r', faceColorExpression = 'x', faceColorPolarExpression = 'r', faceVertexWeightExpression = '1/(r+0.001)', faceEdgeWeightExpression = '1/(r+0.001)', angleDisplayMode = 'degrees', initialCoordSystemStates = new Map(), getInterpolationStyleById } = params;
+    const { copyCount = 1, initialDragVertexStates, dragPreviewVertices, allEdges, allFaces, findVertexById, findNeighbors, findAllVerticesInSubgraph, colors, snappedEdgesInfo, snappedVertexIds, edgeColorMode = 'fixed', faceColorMode = 'fixed', edgeColorExpression = 'x', edgeWeightExpression = '1-r', faceColorExpression = 'x', faceColorPolarExpression = 'r', faceVertexWeightExpression = '1/(r+0.001)', faceEdgeWeightExpression = '1/(r+0.001)', angleDisplayMode = 'degrees', initialCoordSystemStates = new Map(), getInterpolationStyleById } = params;
 
     if (!initialDragVertexStates || initialDragVertexStates.length !== 1 || !dragPreviewVertices || dragPreviewVertices.length === 0) {
         return;
@@ -1254,13 +1274,16 @@ export function drawDeformingDragPreview(ctx, params, dataToScreen) {
                     ? getInterpolationStyleById(compEdge.interpolationStyleId)
                     : null;
                 const getRenderVertexById = (id) => getLiveVertexForDeformCopy(id);
-                const pathPoints = buildInterpolatedEdgePath(compEdge, edgeStyle, p1, p2, allEdges, getRenderVertexById, dataToScreen);
+                let pathPoints = buildInterpolatedEdgePath(compEdge, edgeStyle, p1, p2, allEdges, getRenderVertexById, dataToScreen);
+                const mode = getEdgeMode(compEdge, edgeColorMode);
+                if (pathPoints.length === 2 && (mode === 'inherit_vertices' || mode === 'colormap')) {
+                    pathPoints = densifyLinearPath(pathPoints);
+                }
                 const pathScreen = pathPoints.map(pt => dataToScreen(pt));
                 if (pathScreen.length < 2) return;
                 const p1Screen = pathScreen[0];
                 const p2Screen = pathScreen[pathScreen.length - 1];
 
-                const mode = getEdgeMode(compEdge, edgeColorMode);
                 if (mode === 'inherit_vertices' || mode === 'colormap') {
                     let totalLength = 0;
                     for (let i = 1; i < pathScreen.length; i++) {
@@ -3028,7 +3051,7 @@ function drawFractionalSnapLabels(ctx, { info, colors, idPrefix, startVertexScre
     });
 }
 
-export function drawAllEdges(ctx, { allEdges, selectedEdgeIds, hoveredEdgeId, isDragConfirmed, dragPreviewVertices, colors, edgesVisible, snappedEdgeIds, currentAltPressed, interpolationStyle, getInterpolationStyleById, edgeColorMode = 'fixed', edgeColorExpression = 'x', edgeWeightExpression = 'r' }, dataToScreen, findVertexById, getEdgeId) {
+export function drawAllEdges(ctx, { allEdges, selectedEdgeIds, hoveredEdgeId, isDragConfirmed, dragPreviewVertices, colors, edgesVisible, snappedEdgeIds, currentAltPressed, interpolationStyle, getInterpolationStyleById, edgeColorMode = 'fixed', edgeColorExpression = 'x', edgeWeightExpression = '1-r' }, dataToScreen, findVertexById, getEdgeId) {
     ctx.lineWidth = C.LINE_WIDTH;
     const fallbackColor = toRgba(colors.defaultStroke, { r: 255, g: 255, b: 255, a: 1 });
 
@@ -3094,7 +3117,11 @@ export function drawAllEdges(ctx, { allEdges, selectedEdgeIds, hoveredEdgeId, is
             });
         }
         const getRenderVertexById = (id) => previewVertexMap.get(id) || findVertexById(id);
-        const pathPoints = buildInterpolatedEdgePath(edge, edgeStyle, p1_render, p2_render, allEdges, getRenderVertexById, dataToScreen);
+        let pathPoints = buildInterpolatedEdgePath(edge, edgeStyle, p1_render, p2_render, allEdges, getRenderVertexById, dataToScreen);
+        const mode = getEdgeMode(edge, edgeColorMode);
+        if (pathPoints.length === 2 && (mode === 'inherit_vertices' || mode === 'colormap')) {
+            pathPoints = densifyLinearPath(pathPoints);
+        }
         const pathScreen = pathPoints.map(p => dataToScreen(p));
         if (pathScreen.length < 2) return;
         const p1Screen = pathScreen[0];
@@ -3108,7 +3135,6 @@ export function drawAllEdges(ctx, { allEdges, selectedEdgeIds, hoveredEdgeId, is
             ctx.lineTo(pathScreen[i].x, pathScreen[i].y);
         }
 
-        const mode = getEdgeMode(edge, edgeColorMode);
         if (mode === 'colormap' || mode === 'inherit_vertices') {
             let totalLength = 0;
             for (let i = 1; i < pathScreen.length; i++) {
@@ -3309,6 +3335,10 @@ export function drawDrawingSnapLabels(ctx, { info, colors }, dataToScreen, findV
     if (!info || !info.startVertex) return;
     const startVertexScreen = dataToScreen(info.startVertex);
     drawFractionalSnapLabels(ctx, { info, colors, idPrefix: 'snap-label', startVertexScreen }, dataToScreen, findVertexById, updateHtmlLabel);
+}
+
+export function drawCenterSnapLabels(ctx, { info, colors }, dataToScreen, findVertexById, updateHtmlLabel) {
+    drawFractionalSnapLabels(ctx, { info, colors, idPrefix: 'center-snap-label' }, dataToScreen, findVertexById, updateHtmlLabel);
 }
 
 function drawRotationIndicator(ctx, { transformIndicatorData, colors, currentShiftPressed }, dataToScreen) {
@@ -5285,7 +5315,7 @@ function getTriangleIconGeometry(rect) {
 }
 
 function drawTriangleIcon(ctx, rect, options, colors, isActive = false) {
-    const { vertexState = 'none', edgeState = 'none', faceState = 'none', faceColor, edgeColor, vertexColor: optionsVertexColor, vertexColors, edgeVertexColors, edgeColors, faceColormapItem, faceExpression, faceVertexColors, faceEdgeColors, vertexWeightExpression, edgeWeightExpression, edgeColormapItem, edgeExpression, edgeColormapEdges, angleDisplayMode = 'degrees', showAllDisabled = false } = options;
+    const { vertexState = 'none', edgeState = 'none', faceState = 'none', faceColor, edgeColor, vertexColor: optionsVertexColor, vertexColors, edgeVertexColors, edgeColors, faceColormapItem, faceExpression, faceVertexColors, faceEdgeColors, vertexWeightExpression, edgeWeightExpression = '1-r', edgeColormapItem, edgeExpression, edgeColormapEdges, angleDisplayMode = 'degrees', showAllDisabled = false } = options;
 
     ctx.save();
 
@@ -5503,8 +5533,8 @@ function drawTriangleIcon(ctx, rect, options, colors, isActive = false) {
                     const d2 = (1 - t) * len;
                     const d1Norm = d1 / len;
                     const d2Norm = d2 / len;
-                    const w1 = U.evaluateExpression(edgeWeightExpression, { x: 0, y: 0, r: d1Norm, a: 0 }, 1);
-                    const w2 = U.evaluateExpression(edgeWeightExpression, { x: 0, y: 0, r: d2Norm, a: 0 }, 1);
+                const w1 = U.evaluateExpression(edgeWeightExpression, { r: d1Norm, a: 0 }, 1);
+                const w2 = U.evaluateExpression(edgeWeightExpression, { r: d2Norm, a: 0 }, 1);
                     const color = mixWeightedColors(
                         [resolveColor(edgeVertexColors[startIndex]), resolveColor(edgeVertexColors[endIndex])],
                         [w1, w2]
@@ -5659,7 +5689,7 @@ export function drawFace(ctx, screenVertices, face, colors, dataToScreen, findVe
         faceColorExpression = 'x',
         faceColorPolarExpression = 'r',
         edgeColorExpression = 'x',
-        edgeWeightExpression = 'r',
+        edgeWeightExpression = '1-r',
         faceVertexWeightExpression = '1/(r+0.001)',
         faceEdgeWeightExpression = '1/(r+0.001)',
         angleDisplayMode = 'degrees'

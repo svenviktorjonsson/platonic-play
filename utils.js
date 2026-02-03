@@ -1742,6 +1742,103 @@ export function applyTransformToVertex(vertex, center, rotation, scale, directio
     }
 }
 
+export function mat3Identity() {
+    return [
+        1, 0, 0,
+        0, 1, 0,
+        0, 0, 1
+    ];
+}
+
+export function mat3Multiply(a, b) {
+    return [
+        a[0] * b[0] + a[1] * b[3] + a[2] * b[6],
+        a[0] * b[1] + a[1] * b[4] + a[2] * b[7],
+        a[0] * b[2] + a[1] * b[5] + a[2] * b[8],
+        a[3] * b[0] + a[4] * b[3] + a[5] * b[6],
+        a[3] * b[1] + a[4] * b[4] + a[5] * b[7],
+        a[3] * b[2] + a[4] * b[5] + a[5] * b[8],
+        a[6] * b[0] + a[7] * b[3] + a[8] * b[6],
+        a[6] * b[1] + a[7] * b[4] + a[8] * b[7],
+        a[6] * b[2] + a[7] * b[5] + a[8] * b[8]
+    ];
+}
+
+export function mat3ApplyToPoint(m, point) {
+    const x = point.x;
+    const y = point.y;
+    return {
+        x: m[0] * x + m[1] * y + m[2],
+        y: m[3] * x + m[4] * y + m[5]
+    };
+}
+
+export function mat3Power(m, exponent) {
+    if (exponent <= 0) return mat3Identity();
+    let result = mat3Identity();
+    let base = m;
+    let exp = Math.floor(exponent);
+    while (exp > 0) {
+        if (exp % 2 === 1) {
+            result = mat3Multiply(result, base);
+        }
+        base = mat3Multiply(base, base);
+        exp = Math.floor(exp / 2);
+    }
+    return result;
+}
+
+export function buildTranslationMatrix(delta) {
+    return [
+        1, 0, delta.x,
+        0, 1, delta.y,
+        0, 0, 1
+    ];
+}
+
+export function buildCenteredTransformMatrix(center, rotation, scale, directionalScale, startVector) {
+    let a11 = 1;
+    let a12 = 0;
+    let a21 = 0;
+    let a22 = 1;
+
+    if (directionalScale) {
+        const axisLen = Math.hypot(startVector.x, startVector.y);
+        if (axisLen > C.GEOMETRY_CALCULATION_EPSILON) {
+            const ux = startVector.x / axisLen;
+            const uy = startVector.y / axisLen;
+            const k = (scale - 1);
+            a11 = 1 + k * ux * ux;
+            a12 = k * ux * uy;
+            a21 = k * uy * ux;
+            a22 = 1 + k * uy * uy;
+        }
+    } else {
+        const cosR = Math.cos(rotation);
+        const sinR = Math.sin(rotation);
+        const s = scale;
+        a11 = cosR * s;
+        a12 = -sinR * s;
+        a21 = sinR * s;
+        a22 = cosR * s;
+    }
+
+    const tx = center.x - (a11 * center.x + a12 * center.y);
+    const ty = center.y - (a21 * center.x + a22 * center.y);
+
+    return [
+        a11, a12, tx,
+        a21, a22, ty,
+        0, 0, 1
+    ];
+}
+
+export function applyTransformMatrixPower(point, stepMatrix, power) {
+    if (power === 0) return { x: point.x, y: point.y };
+    const m = mat3Power(stepMatrix, power);
+    return mat3ApplyToPoint(m, point);
+}
+
 export function calculateIncenter(vertices) {
     if (vertices.length < 3) return null;
 
